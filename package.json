@@ -15,10 +15,8 @@
   },
   "devDependencies": {
     "@huggingface/transformers": "^3.7.5",
-    "@tesseract.js-data/eng": "^1.0.0",
     "onnxruntime-web": "^1.22.0",
     "puppeteer-core": "^25.18.1",
-    "tesseract.js": "^6.0.1",
     "web-ext": "^10.8.0"
   }
 }
