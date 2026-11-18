@@ -133,7 +133,8 @@ if (target === 'firefox') {
 }
 
 // Extension page used to read/write storage like the popup does.
-let extPage, extEval, chromeEval, extReload;
+let extPage, extEval, chromeEval, extReload, extGo, optionsTabs, closeOptionsTabs;
+const OPTIONS = '/src/options/options.html';
 if (target === 'firefox') {
   // BiDi may not navigate content tabs to moz-extension:, so open it from the privileged browser window
   // (allowed by --remote-allow-system-access, test profile only).
@@ -155,6 +156,9 @@ if (target === 'firefox') {
     ctx = (t.result ?? t).contexts.find((c) => c.url.startsWith(extBase))?.context;
   }
   extReload = () => conn.send('browsingContext.reload', { context: ctx, wait: 'complete' });
+  const tabsAt = async (p) => ((await conn.send('browsingContext.getTree', {})).result ?? {}).contexts?.filter((c) => c.url.includes(p) && c.context !== ctx) ?? [];
+  optionsTabs = async () => (await tabsAt(OPTIONS)).length;
+  closeOptionsTabs = async () => { for (const c of await tabsAt(OPTIONS)) await conn.send('browsingContext.close', { context: c.context }); };
   // raw BiDi evaluation in the extension page (puppeteer does not track tabs opened by the browser itself)
   extEval = async (fn, arg) => {
     const r = await conn.send('script.callFunction', {
@@ -169,7 +173,20 @@ if (target === 'firefox') {
   await extPage.goto(`${extBase}/src/popup/popup.html`);
   extEval = (fn, arg) => extPage.evaluate(fn, arg);
   extReload = () => extPage.reload();
+  extGo = (p) => extPage.goto(extBase + p);
+  const tabsAt = async (p) => (await browser.pages()).filter((x) => x !== extPage && x.url().includes(p));
+  optionsTabs = async () => (await tabsAt(OPTIONS)).length;
+  closeOptionsTabs = async () => { for (const x of await tabsAt(OPTIONS)) await x.close(); };
 }
+// Firefox: the extension tab navigates itself (BiDi may not navigate a tab to moz-extension:)
+extGo ??= async (p) => {
+  await extEval((p) => { setTimeout(() => location.assign(p), 0); }, p);
+  for (let i = 0; i < 40; i++) {
+    await sleep(250);
+    try { if (await extEval((p) => location.pathname === p && document.readyState === 'complete', p)) break; } catch {}
+  }
+  await sleep(500);
+};
 const storage = extEval;
 await storage(() => (globalThis.browser ?? chrome).storage.local.clear());
 
@@ -284,7 +301,8 @@ await extReload();
 await sleep(1500);
 report.push(`## popup status: "${await extEval(() => document.getElementById('status').textContent)}"`);
 
-// 4b) Opt-in catalog update, driven through the popup against the mock endpoint.
+// 4b) Opt-in catalog update, driven through the settings page against the mock endpoint.
+await extGo(OPTIONS);
 report.push(`## SPARQL requests while the setting is off and nothing was clicked: ${log.sparql.length}`);
 if (log.sparql.length) { report.push('## FAIL: network request without opt-in'); process.exitCode = 1; }
 const alarm = () => extEval(async () => (globalThis.browser ?? chrome).alarms.get('catalogUpdate').then((a) => a ? { periodInMinutes: a.periodInMinutes } : null));
@@ -317,17 +335,18 @@ await page.evaluate(() => document.querySelector('#t-spoiler > sb-overlay').shad
 await sleep(500);
 report.push(`## after "Show once" on #t-spoiler\n${fmt((await state()).filter((x) => x.id === 't-spoiler'))}`);
 
-// 6) popup "Only block actual spoilers" switch, live then after reload
-await extEval(() => document.getElementById('spoilerMode').click());
+// 6) settings page "Cover only spoilers", live then after reload
+await extEval(() => document.querySelector('input[name="style"][value="spoilers"]').click());
 await sleep(500);
 report.push(`## settings after popup switch: ${JSON.stringify(await storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('settings')).settings))}`);
 await section('spoiler-mode-live');
 await page.reload({ waitUntil: 'domcontentloaded' });
 await section('spoiler-mode-reload');
 report.push(`## content-script init with the updated (stored) index: ${await page.evaluate(() => document.documentElement.getAttribute('data-sb-ready'))} ms`);
-await extEval(() => document.getElementById('spoilerMode').click());
+await extEval(() => document.querySelector('input[name="style"][value="all"]').click());
 await sleep(500);
 await section('back-to-any-mode-live');
+await extGo('/src/popup/popup.html');
 }
 
 // ---------- 0.2 (docs/agents/contract.md): states, styles, wording, recycled feed, coverage, scan cost ----------
@@ -406,10 +425,13 @@ check('per-work style all under default spoilers', lab(c['t-neutral']) === 'Ment
 
 // E) "I've seen it" writes works; the settings button sends ui.openSettings
 await setConfig({});
-await extEval(() => { window.__sbMsgs = []; (globalThis.browser ?? chrome).runtime.onMessage.addListener((m) => { window.__sbMsgs.push(m); }); });
+await closeOptionsTabs();
 await page.evaluate(() => document.querySelector('#t-breaking > sb-overlay').shadowRoot.querySelector('[data-a="menu"]')?.click());
-await sleep(800);
-check('settings button sends {type: "ui.openSettings"}', (await extEval(() => window.__sbMsgs)).some((m) => m?.type === 'ui.openSettings'));
+let optTabs = 0;
+for (let k = 0; k < 20 && !optTabs; k++) { await sleep(250); optTabs = await optionsTabs(); }
+check('settings button opens the settings page', optTabs === 1, { optionsTabs: optTabs });
+await closeOptionsTabs();
+await page.bringToFront(); // a background tab gets no animation frames
 await page.evaluate(() => document.querySelector('#t-breaking > sb-overlay').shadowRoot.querySelector('[data-a="seen"]').click());
 await sleep(1200);
 const w = await storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('works')).works);
@@ -429,7 +451,7 @@ const inspect = async (final) => {
     if (Math.abs(r.height - r.measured) > 0.5) problems.add(`item ${r.i}: height changed after the feed measured it (${r.measured} -> ${r.height})`);
     if (r.pendingVisible) problems.add(`item ${r.i}: photo visible before its verdict`);
     if (r.covered && !r.expect) problems.add(`item ${r.i}: clean post covered ("${r.label}")`);
-    if (final && r.expect && r.label !== r.expect) problems.add(`item ${r.i}: label ${JSON.stringify(r.label)}, want "${r.expect}"`);
+    if (final && r.expect && r.label !== r.expect) problems.add(`item ${r.i}: label ${JSON.stringify(r.label)}, want "${r.expect}"${r.imgOk ? '' : ' (no verdict yet)'}`);
   }
   for (let k = 1; k < rows.length; k++) {
     const a = rows[k - 1], b = rows[k];
@@ -444,7 +466,7 @@ for (const y of [0, Math.round(feedEnd / 2), feedEnd]) {
   const visibleIn = () => page.evaluate(() => document.documentElement.getAttribute('data-sb-busy') === '0' &&
     [...document.querySelectorAll('.cell')].filter((n) => !n.querySelector('.media').hidden && n.getBoundingClientRect().bottom > 0 &&
       n.getBoundingClientRect().top < innerHeight).every((n) => n.querySelector('img').hasAttribute('data-sb-ok')));
-  for (let k = 0; k < 120 && !(await visibleIn()); k++) await sleep(500);
+  for (let k = 0; k < 360 && !(await visibleIn()); k++) await sleep(500); // Firefox runs the models on one thread
   await sleep(800);
   await inspect(true);
 }

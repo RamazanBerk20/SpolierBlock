@@ -93,6 +93,7 @@
       i, expect: items[i].expect, measured: heights[i], height: n.offsetHeight, top: r.top, bottom: r.bottom,
       covered: art.hasAttribute('data-sb-blocked') || !!n.querySelector('[data-sb-blocked]'),
       label: n.querySelector('sb-overlay')?.shadowRoot?.querySelector('p')?.textContent ?? null,
+      imgOk: !items[i].img || img.hasAttribute('data-sb-ok'),
       pendingVisible: !!items[i].img && !img.hasAttribute('data-sb-ok') && getComputedStyle(bg).filter === 'none' &&
         !art.hasAttribute('data-sb-blocked'),
     };

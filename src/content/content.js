@@ -224,7 +224,7 @@
   // ---------- cover ----------
   // Every rule is !important on :host so page CSS can never put the cover in flow; size containment keeps it to its block.
   const OVERLAY_CSS = `:host{all:initial!important;position:absolute!important;inset:0!important;z-index:2147483646!important;
-    display:block!important;box-sizing:border-box!important;overflow:hidden!important;
+    display:block!important;visibility:inherit!important;box-sizing:border-box!important;overflow:hidden!important;
     container-type:size;border-radius:inherit;--bg:#eef1f4;--fg:#1f2328;--line:#b9c0c8;--ring:#0b57d0;
     background:var(--bg);color:var(--fg);font:13px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     :host([data-dark]){--bg:#22272e;--fg:#e6e8eb;--line:#59616b;--ring:#8ab4f8}
@@ -271,6 +271,7 @@
       block.setAttribute('data-sb-blocked', '');
       (shadowOf(block) ?? block).appendChild(ov); // a shadow host does not render unslotted light children
       blocked.set(block, ov);
+      countChanged();
     }
     ov.marks = d.marks;
     const p = ov.shadowRoot.querySelector('p');
@@ -285,6 +286,22 @@
     block.removeAttribute('data-sb-blocked');
     block.removeAttribute('data-sb-pos');
     blocked.delete(block);
+    countChanged();
+  }
+
+  // The toolbar badge shows the top frame's cover count (background: tab.count / sb.stats).
+  function coverCount() {
+    for (const b of blocked.keys()) if (!b.isConnected) blocked.delete(b); // removed by the page
+    return blocked.size;
+  }
+  let sentCount = 0, countTimer = 0;
+  function countChanged() {
+    if (window !== top || countTimer) return;
+    countTimer = setTimeout(() => {
+      countTimer = 0;
+      const n = coverCount();
+      if (n !== sentCount) { sentCount = n; send({ type: 'tab.count', blocked: n }).catch(() => {}); }
+    }, 300);
   }
 
   const migrateSeen = (seen) => Object.fromEntries(Object.entries(seen ?? {}).map(([id, e]) => [id, { ...e, state: 'seen', style: null }]));
@@ -526,11 +543,7 @@
   function send(msg) { return api.runtime.sendMessage(msg); }
 
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg?.type === 'sb.stats' && window === top) {
-      let n = 0;
-      for (const b of blocked.keys()) if (b.isConnected) n++;
-      sendResponse({ blocked: n });
-    }
+    if (msg?.type === 'sb.stats' && window === top) sendResponse({ blocked: coverCount() });
   });
 
   function computeActive() {
