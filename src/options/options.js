@@ -85,7 +85,7 @@ function shownWorks() {
 }
 function renderLibrary() {
   const all = Object.values(works), seen = all.filter((w) => w.state === 'seen').length;
-  $('lib-summary').textContent = all.length ? `${all.length} works · ${seen} seen · ${all.length - seen} blocked` : '';
+  $('lib-summary').textContent = all.length ? `${all.length} ${all.length === 1 ? 'work' : 'works'} · ${seen} seen · ${all.length - seen} blocked` : '';
   const shown = shownWorks();
   const list = showAll ? shown : shown.slice(0, PAGE);
   $('lib').replaceChildren(...list.map(([id, w], i) => libRow(id, w, i)));
@@ -285,7 +285,7 @@ $('import-file').addEventListener('change', async (e) => {
   pendingImport = r.data;
   const n = Object.values(r.data.works), seen = n.filter((w) => w.state === 'seen').length;
   $('import-summary').textContent = `${f.name}: ${n.length} works (${seen} seen, ${n.length - seen} blocked), ${r.data.custom.length} added by hand`
-    + (Object.keys(r.data.settings).length ? ', settings' : '') + (r.skipped ? `. ${r.skipped} unreadable entries will be skipped.` : '.');
+    + (Object.keys(r.data.settings).length ? ', settings' : '') + (r.skipped ? `. ${r.skipped} unreadable ${r.skipped === 1 ? 'entry' : 'entries'} will be skipped.` : '.');
   $('import-panel').hidden = false;
   renderImportMode();
   $('import-go').focus();
@@ -327,7 +327,8 @@ $('reset').addEventListener('click', async () => {
 $('version').textContent = 'Version ' + api.runtime.getManifest().version;
 api.commands?.getAll?.().then((cmds) => {
   const c = cmds.find((x) => x.name === 'toggle-blocking');
-  $('shortcut').textContent = c?.shortcut || 'a shortcut you set in the browser';
+  if (c?.shortcut) $('shortcut').textContent = c.shortcut;
+  else $('shortcut-line').textContent = 'You can set a shortcut to turn blocking on or off in the browser\'s extension shortcut settings.';
 }).catch(() => {});
 
 // The rail marks the section being read.
