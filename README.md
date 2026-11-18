@@ -156,6 +156,6 @@ Runtime libraries: onnxruntime-web, tesseract.js, `@huggingface/transformers` (b
 
 ## Licence
 
-No licence has been chosen yet.
+GNU General Public License, version 3. See [LICENSE](LICENSE).
 
-The Android patch bundle's own metadata (`android/patches/build.gradle.kts`) declares GPLv3, because the bundle links against morphe-patcher, which is GPLv3. That is not a licence for the rest of the repository.
+This covers the code in this repository. Third-party data and models keep their own terms, listed under [Attribution](#attribution): in particular the spoiler classifier in `models/spoiler` was trained partly on CC BY-SA 3.0 data, and the test images in `test/fixtures/images` are third-party pictures used for testing only.
