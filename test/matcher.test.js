@@ -40,7 +40,8 @@ test('ambiguous title needs corroboration', () => {
   assert.deepEqual(titles('Pick me up at 5'), []);
   assert.deepEqual(titles('Lost and found office'), []);
   // a line break starts a new text: an everyday-word title opening a line is treated as at the start of a text
-  assert.deepEqual(titles('my favourite\nMarley and Me movie night'), []);
+  assert.deepEqual(titles('my favourite\nMarley and Me with a movie'), []);
+  assert.deepEqual(titles('my favourite\nMarley and Me movie night'), ['Marley & Me']); // a media word right next to it
   assert.deepEqual(titles('my friends are coming over to watch the game'), []); // lowercase
   assert.deepEqual(titles('He lost the game last season'), []); // context words but lowercase
   // corroborated
@@ -97,4 +98,36 @@ test('sequel numerals (Roman <-> Arabic) and joined short forms', () => {
   assert.deepEqual(titles('TLOU2 broke me'), ['The Last of Us Part II']);
   // "I" is not a numeral and a lone numeral never becomes a name
   assert.deepEqual(titles('I think 6 is enough'), []);
+});
+
+test('names that mostly mean something else need a media word next to them', () => {
+  for (const t of ['The Palestine debate on campus was civil.', 'Free Palestine! #Palestine', 'Watching the news, Palestine again. What a season',
+    'Napoleon lost at Waterloo in 1815 and the film of my life goes on', 'Chernobyl exclusion zone hit by a drone overnight',
+    'Palestine (2001) was on the reading list']) {
+    assert.deepEqual(titles(t), [], t);
+  }
+  assert.deepEqual(titles('I read Palestine last week'), ['Palestine']);
+  assert.deepEqual(titles('Chernobyl on HBO was harrowing'), ['Chernobyl']);
+  assert.deepEqual(titles('Ridley Scott made Napoleon into a film'), ['Napoleon']);
+  assert.deepEqual(titles('"Napoleon" was too long'), []); // quotes are no evidence either (a song, a book)
+  assert.deepEqual(titles('Valery Legasov in Chernobyl'), ['Chernobyl']); // another name of the work
+});
+
+test('media words must fit the type of the work', () => {
+  assert.deepEqual(titles('The new Nintendo Switch costs too much'), []); // a game word says nothing about a film
+  assert.deepEqual(titles('The Switch movie night with the kids'), ['The Switch']);
+});
+
+test('context counts only in the same sentence', () => {
+  assert.deepEqual(titles('Severance pay is due in March. We binged a show on the weekend.'), []);
+  assert.deepEqual(titles('Bloodborne is the best game ever'), ['Bloodborne']); // a rare word: a media word in its sentence
+  assert.deepEqual(titles('Bloodborne. That was the name of the band. Great game though'), []);
+});
+
+test('apostrophes, Turkish suffixes and other languages', () => {
+  assert.deepEqual(titles("Interstellar's docking scene is peak cinema"), ['Interstellar']);
+  assert.deepEqual(titles("Breaking Bad'i 4. kez izliyorum"), ['Breaking Bad']);
+  assert.deepEqual(titles('Severance 2. sezon finali beynimi yaktı'), ['Severance']);
+  assert.deepEqual(titles("J'ai fini Interstellar hier soir"), ['Interstellar']);
+  assert.deepEqual(titles('Die letzte Staffel von Severance war genial'), ['Severance']);
 });

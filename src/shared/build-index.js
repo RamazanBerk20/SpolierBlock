@@ -16,7 +16,7 @@ let everyday = null, top1k = null;
 // text: the contents of 20k.txt (one word per line, most frequent first)
 export function setCommonWords(text) {
   common = new Set(text.split('\n').map((w) => w.trim().toLowerCase()));
-  everyday = top1k = null;
+  everyday = top1k = top3k = null;
 }
 const commonWords = () => common;
 export const COMMON_POP = 60; // measured with tools/fp-text.mjs
@@ -24,6 +24,9 @@ const RULES = !globalThis.process?.env?.SB_NO_COMMON_RULE; // measurement switch
 const isCommon = (t) => /^\d+$/.test(t) || commonWords().has(t);
 // "everyday word" for numbered short names: the 10k most frequent words (the 20k list also holds "gta", "halo")
 const isEveryday = (t) => (everyday ??= new Set([...commonWords()].slice(0, 10000))).has(t);
+// the most frequent words ("it", "lost", "home"): as a single-word name always "common", however popular the work
+let top3k = null;
+const isTop3k = (t) => (top3k ??= new Set([...commonWords()].slice(0, 3000))).has(t);
 const isTop1k = (t) => (top1k ??= new Set([...commonWords()].slice(0, 1000))).has(t);
 export const SERIES_SPLIT = /:| – | — | - /;
 // Series prefix of a title, or null. Ambiguous prefixes (single common word or < 4 chars) are never derived.
@@ -58,23 +61,31 @@ export function nameVariants(str, low) {
   return out;
 }
 
+// The tokenizer splits words at an apostrophe ("Schindler's List" -> "schindler s list"); text written without it
+// ("Schindlers List") needs the joined form too.
+const possessive = (s) => (/['’]/.test(s) ? [s, s.replace(/['’]/g, '')] : [s]);
+
 // Kind precedence when one name plays several roles: the most title-like wins.
 const RANK = { [KIND.TITLE]: 0, [KIND.SERIES]: 1, [KIND.ALIAS]: 2, [KIND.CHAR]: 3, [KIND.CHAR1]: 4, [KIND.PART]: 5, [KIND.TAG]: 6 };
 
 export function buildIndex(catalog) {
   const works = sortWorks(catalog);
   const keys = new Map(); // key -> { works: Set, kind, amb, label, labelRank }
-  const add = (str, w, kind, label, free = false, numbered = false) => {
+  // oth: this name of work w mostly means something else in the world (work.other, see tools/catalog/build.mjs). A key
+  // is "other" only when that holds for every work carrying it: a more popular work of the same name outweighs it.
+  const add = (str, w, kind, label, free = false, numbered = false, oth = false) => {
     const t = tokenize(String(str)).toks;
     if (!t.length || t.length > MAX_N || (t.length === 1 && t[0].length < 2)) return;
     if ((kind === KIND.CHAR || kind === KIND.PART) && t.length === 1) {
       if (t[0].length < 4) return;
       if (kind === KIND.CHAR) kind = KIND.CHAR1;
     }
+    if (RULES && kind === KIND.ALIAS && t.length === 1 && isCommon(t[0])) return; // "Ultimate", "Family": never evidence
     const key = kind === KIND.TAG ? t.join('') : t.join(' ');
     let e = keys.get(key);
-    if (!e) keys.set(key, e = { works: new Set(), kind, amb: 0, label, labelRank: RANK[kind] });
+    if (!e) keys.set(key, e = { works: new Set(), kind, amb: 0, label, labelRank: RANK[kind], oth: true });
     e.works.add(w);
+    if (kind !== KIND.PART && kind !== KIND.CHAR1) e.oth &&= oth;
     if (free) e.free = true;
     if (numbered) e.numbered = true;
     if (RANK[kind] < RANK[e.kind]) e.kind = kind;
@@ -89,16 +100,18 @@ export function buildIndex(catalog) {
   }
   const seriesOf = new Map(); // workIdx -> series label
   works.forEach((w, i) => {
-    const low = (w.pop ?? 0) < COMMON_POP;
-    for (const v of nameVariants(w.title, low)) {
-      add(v.text, i, v.joined ? KIND.ALIAS : KIND.TITLE, w.title, v.free, v.numbered);
-      if (!v.joined && v.text.includes(' ')) add(v.text, i, KIND.TAG, w.title); // #GrandTheftAuto6
+    const low = (w.pop ?? 0) < COMMON_POP, other = new Set(w.other ?? []);
+    for (const v of possessive(w.title).flatMap((f) => nameVariants(f, low))) {
+      add(v.text, i, v.joined ? KIND.ALIAS : KIND.TITLE, w.title, v.free, v.numbered, other.has(w.title));
+      if (!v.joined && v.text.includes(' ')) add(v.text, i, KIND.TAG, w.title, false, false, other.has(w.title)); // #GrandTheftAuto6
     }
     const p = seriesPrefix(w.title);
-    if (p && prefixCount.get(tokenize(p).toks.join(' ')) >= 2) { add(p, i, KIND.SERIES, p); add(p, i, KIND.TAG, p); seriesOf.set(i, p); }
-    for (const a of w.aliases ?? []) for (const v of nameVariants(a, low)) add(v.text, i, KIND.ALIAS, w.title, v.free, v.numbered);
+    if (p && prefixCount.get(tokenize(p).toks.join(' ')) >= 2) {
+      add(p, i, KIND.SERIES, p, false, false, other.has(p)); add(p, i, KIND.TAG, p, false, false, other.has(p)); seriesOf.set(i, p);
+    }
+    for (const a of w.aliases ?? []) for (const v of possessive(a).flatMap((f) => nameVariants(f, low))) add(v.text, i, KIND.ALIAS, w.title, v.free, v.numbered, other.has(a));
     for (const c of w.characters ?? []) {
-      add(c, i, KIND.CHAR, w.title);
+      add(c, i, KIND.CHAR, w.title, false, false, other.has(c));
       // "Snape", "Dumbledore": parts of full names are weak signals (need corroboration, see matcher)
       const parts = tokenize(c).toks;
       // everyday-word parts ("King", "Charles", "England") are too frequent to be evidence
@@ -128,17 +141,23 @@ export function buildIndex(catalog) {
   // "common": a name made only of everyday words whose most popular work is below COMMON_POP ("The Walk",
   // "In the Park", "Friday"). Such names need the Title-Case form plus corroboration, see matcher.
   // Single everyday-word aliases ("Forest", "Capital") and bare numbers ("2010") qualify at any popularity, as does
-  // any single-word name of a less popular work ("Siberia", "Upanishads").
+  // a single everyday-word title of a less popular work.
   for (const [key, e] of keys) {
     const t = key.split(' ');
     const low = (works[groups[e.g].ws[0]].pop ?? 0) < COMMON_POP, titleLike = e.kind === KIND.TITLE || e.kind === KIND.ALIAS || e.kind === KIND.SERIES;
     const one = t.length === 1;
     // single-word titles are already flagged by the catalog's own ambiguity rule; aliases/series are not
-    const common = RULES && titleLike && !e.free && !e.numbered && (one ? low || /^\d+$/.test(t[0]) || (e.kind !== KIND.TITLE && isCommon(t[0])) : low && t.every(isCommon)) ? 1 : 0;
+    // a character name made of everyday words only ("The Sheep", "Thing One") is treated like such a title
+    const plainChar = RULES && e.kind === KIND.CHAR && t.every(isCommon) && (t[0] === 'the' || t.every(isTop3k));
+    const common = plainChar || (RULES && titleLike && !e.free && !e.numbered && (one ? /^\d+$/.test(t[0]) || (isCommon(t[0]) && (low || e.kind !== KIND.TITLE || isTop3k(t[0]))) : low && t.every(isCommon))) ? 1 : 0;
+    // "rare": a single uncommon word naming a less popular work ("Bloodborne", "Telefon"). Not an everyday word, but
+    // weak: it needs a media word in its sentence. When it mostly names something else the "other" flag says so.
+    const rare = RULES && titleLike && one && low && !common && !e.free ? 1 : 0;
     // "cap": must appear in Title Case; only popular multi-word names with a distinctive word ("game of thrones")
     // may be written in lowercase
-    const cap = RULES && titleLike && !e.free && (one || low || t.every(isCommon)) ? 1 : 0;
-    entries.set(key, (newIdx[e.g] << 7) | (cap << 6) | (common << 5) | (e.amb << 4) | e.kind);
+    const cap = plainChar || (RULES && titleLike && !e.free && (one || low || t.every(isCommon))) ? 1 : 0;
+    const other = RULES && e.oth && e.kind !== KIND.PART && e.kind !== KIND.CHAR1 ? 1 : 0;
+    entries.set(key, (newIdx[e.g] << 8) | (rare << 7) | (cap << 6) | (common << 5) | (e.amb << 4) | (other << 3) | e.kind);
   }
   const sorted = order.map((i) => groups[i]);
   const meta = {

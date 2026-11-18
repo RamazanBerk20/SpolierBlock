@@ -25,8 +25,45 @@ const values = (b) => b.map((i) => 'wd:' + i).join(' ');
 export const subclassQuery = (root) => `SELECT ?c WHERE { ?c wdt:P279+ wd:${root} }`;
 export const yearsQuery = (b) => `SELECT ?w ?d WHERE { VALUES ?w { ${values(b)} } { ?w wdt:P577 ?d } UNION { ?w wdt:P580 ?d } UNION { ?w wdt:P571 ?d } }`;
 export const aliasQuery = (b) => `SELECT ?w ?a WHERE { VALUES ?w { ${values(b)} } ?w skos:altLabel ?a . FILTER(LANG(?a) IN ("en", "mul")) }`;
-export const charQuery = (b) => `SELECT ?w ?cl ?cs WHERE { VALUES ?w { ${values(b)} } ?w wdt:P674 ?c . ?c rdfs:label ?cl . FILTER(LANG(?cl) IN ("en", "mul")) OPTIONAL { ?c wikibase:sitelinks ?cs } }`;
+// Characters that are real people (Q5: "Steve Jobs", "Charles de Gaulle") are left out: their names mean the person.
+export const charQuery = (b) => `SELECT ?w ?cl ?cs WHERE { VALUES ?w { ${values(b)} } ?w wdt:P674 ?c . FILTER NOT EXISTS { ?c wdt:P31 wd:Q5 } ?c rdfs:label ?cl . FILTER(LANG(?cl) IN ("en", "mul")) OPTIONAL { ?c wikibase:sitelinks ?cs } }`;
 export const charFallbackQuery = (b) => `SELECT ?w ?cl ?cs WHERE { VALUES ?w { ${values(b)} } ?c wdt:P1441 ?w ; wdt:P31 wd:Q95074 ; rdfs:label ?cl . FILTER(LANG(?cl) IN ("en", "mul")) OPTIONAL { ?c wikibase:sitelinks ?cs } }`;
+
+// ---- what a work is: narrative or not (catalog build only) ----
+// Instance of (P31), genre (P136) and form (P7937) of works.
+export const kindQuery = (b) => `SELECT ?w ?p ?v WHERE { VALUES ?w { ${values(b)} } VALUES ?p { wdt:P31 wdt:P136 wdt:P7937 } ?w ?p ?v }`;
+// Works where a spoiler makes no sense: scripture, reference works, most non-fiction, documentaries, news and talk
+// shows. An explicit list: Wikidata's subclass trees are too loose for this (they put "biographical film" under
+// non-fiction and "mockumentary" under documentary). Matched against P31, P136 and P7937.
+export const NOT_NARRATIVE = new Set((
+  // scripture and religious texts
+  'Q179461 Q29154430 Q6718887 Q10642135 Q170207 Q34274 Q1054662 Q1001051 Q1194040 Q47148 Q209680 Q188602 Q2986441 ' +
+  'Q215495 Q63203971 Q21848887 Q1147354 Q3831847 Q7831615 Q938714 Q1377898 Q208628 Q12378012 Q1924246 ' +
+  // reference works
+  'Q13136 Q5292 Q23622 Q4942969 Q1787111 Q521983 Q1239328 Q975413 Q162827 Q1459574 Q2352616 Q18168594 Q223638 ' +
+  'Q2191807 Q198614 Q1631107 Q615699 Q30721375 Q55594435 Q3136090 Q1429277 ' +
+  // non-fiction books
+  'Q213051 Q27801 Q35760 Q384515 Q864737 Q185363 Q11080698 Q30277550 Q4465563 Q116513838 Q124409385 Q36279 Q4184 ' +
+  'Q112983 Q5891 Q13408937 Q1683266 Q995600 Q1129795 Q11826511 Q193495 Q6498453 Q58854 Q1748756 Q190399 ' +
+  // documentaries, news, talk and factual shows
+  'Q93204 Q7603925 Q133731271 Q133731263 Q1760864 Q110593123 Q1800833 Q3648909 Q4765076 Q430525 Q1358344 ' +
+  'Q139850703 Q5401282 Q622812 Q986699 Q131762936 Q6645282 Q3546572 Q7257679 Q5428822 Q10676514 Q2670855 Q7832972 ' +
+  'Q126914943 Q7551149 Q4677832 Q2096046 Q1371394 Q116763393 Q34682961').split(' '));
+// ...unless it is also told as a story: novel, novella, short story, play, light novel, novel series, fiction, or a
+// fiction film genre (drama, comedy, comedy-drama, crime, thriller, action, romance, horror, science fiction)
+const NARRATIVE = new Set(('Q8261 Q149537 Q49084 Q25379 Q1279564 Q104213567 Q1667921 Q8253 ' +
+  'Q130232 Q157443 Q859369 Q959790 Q2484376 Q188473 Q1054574 Q200092 Q471839').split(' '));
+export const isNarrative = (vals) => !vals.some((v) => NOT_NARRATIVE.has(v)) || vals.some((v) => NARRATIVE.has(v));
+
+// ---- names that mostly mean something else (catalog build only) ----
+// Items with the exact English or "mul" label (prop rdfs:label) or alias (skos:altLabel: "Oppenheimer", "Elvis",
+// "PSG"), their sitelinks and classes.
+export const senseQuery = (names, prop = 'rdfs:label') => `SELECT ?l ?e ?sl (GROUP_CONCAT(DISTINCT ?c) AS ?cs) WHERE { VALUES ?l { ${
+  names.flatMap((n) => [JSON.stringify(n) + '@en', JSON.stringify(n) + '@mul']).join(' ')} } ?e ${prop} ?l ; wikibase:sitelinks ?sl . FILTER(?sl >= ${MIN_SITELINKS}) OPTIONAL { ?e wdt:P31 ?c } } GROUP BY ?l ?e ?sl`;
+// Classes that are not a meaning of their own: disambiguation pages, lists, categories, templates, name lists
+export const NOT_A_SENSE = new Set('Q4167410 Q13406463 Q4167836 Q11266439 Q15407973 Q22808320 Q17362920'.split(' '));
+// Classes of works and fictional things: the same sense as a work (a franchise, a character, a series).
+export const SAME_SENSE_ROOTS = ['Q14897293', 'Q196600', 'Q7058673', 'Q24856', 'Q15416'];
 export const CHAR_MIN_POP = 40; // characters are only fetched for works this popular
 
 // text: contents of tools/catalog/20k.txt

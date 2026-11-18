@@ -7,7 +7,8 @@ const W = cat.works;
 const types = new Set(['movie', 'tv', 'game', 'book', 'anime', 'manga', 'comic']);
 const keys = 'id title type year aliases characters pop ambiguous'.split(' ').sort().join();
 W.forEach((w, i) => {
-  assert.equal(Object.keys(w).sort().join(), keys, `keys ${w.id}`);
+  assert.equal(Object.keys(w).filter((k) => k !== 'other').sort().join(), keys, `keys ${w.id}`);
+  assert.ok(w.other === undefined || (w.other.length && w.other.every((n) => typeof n === 'string')), `other ${w.id}`);
   assert.match(w.id, /^Q\d+$/); assert.ok(w.title && typeof w.title === 'string');
   assert.ok(types.has(w.type), 'type ' + w.id);
   assert.ok(w.year === null || Number.isInteger(w.year));

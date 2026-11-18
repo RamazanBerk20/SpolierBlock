@@ -64,3 +64,15 @@ test('sequel numbers and joined short forms on the real catalog', { skip: !has &
   assert.ok(labels('Final Fantasy 7 remake').some((l) => l.startsWith('Final Fantasy VII')));
   for (const s of ['Chapter 6 of my thesis', 'Windows 11 update', 'top 5 tips', 'iPhone 16']) assert.deepEqual(labels(s), [], s);
 });
+
+test('posts that are not about a work stay uncovered on the real catalog', { skip: !has && 'no data/catalog.json' }, () => {
+  const labels = (t) => m.evaluate(t).map((g) => built.meta.groups[g][0]);
+  for (const s of ['The Palestine debate on campus last night was civil. Both speakers took questions for an hour, what a show.',
+    'Reading Proverbs 31 with my daughter, one chapter a day', 'Nintendo Switch Online price hike is coming? Please no.',
+    'Why is the line at Paris Charles de Gaulle always the longest at 6am?', 'Chernobyl exclusion zone hit by a drone overnight',
+    'Tesla stock is up 6% on no news. Markets are vibes now.']) assert.deepEqual(labels(s), [], s);
+  for (const [s, l] of [['Dune: Part Two was incredible in IMAX', 'Dune: Part Two'], ['Rewatched Titanic last night, still crying', 'Titanic'],
+    ['just finished Chernobyl on HBO, harrowing', 'Chernobyl'], ['Bloodborne is the best game FromSoftware has made', 'Bloodborne']]) {
+    assert.ok(labels(s).includes(l), `${s} -> ${labels(s)}`);
+  }
+});
