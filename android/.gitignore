@@ -1,8 +1,8 @@
 # third-party APKs and patched outputs: never committed or redistributed
-apks/
+apks
 out/
 # local signing key
-keystore/
+keystore
 # Morphe CLI jar and its working data (tools/bootstrap-morphe.sh fetches it)
 tools/morphe-desktop-*.jar
 tools/morphe-data/
