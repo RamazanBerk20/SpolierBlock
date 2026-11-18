@@ -152,6 +152,9 @@ private fun spoilerBlockPatch(
                     setAttribute("android:title", if (row.inCategory) "Spoiler blocking" else "SpolierBlock")
                     setAttribute("android:summary", "Your library, what to cover, backup")
                     if (layout != null) setAttribute("android:layout", layout)
+                    // rows with icons are laid out around them: without one the title would touch the screen edge
+                    if (screen.elements("Preference").any { p -> p.attribute("android:icon") != null })
+                        setAttribute("android:icon", "@android:drawable/ic_menu_view")
                     if (row.order != null) setAttribute("android:order", row.order)
                     appendChild("intent") {
                         setAttribute("android:targetPackage", pkg) // rewritten in finalize with the final package name
