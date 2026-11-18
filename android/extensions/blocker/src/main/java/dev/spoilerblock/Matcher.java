@@ -8,10 +8,10 @@ import java.nio.ByteOrder;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -22,14 +22,42 @@ import java.util.regex.Pattern;
 public final class Matcher {
     static final int MAX_N = 8;
     static final int TITLE = 0, ALIAS = 1, CHAR = 2, TAG = 3, CHAR1 = 4, SERIES = 5, PART = 6;
-    private static final Set<String> CONTEXT = new HashSet<>(Arrays.asList(("season seasons episode episodes ep eps movie movies film films trailer teaser ending endings " +
-        "finale spoiler spoilers series show sequel prequel remake reboot cast character characters scene scenes plot " +
-        "director chapter chapters volume book books novel manga anime game games dlc boss playthrough watched watching " +
-        "rewatch rewatching binge premiere cinema theater theatre netflix hbo disney pixar imdb streaming tv adaptation " +
-        "franchise saga trilogy episodic showrunner gameplay nintendo playstation xbox steam read reading").split(" ")));
+    // media context words -> the work types they corroborate (TYPE_BIT); see the JS for the reasons
+    private static final int MOV = 1, EPIS = 2 | 16, SCREEN = 1 | 2 | 16, GAME = 4, READ = 8 | 32 | 64, ALL = 127;
+    private static final Map<String, Integer> CONTEXT = new HashMap<>();
+    private static final Map<String, Integer> TYPE_BIT = new HashMap<>();
+    static {
+        Object[][] ctx = {
+            {ALL, "ending endings finale spoiler spoilers sequel prequel remake reboot character characters plot adaptation franchise saga trilogy premiere"},
+            {SCREEN | GAME, "trailer teaser scene scenes cast animation animated"},
+            {SCREEN, "director cinema theater theatre netflix hbo disney pixar imdb tv watched watching rewatch rewatched " +
+                "rewatching binge imax actor actress acting oscar oscars emmy emmys blockbuster screenplay cine kino"},
+            {MOV, "movie movies film films"},
+            {EPIS, "season seasons episode episodes ep eps show episodic showrunner sitcom miniseries"},
+            {EPIS | READ, "series"},
+            {GAME, "game games dlc boss playthrough gameplay nintendo playstation xbox steam played playing replayed roguelike " +
+                "roguelite metroidvania platformer rpg jrpg mmo mmorpg fps soulslike speedrun multiplayer"},
+            {READ, "chapter chapters volume book books novel read reading reread author comic comics webcomic"},
+            {16 | 32, "anime manga shonen seinen isekai manhwa webtoon"},
+            {SCREEN | GAME, "fragman fragmani"},
+            {EPIS | READ, "capitulo capitulos serie"},
+            {EPIS, "finali temporada episodio episodios staffel folge folgen saison stagione puntata"},
+            {MOV, "pelicula peliculas filme filmes"},
+            {GAME, "juego videojuego jogo spiel jeu gioco"},
+            {READ, "libro livro novela livre tome"},
+        };
+        for (Object[] c : ctx) for (String w : ((String) c[1]).split(" ")) CONTEXT.merge(w, (Integer) c[0], (a, b) -> a | b);
+        String[] types = {"movie", "tv", "game", "book", "anime", "manga", "comic"};
+        for (int i = 0; i < types.length; i++) TYPE_BIT.put(types[i], 1 << i);
+    }
+    // Turkish suffixes: these stems match any longer word they start
+    private static final String[] STEMS = {"sezon", "bolum", "dizi", "fragman", "film", "izle", "izli", "oyun", "oyn", "kitap", "kitab",
+        "okudu", "okuyor", "okuma", "cizgi", "serisi", "manga", "anime", "sinema"};
+    private static final int[] STEM_MASK = {EPIS, EPIS | READ, EPIS, SCREEN | GAME, MOV, SCREEN, SCREEN, GAME, GAME, READ, READ,
+        READ, READ, READ, READ, EPIS | READ, 16 | 32, 16 | 32, SCREEN};
     private static final Pattern SXEX = Pattern.compile("^s\\d{1,2}e\\d{1,3}$");
     // shortcut: CJK/Thai text has no spaces (same limit as the JS matcher), add per-script segmentation when the JS side does.
-    private static final Pattern WORD = Pattern.compile("&|[\\p{L}\\p{N}]+(?:['’][\\p{L}\\p{N}]+)*");
+    private static final Pattern WORD = Pattern.compile("&|[\\p{L}\\p{N}]+"); // an apostrophe splits words, as in the JS
     private static final Pattern MARKS = Pattern.compile("\\p{M}");
     static final int MAGIC = 0x53424959;
     static final int SEED_A = 0x9e3779b9, SEED_B = 0x7f4a7c15;
@@ -40,6 +68,8 @@ public final class Matcher {
     final int[][] groups; // group -> work indices (the JSON's [label, w...] without the label)
     private final int[] u;
     private final int mask;
+    private final boolean v1; // index format 1 (see the JS): group << 8, rare and other bits
+    private final Map<Integer, Integer> masks = new HashMap<>();
 
     public Matcher(byte[] bin, String json) throws Exception {
         ByteBuffer bb = ByteBuffer.wrap(bin).order(ByteOrder.LITTLE_ENDIAN);
@@ -47,6 +77,7 @@ public final class Matcher {
         bb.asIntBuffer().get(u);
         if (u[0] != MAGIC) throw new IllegalArgumentException("bad index");
         mask = (1 << u[1]) - 1;
+        v1 = u[2] >= 1;
         JSONObject m = new JSONObject(json);
         ids = strings(m.getJSONArray("ids"));
         titles = strings(m.getJSONArray("titles"));
@@ -77,7 +108,7 @@ public final class Matcher {
 
     static String normTok(String s) {
         if (s.equals("&")) return "and";
-        s = s.replace("'", "").replace("’", "").toLowerCase(java.util.Locale.ROOT);
+        s = s.toLowerCase(java.util.Locale.ROOT);
         for (int i = 0; i < s.length(); i++) {
             if (s.charAt(i) > 0x7f) return MARKS.matcher(Normalizer.normalize(s, Normalizer.Form.NFKD)).replaceAll("");
         }
@@ -93,9 +124,38 @@ public final class Matcher {
     static Tokens tokenize(String text) {
         Tokens t = new Tokens();
         java.util.regex.Matcher m = WORD.matcher(text);
-        while (m.find()) { t.toks.add(normTok(m.group())); t.starts.add(m.start()); t.ends.add(m.end()); }
+        while (m.find()) {
+            // a suffix after an apostrophe ("'s", Turkish "'i") is dropped when the word before it has more than 2 letters
+            int k = t.size() - 1;
+            if (k >= 0 && t.ends.get(k) == m.start() - 1 && "'’".indexOf(text.charAt(t.ends.get(k))) >= 0
+                && t.ends.get(k) - t.starts.get(k) > 2 && m.end() - m.start() <= 4) {
+                t.ends.set(k, m.end());
+                continue;
+            }
+            t.toks.add(normTok(m.group())); t.starts.add(m.start()); t.ends.add(m.end());
+        }
         return t;
     }
+
+    // sentence number of each token: a new sentence after . ! ? or a line break between two tokens, except the dot of
+    // an ordinal number ("2. sezon")
+    private static int[] sentences(String text, Tokens tk) {
+        int[] out = new int[tk.size()];
+        int n = 0;
+        for (int i = 0; i < out.length; i++) {
+            if (i > 0) {
+                String gap = text.substring(tk.ends.get(i - 1), tk.starts.get(i)), prev = tk.toks.get(i - 1);
+                boolean ordinal = gap.equals(". ") && ORDINAL.matcher(prev).matches();
+                for (int k = 0; k < gap.length() && !ordinal; k++) {
+                    char c = gap.charAt(k);
+                    if (c == '.' || c == '!' || c == '?' || c == '\n') { n++; break; }
+                }
+            }
+            out[i] = n;
+        }
+        return out;
+    }
+    private static final Pattern ORDINAL = Pattern.compile("\\d{1,2}"), DIGITS = Pattern.compile("\\d+");
 
     static int[] tokHash(String s) {
         int a = 0x811c9dc5, b = 0x01234567;
@@ -122,7 +182,7 @@ public final class Matcher {
     // ---------- evaluate ----------
 
     private static final class Cand {
-        int g, i, n, s, e; boolean common, seen, weak, part, hashed; String key;
+        int g, i, n, s, e; boolean common, other, rare, seen, weak, part, hashed; String key;
     }
 
     /** Group indices (most popular first) the text is about. seenWork[w] marks works the user has seen. */
@@ -139,14 +199,15 @@ public final class Matcher {
                 A = mixA(A, ha[i + n - 1]); B = mixB(B, hb[i + n - 1]);
                 int v = lookup(A, B);
                 if (v < 0) continue;
-                int g = v >>> 7, kind = v & 15;
-                boolean cap = ((v >>> 6) & 1) != 0, common = ((v >>> 5) & 1) != 0, amb = ((v >>> 4) & 1) != 0;
+                int g = v >>> (v1 ? 8 : 7), kind = v & (v1 ? 7 : 15);
+                boolean rare = v1 && ((v >>> 7) & 1) != 0, cap = ((v >>> 6) & 1) != 0, common = ((v >>> 5) & 1) != 0;
+                boolean amb = ((v >>> 4) & 1) != 0, other = v1 && ((v >>> 3) & 1) != 0;
                 int s = tk.starts.get(i), e = tk.ends.get(i + n - 1);
                 boolean hashed = s > 0 && text.charAt(s - 1) == '#';
                 if (kind == TAG && !hashed) continue;
                 String firstTok = text.substring(s, tk.ends.get(i));
                 if ((kind == CHAR1 || kind == PART) && !upperAt(firstTok, 0)) continue; // bare names must be capitalized
-                if (cap && !hashed && !isQuoted(text, s, e)) { // "cap" names must appear in Title Case
+                if (cap && !hashed) { // "cap" names must appear in Title Case, quoted or not
                     boolean bad = false;
                     for (int j = 0; j < n && !bad; j++) {
                         int st = tk.starts.get(i + j);
@@ -156,9 +217,9 @@ public final class Matcher {
                 }
                 boolean titleLike = kind == TITLE || kind == ALIAS || kind == SERIES;
                 Cand c = new Cand();
-                c.g = g; c.i = i; c.n = n; c.s = s; c.e = e; c.common = common; c.hashed = hashed;
+                c.g = g; c.i = i; c.n = n; c.s = s; c.e = e; c.common = common; c.other = other; c.rare = rare; c.hashed = hashed;
                 c.seen = groupSeen(g, seenWork);
-                c.weak = common || kind == CHAR1 || kind == PART || (titleLike && ((amb && n <= 2) || (n == 1 && firstTok.length() <= 3)));
+                c.weak = common || other || rare || kind == CHAR1 || kind == PART || (titleLike && ((amb && n <= 2) || (n == 1 && firstTok.length() <= 3)));
                 c.part = kind == PART;
                 c.key = String.join(" ", tk.toks.subList(i, i + n));
                 cands.add(c);
@@ -176,32 +237,37 @@ public final class Matcher {
         for (int k = 0; k < cands.size(); k++) if (!drop[k]) kept.add(cands.get(k));
 
         LinkedHashSet<Integer> out = new LinkedHashSet<>();
-        Set<String> tokSet = null;
+        int[] sent = null;
         for (Cand c : kept) {
             if (out.contains(c.g)) continue;
-            boolean strong = !c.weak || c.hashed || isQuoted(text, c.s, c.e);
+            boolean strong = !c.weak || (!c.other && (c.hashed || isQuoted(text, c.s, c.e))); // #Palestine is no evidence
             for (int k = 0; k < kept.size() && !strong; k++) {
                 Cand o = kept.get(k);
                 strong = !o.key.equals(c.key) && shares(o.g, c.g);
             }
             if (strong) { out.add(c.g); continue; }
             if (c.part || !upperAt(text, c.s)) continue; // remaining rules need a capitalized form
-            if (tokSet == null) tokSet = new HashSet<>(tk.toks);
-            boolean year = false;
-            for (int w : groups[c.g]) if (years[w] != 0 && tokSet.contains(String.valueOf(years[w]))) { year = true; break; }
-            if (year) { out.add(c.g); continue; }
-            int lo = Math.max(0, c.i - 3), hi = Math.min(len, c.i + c.n + 3);
+            if (sent == null) sent = sentences(text, tk);
+            int si = sent[c.i], mask = typeMask(c.g);
             boolean near = false;
-            for (int j = lo; j < hi && !near; j++) near = (j < c.i || j >= c.i + c.n) && isContext(tk.toks.get(j));
-            // everyday-word names only take an adjacent media word, and never at the start of a sentence
-            boolean add;
-            if (c.common) add = near && !sentenceStart(text, c.s);
-            else {
-                boolean any = false;
-                for (String t : tk.toks) if (isContext(t)) { any = true; break; }
-                add = near || (!sentenceStart(text, c.s) && any);
+            for (int j = Math.max(0, c.i - 3), hi = Math.min(len, c.i + c.n + 3); j < hi && !near; j++) near = fits(c, j, si, mask, sent, tk);
+            int after = c.i + c.n + (c.i + c.n < len && DIGITS.matcher(tk.toks.get(c.i + c.n)).matches() ? 1 : 0); // "Lost 2. sezon"
+            boolean adjacent = fits(c, c.i - 1, si, mask, sent, tk) || fits(c, after, si, mask, sent, tk);
+            // a name that mostly means something else: a media word near it, right next to it for an everyday word
+            // at the start of a sentence ("Go to channel TV")
+            if (c.other) { if (c.common && sentenceStart(text, c.s) ? adjacent : near) out.add(c.g); continue; }
+            boolean ok = false; // a release year of one of its works in the same sentence
+            for (int j = 0; j < len && !ok; j++) {
+                if (sent[j] != si) continue;
+                for (int w : groups[c.g]) if (years[w] != 0 && tk.toks.get(j).equals(String.valueOf(years[w]))) { ok = true; break; }
             }
-            if (add) out.add(c.g);
+            // at the start of a sentence everyday words need a second capitalised word of 3+ letters
+            boolean capped = !c.common || !sentenceStart(text, c.s);
+            for (int j = c.i + 1; j < c.i + c.n && !capped; j++) capped = tk.toks.get(j).length() >= 3 && upperAt(text, tk.starts.get(j));
+            if (!ok && !capped) ok = adjacent;
+            else if (!ok && c.common && c.n == 1) ok = near;
+            else for (int j = 0; j < len && !ok; j++) ok = fits(c, j, si, mask, sent, tk);
+            if (ok) out.add(c.g);
         }
         // A group whose works are all inside another matched group adds nothing ("Potter" inside "Harry Potter").
         List<Integer> res = new ArrayList<>();
@@ -237,7 +303,28 @@ public final class Matcher {
         return false;
     }
 
-    private static boolean isContext(String t) { return CONTEXT.contains(t) || SXEX.matcher(t).matches(); }
+    // a media word of the work's type in the name's own sentence, outside the name
+    private static boolean fits(Cand c, int j, int si, int mask, int[] sent, Tokens tk) {
+        return j >= 0 && j < sent.length && sent[j] == si && (j < c.i || j >= c.i + c.n) && (contextMask(tk.toks.get(j)) & mask) != 0;
+    }
+
+    static int contextMask(String t) {
+        Integer m = CONTEXT.get(t);
+        if (m != null) return m;
+        if (SXEX.matcher(t).matches()) return EPIS;
+        for (int k = 0; k < STEMS.length; k++) if (t.startsWith(STEMS[k])) return STEM_MASK[k];
+        return 0;
+    }
+
+    private int typeMask(int g) {
+        Integer m = masks.get(g);
+        if (m == null) {
+            int x = 0;
+            for (int w : groups[g]) { Integer b = TYPE_BIT.get(types[w]); if (b != null) x |= b; }
+            masks.put(g, m = x);
+        }
+        return m;
+    }
 
     private static boolean upperAt(String s, int i) {
         return i < s.length() && Character.getType(s.codePointAt(i)) == Character.UPPERCASE_LETTER;
@@ -250,7 +337,8 @@ public final class Matcher {
     }
 
     private static boolean isQuoted(String text, int s, int e) {
-        return s > 0 && "\"“'‘«*_".indexOf(text.charAt(s - 1)) >= 0 && e < text.length() && "\"”'’»*_".indexOf(text.charAt(e)) >= 0;
+        return s > 0 && "\"“'‘«*_".indexOf(text.charAt(s - 1)) >= 0 && e < text.length() && "\"”'’»*_".indexOf(text.charAt(e)) >= 0
+            && !((text.charAt(e) == '\'' || text.charAt(e) == '’') && e + 1 < text.length() && Character.isLetter(text.codePointAt(e + 1))); // "It's"
     }
 
     private static boolean sentenceStart(String text, int s) {

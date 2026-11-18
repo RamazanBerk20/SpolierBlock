@@ -24,11 +24,12 @@ import java.util.regex.Pattern;
  * Node build. Any rule change must be made in the JS first.
  */
 final class Catalog {
-    /** One work in the catalog schema: { id, title, type, year, aliases, characters, pop, ambiguous }. */
+    /** One work in the catalog schema: { id, title, type, year, aliases, characters, pop, ambiguous, other? }. */
     static final class Work {
         String id, title, type;
         int year; // 0 = null
         String[] aliases = new String[0], characters = new String[0];
+        String[] other = new String[0]; // names that mostly mean something else (tools/catalog/build.mjs)
         double pop;
         boolean ambiguous;
     }
@@ -66,6 +67,7 @@ final class Catalog {
                     case "ambiguous": w.ambiguous = j.nextBoolean(); break;
                     case "aliases": w.aliases = strings(j); break;
                     case "characters": w.characters = strings(j); break;
+                    case "other": w.other = strings(j); break;
                     default: j.skipValue();
                 }
             }
@@ -96,7 +98,9 @@ final class Catalog {
             o.append(",\"aliases\":"); strs(o, w.aliases);
             o.append(",\"characters\":"); strs(o, w.characters);
             o.append(",\"pop\":").append(num(w.pop));
-            o.append(",\"ambiguous\":").append(w.ambiguous).append('}');
+            o.append(",\"ambiguous\":").append(w.ambiguous);
+            if (w.other.length > 0) { o.append(",\"other\":"); strs(o, w.other); }
+            o.append('}');
         }
         o.append(']');
     }
@@ -253,7 +257,7 @@ final class Catalog {
 
     /** The common-word list (tools/catalog/20k.txt), in first-occurrence order like the JS Set. */
     static final class Words {
-        final Set<String> common = new LinkedHashSet<>(), everyday = new HashSet<>(), top1k = new HashSet<>();
+        final Set<String> common = new LinkedHashSet<>(), everyday = new HashSet<>(), top1k = new HashSet<>(), top3k = new HashSet<>();
 
         Words(String text) {
             for (String w : text.split("\n", -1)) common.add(jsTrim(w).toLowerCase(java.util.Locale.ROOT));
@@ -261,6 +265,7 @@ final class Catalog {
             for (String w : common) {
                 if (i < 10000) everyday.add(w);
                 if (i < 1000) top1k.add(w);
+                if (i < 3000) top3k.add(w);
                 if (++i >= 10000) break;
             }
         }
@@ -320,7 +325,7 @@ final class Catalog {
         int[] works = new int[2]; int n;
         int kind, amb, labelRank, g;
         String label;
-        boolean free, numbered;
+        boolean free, numbered, oth = true;
 
         void add(int w) {
             for (int i = 0; i < n; i++) if (works[i] == w) return;
@@ -355,21 +360,23 @@ final class Catalog {
         for (int i = 0; i < works.size(); i++) {
             Work w = works.get(i);
             boolean low = w.pop < COMMON_POP;
-            for (Variant v : nameVariants(w.title, low, words)) {
-                add(keys, works, v.text, i, v.joined ? Matcher.ALIAS : Matcher.TITLE, w.title, v.free, v.numbered);
-                if (!v.joined && v.text.contains(" ")) add(keys, works, v.text, i, Matcher.TAG, w.title, false, false);
+            Set<String> other = new HashSet<>(Arrays.asList(w.other));
+            boolean ot = other.contains(w.title);
+            for (String f : possessive(w.title)) for (Variant v : nameVariants(f, low, words)) {
+                add(keys, works, words, v.text, i, v.joined ? Matcher.ALIAS : Matcher.TITLE, w.title, v.free, v.numbered, ot);
+                if (!v.joined && v.text.contains(" ")) add(keys, works, words, v.text, i, Matcher.TAG, w.title, false, false, ot);
             }
             String p = prefix[i];
             if (p != null && prefixCount.get(join(Matcher.tokenize(p).toks, " ")) >= 2) {
-                add(keys, works, p, i, Matcher.SERIES, p, false, false);
-                add(keys, works, p, i, Matcher.TAG, p, false, false);
+                add(keys, works, words, p, i, Matcher.SERIES, p, false, false, other.contains(p));
+                add(keys, works, words, p, i, Matcher.TAG, p, false, false, other.contains(p));
                 seriesOf[i] = p;
             }
-            for (String a : w.aliases) for (Variant v : nameVariants(a, low, words)) add(keys, works, v.text, i, Matcher.ALIAS, w.title, v.free, v.numbered);
+            for (String a : w.aliases) for (String f : possessive(a)) for (Variant v : nameVariants(f, low, words)) add(keys, works, words, v.text, i, Matcher.ALIAS, w.title, v.free, v.numbered, other.contains(a));
             for (String c : w.characters) {
-                add(keys, works, c, i, Matcher.CHAR, w.title, false, false);
+                add(keys, works, words, c, i, Matcher.CHAR, w.title, false, false, other.contains(c));
                 List<String> parts = Matcher.tokenize(c).toks;
-                if (parts.size() > 1) for (String t : parts) if (t.length() >= 4 && !words.isCommon(t)) add(keys, works, t, i, Matcher.PART, w.title, false, false);
+                if (parts.size() > 1) for (String t : parts) if (t.length() >= 4 && !words.isCommon(t)) add(keys, works, words, t, i, Matcher.PART, w.title, false, false, false);
             }
         }
 
@@ -404,7 +411,7 @@ final class Catalog {
         while ((1 << bits) < n * 1.6) bits++;
         int slots = 1 << bits, mask = slots - 1;
         int[] u = new int[3 + slots * 3];
-        u[0] = Matcher.MAGIC; u[1] = bits;
+        u[0] = Matcher.MAGIC; u[1] = bits; u[2] = 1; // index format 1
         for (Map.Entry<String, Key> en : keys.entrySet()) {
             Key e = en.getValue();
             String[] t = en.getKey().split(" ", -1);
@@ -412,10 +419,16 @@ final class Catalog {
             boolean titleLike = e.kind == Matcher.TITLE || e.kind == Matcher.ALIAS || e.kind == Matcher.SERIES, one = t.length == 1;
             boolean allCommon = true;
             for (String x : t) if (!words.isCommon(x)) { allCommon = false; break; }
-            boolean common = titleLike && !e.free && !e.numbered &&
-                (one ? low || digits(t[0]) || (e.kind != Matcher.TITLE && words.isCommon(t[0])) : low && allCommon);
-            boolean cap = titleLike && !e.free && (one || low || allCommon);
-            int v = (newIdx[e.g] << 7) | (cap ? 1 << 6 : 0) | (common ? 1 << 5 : 0) | (e.amb << 4) | e.kind;
+            // "The Sheep", "Thing One": everyday words only, treated like such a title
+            boolean top3 = true;
+            for (String x : t) if (!words.top3k.contains(x)) { top3 = false; break; }
+            boolean plainChar = e.kind == Matcher.CHAR && allCommon && (t[0].equals("the") || top3);
+            boolean common = plainChar || titleLike && !e.free && !e.numbered &&
+                (one ? digits(t[0]) || (words.isCommon(t[0]) && (low || e.kind != Matcher.TITLE || words.top3k.contains(t[0]))) : low && allCommon);
+            boolean cap = plainChar || titleLike && !e.free && (one || low || allCommon);
+            boolean rare = titleLike && one && low && !common && !e.free;
+            boolean other = e.oth && e.kind != Matcher.PART && e.kind != Matcher.CHAR1;
+            int v = (newIdx[e.g] << 8) | (rare ? 1 << 7 : 0) | (cap ? 1 << 6 : 0) | (common ? 1 << 5 : 0) | (e.amb << 4) | (other ? 1 << 3 : 0) | e.kind;
             // buildIndexBinary: linear probing in insertion order
             int A = Matcher.SEED_A, B = Matcher.SEED_B;
             for (String tok : t) { int[] h = Matcher.tokHash(tok); A = Matcher.mixA(A, h[0]); B = Matcher.mixB(B, h[1]); }
@@ -450,13 +463,22 @@ final class Catalog {
         return new Built(bb.array(), o.toString());
     }
 
-    private static void add(Map<String, Key> keys, List<Work> works, String str, int w, int kind, String label, boolean free, boolean numbered) {
+    // the tokenizer splits at an apostrophe; text written without it ("Schindlers List") needs the joined form too
+    private static final Pattern APOSTROPHE = Pattern.compile("['’]");
+
+    private static List<String> possessive(String s) {
+        if (!APOSTROPHE.matcher(s).find()) return Collections.singletonList(s);
+        return Arrays.asList(s, APOSTROPHE.matcher(s).replaceAll(""));
+    }
+
+    private static void add(Map<String, Key> keys, List<Work> works, Words words, String str, int w, int kind, String label, boolean free, boolean numbered, boolean oth) {
         List<String> t = Matcher.tokenize(str).toks;
         if (t.isEmpty() || t.size() > Matcher.MAX_N || (t.size() == 1 && t.get(0).length() < 2)) return;
         if ((kind == Matcher.CHAR || kind == Matcher.PART) && t.size() == 1) {
             if (t.get(0).length() < 4) return;
             if (kind == Matcher.CHAR) kind = Matcher.CHAR1;
         }
+        if (kind == Matcher.ALIAS && t.size() == 1 && words.isCommon(t.get(0))) return; // "Ultimate", "Family": never evidence
         String key = join(t, kind == Matcher.TAG ? "" : " ");
         Key e = keys.get(key);
         if (e == null) {
@@ -464,6 +486,7 @@ final class Catalog {
             e.kind = kind; e.label = label; e.labelRank = RANK[kind];
         }
         e.add(w);
+        if (kind != Matcher.PART && kind != Matcher.CHAR1) e.oth &= oth;
         if (free) e.free = true;
         if (numbered) e.numbered = true;
         if (RANK[kind] < RANK[e.kind]) e.kind = kind;

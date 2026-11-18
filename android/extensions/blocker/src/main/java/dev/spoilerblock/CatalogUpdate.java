@@ -71,7 +71,7 @@ final class CatalogUpdate {
         return "SELECT ?w ?a WHERE { VALUES ?w { " + values(b) + " } ?w skos:altLabel ?a . FILTER(LANG(?a) IN (\"en\", \"mul\")) }";
     }
     static String charQuery(List<String> b) {
-        return "SELECT ?w ?cl ?cs WHERE { VALUES ?w { " + values(b) + " } ?w wdt:P674 ?c . ?c rdfs:label ?cl . FILTER(LANG(?cl) IN (\"en\", \"mul\")) OPTIONAL { ?c wikibase:sitelinks ?cs } }";
+        return "SELECT ?w ?cl ?cs WHERE { VALUES ?w { " + values(b) + " } ?w wdt:P674 ?c . FILTER NOT EXISTS { ?c wdt:P31 wd:Q5 } ?c rdfs:label ?cl . FILTER(LANG(?cl) IN (\"en\", \"mul\")) OPTIONAL { ?c wikibase:sitelinks ?cs } }";
     }
     static String charFallbackQuery(List<String> b) {
         return "SELECT ?w ?cl ?cs WHERE { VALUES ?w { " + values(b) + " } ?c wdt:P1441 ?w ; wdt:P31 wd:Q95074 ; rdfs:label ?cl . FILTER(LANG(?cl) IN (\"en\", \"mul\")) OPTIONAL { ?c wikibase:sitelinks ?cs } }";
