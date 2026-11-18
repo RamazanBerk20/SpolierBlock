@@ -6,7 +6,7 @@ Version 0.2.0. Run every command from the repository root unless stated.
 
 | For | You need |
 |---|---|
-| Everything | Node.js and npm. `npm install` installs the dev dependencies (`@huggingface/transformers`, `onnxruntime-web`, `tesseract.js`, `@tesseract.js-data/eng`, `web-ext`, `puppeteer-core`). The Android bundle still reads `@tesseract.js-data/eng`; nothing in the extension uses `tesseract.js`. |
+| Everything | Node.js and npm. `npm install` installs the dev dependencies (`@huggingface/transformers`, `onnxruntime-web`, `web-ext`, `puppeteer-core`, and `tesseract.js` with `@tesseract.js-data/eng`). Nothing in the build, the extension, the tests or the Android build uses the two Tesseract packages any more. Only the comparison scripts `research/scripts/v2-ocr-eval.mjs` and `ocr-tesseract.mjs` import them, and `package.json` still lists them. |
 | First build | Network access. It downloads, into `build/.cache`, the SigLIP 2 vision model (fp32, about 378 MB), the SigLIP 2 text model (fp16, about 565 MB, build time only), the tokenizer (about 34 MB) and the two OCR models (about 5 and 8 MB). The vision and OCR files are checked against pinned sha256 values. Network access to Wikidata too, unless `tools/catalog/cache/` already holds the class queries (see below). |
 | End-to-end test, Firefox | Zen at `/usr/bin/zen-browser`. The path is written into `package.json` and `test/e2e/run.mjs`. |
 | End-to-end test, Chrome | Chrome for Testing in `build/browsers`. Install it with `npx @puppeteer/browsers install chrome@stable --path build/browsers`. |
@@ -88,6 +88,7 @@ npm run e2e -- chrome
 - All traffic that is not loopback goes through a proxy that refuses it, and the report lists every attempt. The test fails if the mock SPARQL server sees a request before the update is switched on or pressed. Other refused requests are only listed.
 - Pages: `test/e2e/fixture.html` (the original flow: first paint, styles, popup search and "Add", the cover's buttons, the catalog update including 429 and malformed answers, pausing a site, OCR-only text), `feed.html` (a virtualised feed that recycles its nodes), `coverage.html` (direct messages, search suggestions, notifications, quote posts, a CSS background photo, short and dark blocks, open, closed and late shadow roots, an `about:srcdoc` frame, a cross-origin frame, the tab title) and `frame.html` (the embedded frame).
 - 27 cases check the [contract](agents/contract.md): the labels, the buttons, `unknownImages`, `blockUnlisted`, both styles and per-work style, "I've seen it" writing `works`, the settings button, and the layout rule (no overlap, no height change, covers belong to their post). A fourth group measures the scan cost on a long page and prints memory figures.
+- The image cases do not name pictures in advance. The run asks the shipped engine (through the background, as the content script does) which `spoiler_*` and `pos_*` fixture pictures it titles with the fixture catalog, and which it calls generic media, keeping only pictures with no OCR text. It then uses those. `test/fixtures/catalog.small.json` holds Nosferatu (1922) so that `pos_nosferatu.jpg`, which has no text, is titled; if the engine titles no picture, the title cases are skipped and the report says so.
 - Output goes to `test/e2e/out/` (not in git): a report per target and screenshots.
 - The two targets use different ports, so they can run together. Do not do that on this machine (see the locks above).
 - Switches: `ONLY=1` skips the original flow and runs only the contract cases. `ONLY=states,feed,coverage,perf` (any subset) runs those groups. `SB_CONTENT=<dir with content.js and content.css>` runs another content script, for example the 0.1 one, against the same pages.
@@ -102,6 +103,8 @@ npm run e2e -- chrome
 | `node tools/fp-text.mjs [catalog]` | False positives of the text matcher on everyday prose. Downloads a corpus once into `build/corpus/`. |
 | `[SB_RESEARCH=research] node tools/calibrate-clip.mjs [catalog] [--clip-n=N]` | The image verdict: fits the title cut-offs on a calibration split and reports them on the held-out split. Uses the images in `test/fixtures/images/labels.json`, plus, when `SB_RESEARCH` points at a `research/` directory, the research image sets. The held-out figures in the README need those sets. Uses `sharp` and `onnxruntime-node`, which come with `@huggingface/transformers`. |
 | `node tools/bench-engine.mjs chrome\|firefox [regex]` | Per-image latency of the real engine inside the built extension (check and OCR, first call, median, 90th percentile, and a feed-like burst). Runs through `test/e2e/run.mjs --eval`, so it needs `dist/<target>`. |
+| `node tools/bench-engine.mjs chrome\|firefox [regex] --stats > <browser>.json` | No timing. For each fixture image, the inputs of the title verdict (best row, score, margin, gap, media) from two separate batch-1 runs and one batch-4 run, as JSON. |
+| `node tools/bench-stats-diff.mjs chrome.json firefox.json [clip-meta.json]` | Compares two `--stats` outputs: spread between runs, between batch 1 and batch 4, and between browsers, and the images closest to a cut-off (cut-offs from `build/data/clip-meta.json` unless given). This is how the cross-browser spread was measured. |
 | `node tools/bench-ort-web.mjs <model.onnx> [size] [threads]` | Latency and memory of an ONNX model on onnxruntime-web. |
 | `node test/rdr2-probe.mjs` | A probe, not a test: Red Dead Redemption 2 posts in both styles. Needs `dist/firefox`. |
 | `node tools/catalog-update-live.mjs [--simulate-old-bundle]` | One real catalog update against live Wikidata with the extension's own code. Nothing is written. |
@@ -120,7 +123,7 @@ node android/tools/clip-vectors.mjs
 cd android && ./gradlew :extensions:blocker:testDebugUnitTest
 ```
 
-`clip-vectors.mjs` and `ClipTest` still expect the 0.1 image model; see the TODO in android.md.
+`clip-vectors.mjs` feeds `ClipTest` and `OcrTest` (it runs the extension's own `pixels.js`, `engine.js` and `ocr.js` on the fixture images). The Gradle run also starts the separate task `ocrTestDebugUnitTest`; see [android.md](android.md#parity-tests).
 
 ## Rebuilding the data
 

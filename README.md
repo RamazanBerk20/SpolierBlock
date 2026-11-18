@@ -23,10 +23,10 @@ The extension is a development build that you load by hand. The patch bundle nee
 - **Text matching.** A hash-index matcher over a catalog of 24,670 works built from Wikidata. It knows titles, aliases, character names and series names. Names shared by several works form one group. Ambiguous names (such as "Lost" or "It") need corroboration before they match, and a name whose usual meaning is not a work ("Palestine", "Napoleon") matches only next to a media word that fits the work's type. Sequel numbers match in both forms ("GTA 6", "GTA VI"). The catalog holds narrative works only: scripture, reference works, most non-fiction, documentaries and news or talk shows are left out.
 - **Three states and two styles.** Each work you touch is "seen" or "blocked". Each work, or all works by default, uses a style: `all` (cover anything about the work) or `spoilers` (cover only what a classifier calls a spoiler). The classifier is all-MiniLM-L6-v2, fine-tuned and quantised to int8 (`models/spoiler`). It scores each sentence and takes the highest score. If it fails, the post stays covered.
 - **Settings.** The extension has a settings page in its own tab (Library, Add by hand, Blocking, Data, About) and a small popup. You can add works the catalog does not know by hand, and export or import everything as one file that works on both platforms.
-- **Images and video thumbnails.** A SigLIP 2 vision model (weights quantised to int8) compares an image with precomputed title rows. The result is either a confident title or "looks like film, show or game media, no title". OCR (PaddleOCR v5) reads text in the image and passes it to the same text matcher. Media stays dimmed until both verdicts are in. An unidentified media image is covered only when "Cover unrecognised film and game images" is on; it is off by default.
+- **Images and video thumbnails.** A SigLIP 2 vision model (weights quantised to int8) compares an image with precomputed title rows. The result is either a confident title or "looks like film, show or game media, no title". The engine resizes the picture itself (`src/background/pixels.js`), so every browser feeds the model the same numbers. OCR (PaddleOCR v5) reads text in the image and passes it to the same text matcher. Media stays dimmed until both verdicts are in. Naming a work from a picture that has no text is weak. OCR is the dependable image signal. An unidentified media image is covered only when "Cover unrecognised film and game images" is on; it is off by default.
 - **Opt-in catalog update.** Off by default. You can choose daily, weekly or monthly, or press "Update now". It downloads new titles directly from Wikidata's public query service. This is the only network use. Nothing about you is sent.
 - **Threads.** The Chrome build is cross-origin isolated, so the models run on up to 4 WASM threads. The Firefox build runs on one thread.
-- **Android.** The same catalog and matcher rules, ported to Java and tested against the JavaScript version. The same classifier through ONNX Runtime. A full-screen settings screen opens from the ⋮ button on a cover, from an app shortcut, or from the host app's own settings. Push notification text is checked too. The image part of the Android port still uses the 0.1 models; see [docs/android.md](docs/android.md).
+- **Android.** The same catalog and matcher rules, ported to Java and tested against the JavaScript version. The same classifier through ONNX Runtime. A full-screen settings screen opens from the ⋮ button on a cover, from an app shortcut, or from the host app's own settings. Push notification text is checked too. Images use the same models as the browser (SigLIP 2 and PaddleOCR on ONNX Runtime 1.22), with the same resize and cut-offs. A picture still being judged is shaded on its own and the post's text stays readable. Optional NNAPI acceleration of the title model is there, but it has never run on a real phone. See [docs/android.md](docs/android.md).
 
 ## Status and known limits
 
@@ -55,24 +55,25 @@ The 0.1 column and the `fp-text` row are the maintainers' figures and were not r
 
 Neither file was used for training or for choosing the threshold. `spoiler-eval2.jsonl` was written without looking at the training data, but by the same model family that wrote part of the new training examples, so its look-alike cases resemble them. The threshold is now 0.75 (it was 0.45), chosen by balanced accuracy on validation data.
 
-**Image titles and OCR** (the maintainer's figures from the image work; not re-run for this page; other jobs were running, so timings are good to about 30 percent):
+**Image titles and OCR** (the maintainer's figures from the image work; not re-run for this page; other jobs were running, so timings are good to about 30 percent). The title figure was re-measured after the catalog merge and the new resize; the other rows are from before them:
 
 | Measure | Result |
 |---|---|
-| Title check on a held-out split (397 media, 466 ordinary photos) | 28 right, 4 wrong, 0 ordinary photos named. The 0.1 model with its own cut-offs on the same split: 14 right, 6 wrong, 1 named, plus 17 with the generic label. |
-| Title check on `test/fixtures/images` | 5 of 31 media images titled right, 0 wrong, 0 of 44 ordinary photos named. The cut-offs were fitted on a set that includes these images, so this is not held out. |
+| Title check on a held-out split (397 media, 466 ordinary photos) | 22 right, 8 wrong, 2 ordinary photos named, with the merged catalog (before the catalog merge: 28 right, 4 wrong, 0 named). The calibration is noisy: the two halves of the split pick very different cut-offs, so a few images move the result. The 0.1 model with its own cut-offs on an earlier split: 14 right, 6 wrong, 1 named, plus 17 with the generic label. |
+| Title check on `test/fixtures/images` | 5 of 31 media images titled right, 0 wrong, 0 of 44 ordinary photos named (measured before the recalibration, not re-run). The cut-offs were fitted on a set that includes these images, so this is not held out. |
 | OCR captions read, synthetic but realistic set (thumbnails, subtitles, HUDs, memes, post screenshots) | 171 of 185, against 34 of 185 with Tesseract. The OCR settings were tuned on the same set. |
+| Cross-browser score spread, Chrome against Firefox, fixture images (`tools/bench-stats-diff.mjs`) | Up to 0.010 with canvas scaling, at most 0.0013 now that the engine resizes in JavaScript. |
 | Time per screenful, Chrome 4 threads | title check 65 to 197 ms, OCR 358 to 175 ms |
 | Time per screenful, Zen 1 thread | title check 205 to 482 ms, OCR 383 to 341 ms |
 | Process memory, Chrome and Zen | 491 and 411 MB before, 467 and 351 MB now |
 
-Title checks are slower than in 0.1 and OCR is faster. Image recognition is still weak: it names few titles. The dependable signals are text inside images (OCR) and the text around a post.
+Title checks are slower than in 0.1 and OCR is faster. Image recognition is still weak: it names few titles, and a wrong title is possible (8 wrong titles and 2 ordinary photos named on the held-out split). The dependable signals are text inside images (OCR) and the text around a post.
 
 **Not tested**
 
 - Real social sites in a browser. The end-to-end tests use fixture pages.
 - Firefox for Android.
-- Any real phone. Android only ran in an x86_64 emulator (an arm64 build under translation too).
+- Any real phone. Android only ran in an x86_64 emulator (an arm64 build under translation too). NNAPI acceleration, arm64 and every Android speed figure have never run on a real phone.
 - X and Instagram feeds on Android. They were only launched to their login screens in 0.1. Nothing has run in X or Instagram since, and the settings row added to X's own settings screen has never been run.
 - The Android fix for a feed that jumped on a real phone (image capture drawing host views). It was checked only by frame counters in the demo app on the emulator.
 - Video frames on Android. Only thumbnails and posters are scanned there.
@@ -86,7 +87,7 @@ Title checks are slower than in 0.1 and OCR is faster. Image recognition is stil
 - Not scanned in the browser: backgrounds set by a stylesheet, loose text directly inside a very large container, and media inside shadow roots is not dimmed until its verdict arrives.
 - Chinese, Japanese and Thai text has no word spaces, so titles inside such text do not match.
 - Each frame of a page loads its own copy of the index (about 3.3 MB).
-- Android patch sizes: the bundle is about 112 MB (0.1 figure, not re-measured). Each patched app grows by roughly 100 to 115 MB over the original. X additionally needs `extractNativeLibs` set to true, which the patch does.
+- Android patch sizes: the 0.2.0 bundle is 138 MB and the companion APK 1.5 MB. How much a patched app grows was measured for 0.1 only (roughly 100 to 115 MB over the original); not re-measured. X additionally needs `extractNativeLibs` set to true, which the patch does.
 - Patching and using modified X, Instagram or YouTube apps is against those services' terms. APKs are not included in this repository. You must supply your own and must not redistribute the patched files.
 
 ## Privacy
@@ -98,6 +99,22 @@ Title checks are slower than in 0.1 and OCR is faster. Image recognition is stil
 - The extension asks for `storage`, `alarms` and access to all sites (`<all_urls>`). The Chrome build also asks for `offscreen`. The content script runs in every frame of every page.
 - The browser extension's background code refetches cross-origin images itself to score them. Those requests go to the sites that already served the images.
 - Android companion app: it asks for no permissions. It answers only the packages on a fixed list, by package name; see [docs/android.md](docs/android.md#the-companion-app-and-the-shared-config) for what that does and does not protect.
+
+## Install from a release
+
+A release has these files:
+
+| File | What it is |
+|---|---|
+| `spolierblock-0.2.0-firefox.zip` | The Firefox build. Unpack it and load it as in the [load steps](#quick-start-browser-extension) below, choosing the unpacked `manifest.json`. |
+| `spolierblock-0.2.0-chrome.zip` | The Chrome build. Unpack it and use "Load unpacked" on the folder. |
+| `patches-0.2.0.mpp` | The Morphe patch bundle. Use it with `android/apply.sh` (see [docs/android.md](docs/android.md)), or add it as a local patch source in Morphe Manager (not verified). |
+| `spolierblock-companion-0.2.0.apk` | Optional companion app. It keeps one list shared by all patched apps. |
+| `SHA256SUMS.txt` | Checksums of the files above. |
+
+No YouTube, X or Instagram APK is ever distributed. You supply your own.
+
+**Keep your signing key.** `android/keystore/` holds the local key that signs the patched apps and the companion app. It is created on the first patch and is not in git. Back it up outside the repository. If you lose it, apps you installed cannot be updated in place: you would have to uninstall them (and lose their data) and install builds signed with a new key.
 
 ## Quick start: browser extension
 
@@ -136,7 +153,7 @@ After loading, click the toolbar icon for the quick panel: the cover count of th
 
 ## Quick start: Android
 
-See [docs/android.md](docs/android.md). In short: build the extension data (`npm run build`), set up the Morphe tooling once (`android/tools/bootstrap-morphe.sh`), build the bundle (`./gradlew :patches:buildAndroid` in `android/`), then patch an APK you supply with `android/apply.sh`. At this commit the bundle build still expects the 0.1 image model files, so it needs the image port described in that document.
+See [docs/android.md](docs/android.md). In short: build the extension data (`npm run build`), set up the Morphe tooling once (`android/tools/bootstrap-morphe.sh`), build the bundle (`./gradlew :patches:buildAndroid` in `android/`), then patch an APK you supply with `android/apply.sh`. The bundle build reads the image models from `dist/firefox`, so `npm run build` must come first.
 
 ## Repository layout
 
@@ -183,11 +200,10 @@ For coding agents:
 | Text model base | `sentence-transformers/all-MiniLM-L6-v2`, fine-tuned here | See the model card |
 | Spoiler training data | Reddit episode-discussion comments from the `bobotran/spoiler-matching` dataset (hand-labelled split) | CC BY-SA 3.0 |
 | Spoiler training data | English Wikipedia plot, production and reception sentences of the 300 most popular works | CC BY-SA 4.0 |
-| Android OCR (until the image port lands) | Tesseract English data, package `@tesseract.js-data/eng` (`4.0.0_best_int`) | See the package |
 
 The classifier in `models/spoiler` was trained on that Reddit data, that Wikipedia text, and hand-written sentences and patterns. The held-out evaluation sets are hand-written and were not used for training or threshold choice.
 
-Runtime libraries: onnxruntime-web and `@huggingface/transformers` (browser; transformers.js is used for the tokenizer at run time and for the text model at build time); ONNX Runtime for Android and Tesseract4Android (Android); Morphe patcher and CLI (patching). `tesseract.js` is still listed in `package.json` but nothing in the extension build or source uses it.
+Runtime libraries: onnxruntime-web and `@huggingface/transformers` (browser; transformers.js is used for the tokenizer at run time and for the text model at build time); ONNX Runtime for Android 1.22.0 (Android); Morphe patcher and CLI (patching). `tesseract.js` and `@tesseract.js-data/eng` are still listed in `package.json`, but nothing in the build, the extension or the Android code uses them; only two comparison scripts under `research/scripts/` do. Tesseract is no longer part of any shipped build.
 
 ## Licence
 

@@ -7,7 +7,7 @@ Entry point for coding agents working on SpolierBlock 0.2.0. Humans: start with 
 - SpolierBlock covers spoilers about films, shows, games, books, manga, anime and comics. Everything runs on the device.
 - Browser extension (Manifest V3, Firefox-family and Chromium, one codebase): `src/`, `manifest.json`, `tools/build.mjs`.
 - Android: a Morphe patch bundle (`android/patches`, Java extension `android/extensions/blocker`) for YouTube, X and Instagram, plus a companion app (`android/companion`, package `dev.spoilerblock`) that owns the shared settings.
-- Text matching is a hash-index matcher over a Wikidata catalog (24,670 works); a fine-tuned MiniLM classifier tells spoilers from mentions; a SigLIP 2 model and PaddleOCR read images.
+- Text matching is a hash-index matcher over a Wikidata catalog (24,670 works); a fine-tuned MiniLM classifier tells spoilers from mentions; a SigLIP 2 model and PaddleOCR read images (the same models on Android).
 - JavaScript is the source of truth. The Java code is a port, held in parity by vector tests.
 
 ## Repo map
@@ -38,9 +38,10 @@ Hold the lock when two agents might be running. `H` = `flock ~/.cache/sb-heavy.l
 | Text matching false positives and recall | `node tools/fp-posts.mjs` (and `tools/fp-text.mjs`, which downloads a corpus) | seconds | H |
 | Spoiler classifier | `node tools/eval-spoiler.mjs` and the same with `models/spoiler test/fixtures/spoiler-eval2.jsonl` | under a minute | H |
 | Image cut-offs | `SB_RESEARCH=research node tools/calibrate-clip.mjs` (needs the research image sets) | minutes | H |
+| Image input across browsers | `node tools/bench-engine.mjs chrome --stats > chrome.json`, the same for `firefox`, then `node tools/bench-stats-diff.mjs chrome.json firefox.json` | minutes | B, and nobody on H |
 | Engine latency | `node tools/bench-engine.mjs chrome` or `firefox` (after a build) | minutes | B, and nobody on H |
 | Classifier training | `PYTHON=... node tools/train-spoiler.mjs` | about 9 minutes, 6 cores | H |
-| Java parity | `node android/tools/vectors.mjs`, `catalog-vectors.mjs`, `spoiler-vectors.mjs`, then `cd android && ./gradlew :extensions:blocker:testDebugUnitTest` | minutes, 2 GB heap | H |
+| Java parity | `node android/tools/vectors.mjs`, `catalog-vectors.mjs`, `spoiler-vectors.mjs`, `clip-vectors.mjs`, then `cd android && ./gradlew :extensions:blocker:testDebugUnitTest` (it also runs `ocrTestDebugUnitTest`) | minutes, 2 GB heap | H |
 | Android end to end | `android/tools/demo-build.sh`, install, `android/tools/demo-fling.sh` | heavy; needs an emulator | H |
 
 `npm run build:fixture` and `npm run build` write the same `dist/`. Run the real build again after an e2e session if you need the real catalog.
@@ -48,7 +49,7 @@ Hold the lock when two agents might be running. `H` = `flock ~/.cache/sb-heavy.l
 ## Hard rules
 
 1. **Everything runs on the device.** No new network use and no new permissions. The only network call is the opt-in catalog update to Wikidata. No remote scripts, fonts or images.
-2. **Never commit or redistribute third-party APKs or patched outputs.** `android/apks/`, `android/out/`, `android/keystore/` stay ignored. Do not add APKs, screenshots of third-party apps or `android/evidence/` to git.
+2. **Never commit or redistribute third-party APKs or patched outputs.** `android/apks/`, `android/out/`, `android/keystore/` stay ignored. Never symlink `android/keystore` or `android/apks` into a worktree, and stage files by name ([delegation.md](docs/agents/delegation.md#worktrees)). Do not add APKs, screenshots of third-party apps or `android/evidence/` to git.
 3. **The extension source is plain ES modules with no build step.** `tools/build.mjs` only assembles and generates data. Do not add a bundler, a transpiler or a framework.
 4. **The Android library has no resources and no AndroidX.** It is merged into other apps' APKs. UI is plain framework views built in code (`Ui.java`).
 5. **JavaScript is the source of truth.** A change to matching, the catalog builder, the catalog update, the config or the classifier's pre- and post-processing needs the same change in Java, and the vector tests must pass.

@@ -214,7 +214,7 @@ Requests go through one priority queue, lowest number first. Order: classifier (
 
 **Title verdict** (`verdict` in `engine.js`):
 
-1. The whole image is squashed to 256 x 256 (no crop) and normalised with mean 0.5 and standard deviation 0.5.
+1. The whole image is squashed to 256 x 256 (no crop) and normalised with mean 0.5 and standard deviation 0.5. The resize is done in plain JavaScript (`squashCHW` in `src/background/pixels.js`, a triangle filter like PIL's antialiased bilinear, which SigLIP's own processor uses) on the decoded pixels, not by the canvas: the canvas scaling filters of Chrome and Firefox differ. With the canvas the score of an image differed between browsers by up to 0.010; with `pixels.js` by at most 0.0013 (median 0). A run on one browser is bit-identical, and a batch of 4 gives the same scores as single images. `tools/calibrate-clip.mjs`, Android (`Images.visionPixels`) and the tests use the same computation. (Images over 2048 px are first scaled down by the canvas.)
 2. Run the SigLIP 2 base/32 vision tower and take `pooler_output`, normalised.
 3. Compute `neg`: the best cosine to the 33 generic prompts ("a photo", "a selfie", "a meal on a plate" and so on).
 4. Score the image against the title matrix (2,000 rows, int8). Each row is the normalised mean of 3 prompts for the work's type ("the poster of the movie {t}" and so on) and, for works that have them, 2 character prompts ("{c} from {t}").
@@ -225,13 +225,13 @@ Cut-offs, set in `tools/build.mjs` (`CUT`) and stored in `data/clip-meta.json` w
 
 | Name | Value |
 |---|---|
-| `minScore` | 0.1161 |
-| `margin` | 0.061 |
-| `titleGap` | 0.0275 |
-| `mediaGate` | 0.0514 |
+| `minScore` | 0.1355 |
+| `margin` | 0.077 |
+| `titleGap` | 0.015 |
+| `mediaGate` | 0.0516 |
 | rows (`--clip-n`) | 2000 |
 
-They come from `tools/calibrate-clip.mjs`, which fits them on all calibration images and reports a two-fold split (media images split by work, ordinary photos by file name) so that the reported result is held out. The held-out total is in the README. The shipped values are fitted on all images including the fixtures, so the fixture figures are not held out.
+They come from `tools/calibrate-clip.mjs`, which fits them on all calibration images and reports a two-fold split (media images split by work, ordinary photos by file name) so that the reported result is held out. The held-out total is in the README. The shipped values are fitted on all images including the fixtures, so the fixture figures are not held out. They were recalibrated after the merged catalog and the `pixels.js` resize landed. The calibration is noisy: the two folds pick very different cut-offs (for example `titleGap` 0 on one and 0.0325 on the other), so a small change in the data moves the held-out result by a few images.
 
 The title tower's weights are quantised to int8 and the activations stay fp32. Ordinary int8 quantisation of activations breaks this model (see [agents/pitfalls.md](agents/pitfalls.md)). `tools/quantize-vision.mjs` does it at build time, without Python, from a pinned fp32 download. Restoring the weights costs time on every run. Folding them to fp32 at load is one setting in `engine.js` (`disable_quant_qdq`): the image work measured it faster (Chrome 142 ms and Zen 431 ms per image) but about 980 and 910 MB of process memory. It is not enabled.
 
@@ -301,4 +301,4 @@ Figures are from the image work (Chrome for Testing and Zen on an i5-10500H, mea
 
 - `dist/firefox` is about 160 MB (162 MB measured by the image work).
 - `research/REPORT.md` predates these models. Read its image sections as research notes, not as a description of the shipped build.
-- `tools/bench-engine.mjs` measures the real engine inside the built extension.
+- `tools/bench-engine.mjs` measures the real engine inside the built extension. With `--stats` it records the verdict inputs instead, and `tools/bench-stats-diff.mjs` compares such files between runs, batches and browsers (see [development.md](development.md#evaluation-scripts)).

@@ -11,7 +11,7 @@ Two writers never touch the same files. These areas can be worked in parallel be
 | # | Area | Files it owns | Verification | Lock |
 |---|---|---|---|---|
 | 1 | Text matching, catalog, classifier, and their Java ports | `src/content/matcher.js`, `src/shared/`, `src/background/catalog-update.js`, `data/catalog.json`, `tools/catalog/`, `tools/build-index.mjs`, `tools/fp-*.mjs`, `tools/eval-spoiler.mjs`, `tools/train-spoiler.mjs`, `tools/spoiler-train/`, `models/spoiler/`, `test/matcher.test.js`, `test/catalog*.test.js`, `test/fixtures/{catalog.small.json,fp-posts.jsonl,spoiler-*}`; Java: `Matcher.java`, `Catalog.java`, `CatalogUpdate.java`, `Classifier.java`, `WordPiece.java`, `Json.java`, the matching tests, `android/tools/{vectors,catalog-vectors,spoiler-vectors,mock-sparql}.mjs` | `npm test`, `fp-posts`, `eval-spoiler` on both files, then the vectors and `testDebugUnitTest` | H |
-| 2 | Image engine, OCR, build | `src/background/{engine.js,ocr.js,offscreen.*}`, `tools/build.mjs`, `tools/build-clip-text.mjs`, `tools/quantize-vision.mjs`, `tools/calibrate-clip.mjs`, `tools/clip-prompts.mjs`, `tools/bench-*.mjs`, `test/ocr.test.js`, `test/fixtures/images/`, `research/scripts/` | `npm test`, a build, `calibrate-clip`, `bench-engine`, then e2e | B (H for calibration) |
+| 2 | Image engine, OCR, build | `src/background/{engine.js,ocr.js,pixels.js,offscreen.*}`, `tools/build.mjs`, `tools/build-clip-text.mjs`, `tools/quantize-vision.mjs`, `tools/calibrate-clip.mjs`, `tools/clip-prompts.mjs`, `tools/bench-*.mjs`, `test/ocr.test.js`, `test/fixtures/images/`, `research/scripts/` | `npm test`, a build, `calibrate-clip`, `bench-engine`, then e2e | B (H for calibration) |
 | 3 | Content script and e2e | `src/content/{content.js,content.css}`, `test/e2e/` | e2e on both browsers | B |
 | 4 | Settings page, popup, background, manifest | `src/options/`, `src/popup/`, `src/background/background.js`, `manifest.json`, `test/config.test.js` | `npm test`, e2e | B |
 | 5 | Android app, patch, scanner, UI | everything else under `android/`: `patches/`, `companion/`, `demo/`, `apply.sh`, the scanner, cover, TalkBack, capture, notification, settings and store classes in `extensions/blocker/`, and the other scripts in `android/tools/` | demo build, emulator run, `testDebugUnitTest` | H |
@@ -21,7 +21,7 @@ Notes on the seams:
 
 - **The contract.** `docs/agents/contract.md` belongs to whoever changes the config, the decision rule or the cover wording, and that change comes first, before any area edits code. Make it the first commit of the task. Then areas 3, 4 and 5 implement it in parallel, and area 1 if the rule touches matching. One agent edits the contract.
 - **Catalog update.** `catalog-update.js` (area 1) is called by `background.js` (area 4) and ported by `CatalogUpdate.java` (area 1). A change to its exports or to the shape of `catalogIndex` is a contract change between areas 1 and 4: the brief names the signature, and area 4 is not started until area 1's signature is committed.
-- **Image port to Android.** `Clip.java`, `Ocr.java` and `Images.java` are area 5's files, but the artefacts they read (`clip-meta.json`, `clip-text.bin`, the model and OCR files, the preprocessing constants) are area 2's output. Area 2 commits first and states the constants; area 5 ports.
+- **Image engine and Android.** `Clip.java`, `Ocr.java`, `Images.java` and `Accel.java` are area 5's files and port area 2's `engine.js`, `ocr.js` and `pixels.js`. The artefacts they read (`clip-meta.json`, `clip-text.bin`, the model and OCR files, the preprocessing constants and the resize) are area 2's output. Area 2 commits first and states the constants; area 5 ports and regenerates the vectors (`android/tools/clip-vectors.mjs`). `src/background/pixels.js` belongs to area 2.
 - **`tools/build.mjs`** is area 2's, even though it also builds the catalog class lists (area 1 asks area 2 for such a change).
 - **Shared files** with no single owner (`package.json`, `package-lock.json`): the main loop edits them, or one agent does while the others wait.
 
@@ -72,7 +72,7 @@ Per area, add:
 
 Give each writing agent its own git worktree and branch (`git worktree add`; this repository already uses `.claude/worktrees/`, which is ignored). Do not share `build/` or `dist/` between trees: `build/data`, `build/clip-text-*.json` and `dist/` are outputs, and two builds writing one tree corrupt each other. `npm run build:fixture` overwrites `dist/` too.
 
-Share the heavy, read-mostly inputs by symlink instead of copying or re-downloading them:
+Share the heavy, read-mostly inputs by symlink instead of copying or re-downloading them. These symlinks are for the working tree only and must never be staged (see the end of this section):
 
 ```sh
 ln -s <main checkout>/node_modules node_modules
@@ -80,7 +80,9 @@ mkdir -p build && ln -s <main checkout>/build/.cache build/.cache
 ln -s <main checkout>/tools/catalog/cache tools/catalog/cache
 ```
 
-`build/.cache` holds about 1.3 GB of pinned downloads. `tools/catalog/cache` makes the build and the catalog build run without Wikidata. Do not run `npm install` in a worktree that has the `node_modules` symlink. For Android work also copy `android/local.properties` and link `android/keystore` and the Morphe jar in `android/tools/`, and run `npm run build` in that worktree, because the patch and the companion read `dist/firefox`. `research/` is not in git, so link it too when a task needs `SB_RESEARCH`.
+`build/.cache` holds about 1.3 GB of pinned downloads. `tools/catalog/cache` makes the build and the catalog build run without Wikidata. Do not run `npm install` in a worktree that has the `node_modules` symlink. For Android work also copy `android/local.properties`, copy the Morphe jar in `android/tools/` (or link it; it is ignored and replaceable), and run `npm run build` in that worktree, because the patch and the companion read `dist/firefox`. `research/` is not in git, so link it too when a task needs `SB_RESEARCH`.
+
+**Never symlink an ignored folder that holds irreplaceable files**: `android/keystore` (the signing key) and `android/apks` (the supplied APKs). Copy the small files a task needs instead (for a build that must sign with the owner's key, copy `android/keystore/` into the worktree and delete the copy afterwards), or give the agent a path through the `KEYSTORE` variable. Symlinking `node_modules` and `build/.cache` is fine, because they can be recreated, but a symlink must never be staged: the ignore rules do not cover a symlink in every case, and a committed symlink, once merged, replaces the real folder (see [pitfalls.md](pitfalls.md#symlinks-to-ignored-folders-get-committed-and-merging-them-deletes-the-real-folder)). Stage files by name (`git add path/one path/two`), never `git add -A` or `git add .`, and check `git status` before every commit. Before the main loop merges a branch, it runs `git ls-tree -r <branch> | grep ^120000` and refuses the branch if anything prints.
 
 The main loop merges the branches, one at a time, into an integration branch, in the order the seams above require (contract first).
 

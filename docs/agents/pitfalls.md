@@ -5,7 +5,7 @@ Traps specific to this repository, each checked against the code or the commit h
 ## Models
 
 - **SigLIP 2 breaks under ordinary int8 quantisation.** Dynamic or static int8 of the activations gives a cosine of about 0.7 against fp32. Weight-only int8 gives 0.9998. So `tools/quantize-vision.mjs` quantises only the MatMul weights (int8 plus a scale per output column, restored by a `DequantizeLinear` node) and the activations stay fp32. Do not replace it with `onnxruntime.quantization` or with a ready-made `*_quantized.onnx` file. (`quantize-vision.mjs` header, commit 58060f2.)
-- **Weight-only int8 costs time on every run.** The weights are restored on each inference, which is why title checks run in batches of up to 4. Folding them to fp32 at load is faster but about doubles the process memory (about 1 GB). The owner's budget is about 1 GB for the models, so it is not enabled. (`engine.js`.)
+- **Weight-only int8 costs time on every run.** The weights are restored on each inference, which is why title checks run in batches of up to 4. Folding them to fp32 at load is faster but about doubles the process memory (about 1 GB). The owner's budget is about 1 GB for the models, so it is not enabled in the browser. (`engine.js`.) Android folds the weights only inside the optional NNAPI session, on devices with at least 6 GB, after a self-check (`Accel.java`).
 - **The int8 MiniLM classifier is scored one sentence at a time.** It quantises activations per tensor, so padding or batching sentences changes the scores. Do not batch in `classify`. The post's score is the maximum over sentences, so one spoiler sentence is not diluted. (`engine.js`.)
 - **Held-out files are never used for training, tuning or choosing a threshold.** That is `test/fixtures/spoiler-eval.jsonl`, `spoiler-eval2.jsonl` and the held-out half of the image calibration. `finetune.py` chooses the threshold on validation items only. If you retrain, read both eval files once, at the end, and report what you found with its caveat. (`train-spoiler.mjs` header.)
 - **`fp-posts.jsonl` is a tuning benchmark, not a held-out one.** The matcher rules were adjusted while looking at it. Do not quote a further improvement on it as evidence.
@@ -36,16 +36,18 @@ Traps specific to this repository, each checked against the code or the commit h
 - **The Chrome manifest is derived.** Edit `manifest.json` (the Firefox form). The build deletes `browser_specific_settings` and rewrites `background` for Chrome, and pushes `offscreen` into `permissions`. Do not put Chrome-only keys in the source manifest.
 - **The first build downloads about 1 GB** (vision model, text model, tokenizer, OCR files). Files are pinned by revision and sha256; if a download fails the check, do not loosen the check.
 - **`research/` is mostly not in git.** `SB_RESEARCH=research` and some tools need files that exist only in the owner's checkout.
-- **`package.json` still lists `tesseract.js`.** Nothing in the extension uses it; `@tesseract.js-data/eng` is read by the Android patch build.
+- **`package.json` still lists `tesseract.js` and `@tesseract.js-data/eng`.** Nothing in the build, the extension, the tests or the Android build uses them now; only `research/scripts/v2-ocr-eval.mjs` and `ocr-tesseract.mjs` do.
 
 ## Android
 
 - **Image capture must not draw host render nodes.** The capture draws only the `ImageView`'s drawable (`Images.drawContent`). `View.draw` on a hardware canvas puts the host's own `RenderNode`s (background, overlay children) into the capture renderer, and whichever renderer syncs a shared node first takes its damage. On devices with partial screen updates the app's next frame then leaves those regions unpainted: stale covers and posts, a feed that "jumps". The fix was checked only by frame counters in the demo on the emulator. Never on a phone, never in X.
-- **Public Android APIs only, no resources, no AndroidX** in `extensions/blocker`. The library is merged into other apps' APKs. Tesseract4Android is added non-transitively so that its `androidx.annotation` is not merged in.
+- **Public Android APIs only, no resources, no AndroidX** in `extensions/blocker`. The library is merged into other apps' APKs. ONNX Runtime's Java classes are the only dependency that reaches the dex; the patch ships its native libraries separately.
 - **The provider's caller check is a package name.** `Store.CALLERS` is the allow-list; see [android.md](../android.md#the-companion-app-and-the-shared-config) for what that does not protect. Add a package to the list only for an app the patch supports.
 - **A frozen app gets change notices late.** The shared config is refetched on every activity resume for that reason.
 - **Obfuscated hosts.** Never fingerprint on obfuscated names. The patch finds the Application class from the manifest and hooks framework methods (`NotificationManager.notify`) and view classes named in layout XML (`TextContentView`, `IgTextLayoutView`). A hook that is not found only logs a warning.
-- **The image files are out of step right now.** The bundle build and `android/tools/clip-vectors.mjs` still read `dist/firefox/models/clip/onnx/vision_model_quantized.onnx`, which the 0.2 browser build no longer writes, and `clip-meta.json` now describes SigLIP 2 rows while `Clip.java` is the ViT-B/32 port. Until the image port lands, do not "fix" this by copying old files into `dist/`.
+- **The Android image code follows the browser's, file for file.** `Images.visionPixels` ports `pixels.js`, `Clip.java` ports the verdict in `engine.js`, `Ocr.java` ports `ocr.js`. The cut-offs are read from `clip-meta.json`, not written into Java. Change the JavaScript first, regenerate the vectors (`android/tools/clip-vectors.mjs`) and make `ClipTest` and `OcrTest` pass. The bundle reads `models/vision/model.onnx`, `data/clip-text.bin`, `data/clip-meta.json` and `models/ocr/*` from `dist/firefox`.
+- **ONNX Runtime stays at 1.22 on Android, and `OcrTest` runs on 1.32.** Desktop (Linux x86-64) ORT 1.22 to 1.31 give the PP-OCR v5 detector a blank probability map, so `OcrTest` has its own Gradle task (`ocrTestDebugUnitTest`) on desktop 1.32. The Android 1.22 build reads the fixtures correctly. Do not move the app to 1.32 without a reason (the bundle was 154 MB on 1.32 and 138 MB on 1.22), and do not fold the OCR test back into `testDebugUnitTest`.
+- **XNNPACK is not used.** It was slower than the plain CPU session on the emulator and crashed on 1.22. Hardware acceleration is NNAPI only, behind the self-check and the crash marker in `Accel.java`. Never remove the marker logic: a native crash cannot be caught, and without the marker a crashing device would crash on every start.
 - **The emulator is x86_64.** arm64 builds run under translation (Android 11 and newer images). Timings from it say little about a phone.
 - **Only one emulator and one Gradle job at a time**, under the heavy lock.
 
@@ -55,7 +57,6 @@ These comments in the code no longer match it. Do not trust them, and fix them w
 
 - `content.js`: "the engine itself gives up on a recognition after 10 s". The engine has no OCR time limit now; the 60 second safety net in the content script is what remains.
 - `Scanner.java` (`activityWindow`): "no TouchGate: covers there have no buttons". Dialogs and popups do get buttons, through a transparent view on top of the window.
-- `Ocr.java`, `Clip.java`, `Images.java`: they describe the extension's 0.1 pipeline (Tesseract, ViT-B/32), which is what Android still runs.
 - `base.css`: "the near-black of the in-page cover". The real cover is a light or dark grey panel.
 - `research/REPORT.md` describes 0.1-era models and figures.
 

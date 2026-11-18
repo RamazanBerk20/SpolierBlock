@@ -20,8 +20,8 @@ For each app the patch:
 
 1. Merges the extension (`extensions/blocker.mpe`, package `dev.spoilerblock`) into the app.
 2. Writes the matcher index and catalog files under `assets/spoilerblock/`: `index.bin`, `index.json`, `catalog.json`, `common-words.txt`, `catalog-classes.json`, `catalog-info.json`.
-3. Writes the models under `assets/spoilerblock/`: the spoiler classifier (`spoiler/`), the image model and its title matrix (`clip/`), and the OCR data (`ocr/eng.traineddata.gz`). They are loaded only when the matching feature is used. See [Images](#images-and-video) for the state of the image files.
-4. Adds native libraries: `libonnxruntime.so`, `libonnxruntime4j_jni.so` and the Tesseract set (`libjpeg.so`, `libpngx.so`, `libleptonica.so`, `libtesseract.so`), for `arm64-v8a` and `x86_64`.
+3. Writes the models under `assets/spoilerblock/`: the spoiler classifier (`spoiler/`), the SigLIP 2 vision model with its title rows and cut-offs (`vision/`: `model.onnx`, `clip-text.bin`, `clip-meta.json`), and the PP-OCR detector, recogniser and character list (`ocr/`: `det.onnx`, `rec.onnx`, `dict.txt`). They are loaded only when the matching feature is used. See [Images](#images-and-video).
+4. Adds two native libraries, `libonnxruntime.so` and `libonnxruntime4j_jni.so` (ONNX Runtime 1.22.0), for `arm64-v8a` and `x86_64`.
 5. Adds one call, `SpoilerBlock.init(Application)`, at the start of `Application.onCreate`. The Application class is read from the manifest, then the first class up its hierarchy that implements `onCreate()` is patched. Nothing depends on obfuscated names.
 6. Adds the settings activity (`dev.spoilerblock.SettingsActivity`, not exported) to the manifest, and a `<queries>` entry for `dev.spoilerblock` so the app can see the companion (Android 11 and newer).
 7. Adds a "SpolierBlock" row to the host's own settings where the patch knows the screen (see [Settings](#settings)).
@@ -94,7 +94,7 @@ Run these from the repository root unless stated.
    ./gradlew :patches:buildAndroid
    ```
 
-   The bundle is written to `android/patches/build/libs/patches-0.2.0.mpp`. The version comes from `version` in `android/gradle.properties`. The 0.1 bundle was about 112 MB. If `dist/firefox/data` lacks one of the six catalog files, the build stops and tells you to run `npm run build`.
+   The bundle is written to `android/patches/build/libs/patches-0.2.0.mpp`. The version comes from `version` in `android/gradle.properties`. The 0.2.0 bundle is 138 MB (the 0.1 bundle was about 112 MB). If `dist/firefox/data` lacks one of the six catalog files, the build stops and tells you to run `npm run build`.
 
 `apply.sh` uses the newest `patches-*.mpp` it finds in that folder.
 
@@ -164,8 +164,7 @@ The patch only adds its libraries to ABIs the app already ships. So a patched ap
 - New library files are written compressed into the APK. That only installs with `extractNativeLibs=true`. X declares `false`, so the patch sets it to `true`. X's own libraries stay stored in the APK and are now also extracted at install. YouTube and Instagram already extract.
 - The patch adds libraries only to ABI folders the app already has. A new ABI folder would make a device of that ABI pick it and lose the app's own libraries. If the app has no native code at all, it gets both.
 - The libraries have unique names (`libonnxruntime*.so`) and a statically linked C++ runtime.
-- Tesseract4Android's libraries have generic names (`libjpeg.so`, `libpngx.so`, `libleptonica.so`, `libtesseract.so`). The patch rewrites their sonames, and the references between them, to same-length SpoilerBlock names (`libsbjp.so`, `libsbpn.so`, `libsbleptoni.so`, `libsbtessera.so`). They never bind to a host library that happens to share a soname.
-- If the host app already ships one of these files for an ABI, it is kept and a warning is logged. Then style `spoilers` fails closed if the host's version does not fit.
+- If the host app already ships one of these files for an ABI, it is kept and a warning is logged. Then style `spoilers` fails closed if the host's version does not fit. (0.1 also shipped four Tesseract libraries with rewritten sonames, and `eng.traineddata`. They are gone.)
 - Besides `extractNativeLibs`, the patch adds an activity and a `<queries>` entry to the manifest, assets, libraries, one `onCreate` call, the notification call rewrites and the settings rows. It does not edit shared classes or resources otherwise, which is why it can run next to other patches, such as the official ones.
 
 ## Using the bundle in Morphe Manager
@@ -189,7 +188,7 @@ The blocker uses only public Android APIs on the host's views.
 
 A cheap fingerprint of the item (view identities, texts, sizes, images) decides whether to read it again. An unchanged item is re-read at most once per second as a safety net. The text goes through the Java matcher and the decision rule, and, for style `spoilers`, the classifier. The classifier loads on the first item that needs it and is released when no work uses that style.
 
-**Cover.** An opaque panel is drawn in the item's own `ViewGroupOverlay`, so it scrolls and animates with the item. It shows the contract's wording ("Mentions {t}", "Spoiler about {t}" and so on) and three buttons: "Show once", "I've seen it" and ⋮ for settings. On a short item, such as one line of a message, the message and the buttons sit side by side and the buttons shrink to fit. Touches on a cover go to the app until they turn into a scroll. A tap cancels the app's gesture and is handled by the blocker. A floating view that lies over a covered item (for example YouTube's inline player) gets an opaque shade too. "Show once" lasts for the current process. While an item's pictures are being judged it shows "Checking image…" (Android only; the extension dims pending pictures instead).
+**Cover.** An opaque panel is drawn in the item's own `ViewGroupOverlay`, so it scrolls and animates with the item. It shows the contract's wording ("Mentions {t}", "Spoiler about {t}" and so on) and three buttons: "Show once", "I've seen it" and ⋮ for settings. On a short item, such as one line of a message, the message and the buttons sit side by side and the buttons shrink to fit. Touches on a cover go to the app until they turn into a scroll. A tap cancels the app's gesture and is handled by the blocker. A floating view that lies over a covered item (for example YouTube's inline player) gets an opaque shade too. "Show once" lasts for the current process. While an item's pictures are being judged, each picture gets an opaque shade of its own, without text or buttons, and the post's text stays readable (the extension dims pending pictures instead; see [Images and video](#images-and-video)).
 
 **TalkBack.** A covered item is exposed to TalkBack as its cover: the message and the three buttons, as focusable and activatable nodes, through an accessibility delegate. The item's real content stays hidden from TalkBack. This works on API 29 and newer, and only for views that do not have an accessibility node provider of their own. On API 28, and on views that have one (Litho, Compose), the content is hidden from TalkBack and the cover is not readable. Tested only in the demo app on the emulator.
 
@@ -201,22 +200,27 @@ If the decision rule covers the notification's text, it is posted with its text 
 
 ### Images and video
 
-<!-- TODO(port): verify after the Android image port lands. This section describes the code at commit 19cccb7 (version 0.2.0), where Android still has the 0.1 image pipeline and the browser has the new one. -->
-
-At this commit the Android image pipeline is the 0.1 one, and the browser's is not.
+The Android pipeline is a port of the browser's (see [how-it-works.md](how-it-works.md#images-and-video)). Both run the same models on ONNX Runtime 1.22: the title model is SigLIP 2 base/32 (weights in int8) and OCR is PaddleOCR v5 (detector and English recogniser). The Java code is `Images.java` (scan, capture, queue, models), `Clip.java` (title verdict), `Ocr.java` (OCR) and `Accel.java` (hardware acceleration).
 
 With "Scan images and video" on, `ImageView`s that are at least 96 dp in both directions and show a drawable other than a plain colour are scanned.
 
-- Capture: the image view's own drawable is drawn into a `RenderNode`, rendered off screen by a `HardwareRenderer` into an `ImageReader`, and the result is scaled to at most 768 px on the long side. It does not call `View.draw`: drawing the view on a hardware canvas put the host's own render nodes into the capture renderer, which can take their damage and leave stale regions on devices with partial screen updates. That is the suspected cause of a feed that jumped on a real phone. The change was checked only by the demo app's frame checks on the emulator. It was never tried on a phone or in X. One capture is done per frame. A queue of 8 jobs is kept, newest first.
-- Title check: CLIP ViT-B/32 (int8) against the shipped title matrix, with the media gate, minimum score, margin and title gap of `data/clip-meta.json` (`Clip.java`). The Java code mirrors the 0.1 `clipCheck`.
-- OCR: Tesseract (Tesseract4Android, `eng` data `4.0.0_best_int`, LSTM engine), mean confidence of at least 60, a 10 second limit. The text joins the item's text for matching.
-- A pixel hash cache (500 entries) avoids judging the same picture twice.
-- An item is covered as "Checking image…" until its images have verdicts. A capture or model failure keeps it covered. Below Android 10 the capture draws in software, and hardware bitmaps fail closed.
-- Video frames are not scanned. Only the `ImageView` thumbnails are.
-- The image model session uses 2 threads, the classifier 1 thread.
-- Images are judged only when they could change the outcome: scanning on, and unlisted works covered, unrecognised images covered, or at least one work blocked.
+- **Capture.** The image view's own drawable is drawn into a `RenderNode`, rendered off screen by a `HardwareRenderer` into an `ImageReader`, and the result is scaled to at most 1280 px on the long side (the size the extension's OCR reads). It does not call `View.draw`: drawing the view on a hardware canvas put the host's own render nodes into the capture renderer, which can take their damage and leave stale regions on devices with partial screen updates. That is the suspected cause of a feed that jumped on a real phone. The change was checked only by the demo app's frame checks on the emulator. It was never tried on a phone or in X. One capture is done per frame. A queue of 8 jobs is kept, newest first. Below Android 10, and for animated images, the capture draws in software; hardware bitmaps then fail closed.
+- **Resize.** The picture is squashed to the model's 256 x 256 input by a Java port of `src/background/pixels.js` (`Images.visionPixels`): a separable triangle filter like PIL's antialiased bilinear, the whole picture without a crop. The browsers use the same function, so the numbers agree. `ClipTest` requires pixel values within 1 of the extension's (4 values were off by 1 in 75 images).
+- **Title check.** `Clip.java` is the title verdict of `engine.js`: the cosine to the shipped int8 title rows (`clip-text.bin`), compared with the generic prompts, with the cut-offs and prompts read from `clip-meta.json` (minimum score, margin, title gap, media gate). Title checks that wait together run as one batch of up to 4, as in the engine.
+- **OCR.** `Ocr.java` is `ocr.js` step for step: detector input up to 960 px, a probability map thresholded at 0.3, boxes, a recogniser pass per box, lines with a mean confidence of at least 0.6, read in rows. A run past 10 seconds is stopped and counts as a failure. The text joins the item's text for matching.
+- **Cache and scope.** A pixel hash cache (500 entries) avoids judging the same picture twice. Video frames are not scanned. Only the `ImageView` thumbnails are. Images are judged only when they could change the outcome: scanning on, and unlisted works covered, unrecognised images covered, or at least one work blocked. The image models are released when "Scan images and video" is turned off.
+- **Pending and failed pictures.** A picture whose verdict is not in yet gets an opaque shade over just that picture, in the picture's own overlay (no text, no buttons). The post's text stays readable, and only a verdict covers the post. A failed check (a capture or model failure, or OCR that timed out) leaves the picture shaded. The wording is in the [contract](agents/contract.md).
+- **Threads.** The CPU sessions use half the cores, at most 4, and do not spin between runs. The classifier uses 1 thread. The worker thread runs at background priority. XNNPACK is not used: it was slower (690 ms alone and 355 ms in a batch of 4 on the emulator, against 333 and 155 ms for the CPU session) and crashed on 1.22.
 
-Known mismatch at this commit, read from the build files and not run: the patch build and `android/tools/clip-vectors.mjs` still read `dist/firefox/models/clip/onnx/vision_model_quantized.onnx`, which the 0.2 browser build no longer writes (it writes `models/vision/model.onnx`), and `clip-meta.json` and `clip-text.bin` now describe the SigLIP 2 rows. So the bundle and `ClipTest` need the image port before they build and pass again.
+**Hardware acceleration** (`Accel.java`). The vision model can run on NNAPI instead of the CPU. The shipped model has int8 weights, which only run on the CPU, so the accelerated session folds them to float when it is created (in memory, there is no second model file). It is used only if all of these hold:
+
+- the device has at least 6 GB of memory (the float weights take about 330 MB more; +550 MB of native heap was measured on the emulator) and Android 8.1 or newer;
+- a bundled reference picture (generated in code) gives an embedding with cosine of at least 0.99 against the CPU result, and the accelerated run is faster;
+- no earlier attempt on this install took the app down. A marker is written before the first accelerated run and cleared after it. If it is found set at the next start, acceleration is turned off for good on that install.
+
+The check runs once and is repeated after an app or OS update. Later starts run the reference picture once on the accelerated session to be sure it still works. A failed accelerated run falls back to the CPU session, and the CPU is kept until the next app or OS update. When acceleration wins, the CPU vision session is dropped, so one copy of the weights is in memory. The current mode is shown in Settings > About. OCR always runs on the CPU.
+
+**What was measured, and where.** Only on the x86_64 emulator, with 2 threads: a title check takes 333 ms for one picture and 155 ms per picture in a batch of 4, and OCR 196 ms per picture in the fixture run. Parity with the extension on the fixtures (`ClipTest`, `OcrTest`, and the demo's on-device check): 0 of 75 title verdicts differ, and 21 of 21 OCR texts are identical. **Hardware acceleration, arm64 and all speeds have never run on a real phone.** The emulator's x86_64 numbers say little about a phone.
 
 ## Settings
 
@@ -261,7 +265,7 @@ The Java code is a port of the extension's. Tests check that Java gives the same
    node android/tools/clip-vectors.mjs
    ```
 
-   They write to `android/build/vectors/`. `vectors.mjs` also asserts that `dist/firefox/data/index.bin` is what `data/catalog.json` builds. `clip-vectors.mjs` needs the old image model file (see the mismatch above).
+   They write to `android/build/vectors/`. `vectors.mjs` also asserts that `dist/firefox/data/index.bin` is what `data/catalog.json` builds. `clip-vectors.mjs` runs the extension's own `pixels.js`, `engine.js` title check and `ocr.js` on the fixture images (it imports `sharp`, which comes with `@huggingface/transformers`).
 
 2. Run the Java tests:
 
@@ -275,11 +279,12 @@ The Java code is a port of the extension's. Tests check that Java gives the same
 | `MatcherTest` | The matcher on hand-written cases and a seeded random corpus, on the fixture catalog and the shipped index. |
 | `CatalogTest` | The index builder, and the catalog update: same queries sent, same index bytes. |
 | `ClassifierTest` | The tokenizer's token ids and the classifier's probabilities. |
-| `ClipTest` | The image verdict on the fixture images. |
+| `ClipTest` | The title verdict on the fixture images: on the extension's own 256 x 256 pixels, and after Java's own resize (`Images.visionPixels`). Needs 0 differing verdicts and pixel values within 1 of the extension's. |
+| `OcrTest` | `Ocr.java` reads the OCR fixtures to the same text as `ocr.js`. Runs in its own Gradle task, see below. |
 | `ConfigTest` | The config: defaults, merge patches, migration from 0.1, the export file and its refusals, import merge, the merge into the companion, the decision rule and the provider's caller check. |
 | `CustomWorkTest` | Hand-added works are indexed as the extension indexes them: same popularity value, aliases as given, lower-case matching. |
 
-`SB_LIVE=1 ./gradlew :extensions:blocker:testDebugUnitTest` also runs one opt-in test against the live Wikidata endpoint. The tests run with a 1 GB heap.
+`testDebugUnitTest` skips `OcrTest` and is finalised by the task `ocrTestDebugUnitTest`, which runs only `OcrTest`, on desktop ONNX Runtime 1.32.0. The desktop (Linux x86-64) builds 1.22 to 1.31 give the PP-OCR v5 detector a blank probability map, so the test would find no text. The Android 1.22 build is fine (it read all 21 OCR fixtures like the extension in the demo's on-device check), so the app stays on 1.22. `SB_LIVE=1 ./gradlew :extensions:blocker:testDebugUnitTest` also runs one opt-in test against the live Wikidata endpoint. The tests run with a 1 GB heap.
 
 ## Demo app
 
@@ -303,6 +308,7 @@ The demo's intent extras `spoilerEval` and `imageEval` start on-device runs of t
 - Real phones, Firefox for Android, and the X and Instagram feeds were not tested. Nothing has run in X or Instagram, and everything on Android ran only in an emulator.
 - The X settings row has never been run.
 - The capture change that is meant to stop the feed from jumping was checked only by frame counters in the demo on the emulator.
-- No Android latency or memory figures are published here. `research/REPORT.md` has none for Android.
+- NNAPI acceleration, arm64 and every speed figure: never run on a real phone. The figures above are from the x86_64 emulator with 2 threads. The only memory figure is the emulator's +550 MB for the accelerated session.
+- Using the bundle as a local source in Morphe Manager (see above).
 - Updating a patched app after the host app updates: the patch does not fingerprint, so it is expected to apply to a new version, but only the versions in the table above were tried.
 - Lists drawn by Jetpack Compose, and windows below API 29.
