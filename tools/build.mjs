@@ -87,10 +87,6 @@ for (const target of ['firefox', 'chrome']) {
     // cross-origin isolation gives the offscreen document SharedArrayBuffer, i.e. multi-threaded WASM inference
     manifest.cross_origin_embedder_policy = { value: 'require-corp' };
     manifest.cross_origin_opener_policy = { value: 'same-origin' };
-    // popup.js uses the promise-based `browser.*` namespace; alias it to chrome.* (promise-returning in MV3)
-    fs.writeFileSync(`${out}/src/popup/browser-shim.js`, 'globalThis.browser ??= chrome;\n');
-    const html = fs.readFileSync(`${out}/src/popup/popup.html`, 'utf8');
-    fs.writeFileSync(`${out}/src/popup/popup.html`, html.replace(/<script\b/, '<script src="browser-shim.js"></script>\n  <script'));
   } else {
     fs.rmSync(`${out}/src/background/offscreen.html`);
     fs.rmSync(`${out}/src/background/offscreen.js`);

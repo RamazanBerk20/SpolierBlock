@@ -124,16 +124,25 @@ export const toBase64 = (buf) => {
   return btoa(s);
 };
 
-export function rebuild(bundle, added) {
+// The user's hand-entered works (storage `custom`) as catalog works. A high pop keeps them out of the
+// "obscure work" rules: the user named them, so they are not everyday-word noise.
+export const CUSTOM_POP = 1000;
+export function customWorks(custom, words) {
+  const ambiguous = makeAmbiguous(words);
+  return (custom ?? []).map((c) => ({ id: c.id, title: c.title, type: c.type, year: null, aliases: c.aliases ?? [], characters: [], pop: CUSTOM_POP, ambiguous: ambiguous(c.title) }));
+}
+
+// added: works from catalog updates; custom: storage `custom` (hand-entered works)
+export function rebuild(bundle, added, custom = []) {
   setCommonWords(bundle.words);
-  const built = buildIndex(mergeCatalog(bundle.catalog, added));
+  const built = buildIndex(mergeCatalog(bundle.catalog, [...added, ...customWorks(custom, bundle.words)]));
   return { bin: built.bin, meta: { ...built.meta, fromBundled: mapBundledGroups(bundle.meta, built.meta) } };
 }
 
 // One update run. deps: { fetch, storage (browser.storage.local-like), loadBundle(), endpoint, now, sleep }
 // loadBundle -> { catalog, words, classes, info: { builtAt }, meta (bundled index.json) }
 export async function runUpdate({ storage, loadBundle, now = Date.now(), ...net }) {
-  const { catalogMeta: old = {}, catalogAdded: prev = [] } = await storage.get(['catalogMeta', 'catalogAdded']);
+  const { catalogMeta: old = {}, catalogAdded: prev = [], custom = [] } = await storage.get(['catalogMeta', 'catalogAdded', 'custom']);
   const meta = { lastSuccess: null, added: 0, ...old, lastCheck: now, lastError: null };
   const stats = { queries: 0, bytes: 0 };
   try {
@@ -143,7 +152,7 @@ export async function runUpdate({ storage, loadBundle, now = Date.now(), ...net 
     const fresh = await fetchDelta({ classes: bundle.classes, sinceYear, known, ambiguous: makeAmbiguous(bundle.words), stats, ...net });
     if (fresh.length) {
       const added = [...prev, ...fresh];
-      const { bin, meta: indexMeta } = rebuild(bundle, added);
+      const { bin, meta: indexMeta } = rebuild(bundle, added, custom);
       // single set call: content scripts see either the old or the complete new index
       await storage.set({ catalogIndex: { builtAt: now, bin: toBase64(bin), meta: indexMeta }, catalogAdded: added });
       meta.added = added.length;
