@@ -303,7 +303,17 @@ The main screen is a feed of 240 items that mixes plain text views, text drawn o
 
 The demo's intent extras `spoilerEval` and `imageEval` start on-device runs of the classifier and the image model, whose results can be compared with the extension's. The demo patches are the only ones that ship the `test-endpoint.txt` asset.
 
+### Sound
+
+A cover silences what it covers. The patch rewrites the app's own calls of `AudioTrack.play`, `setVolume`, `setStereoVolume` and `MediaPlayer.start`, `setVolume` so they go through a registry (`Media.java`) that remembers each player and the volume the app last asked for. While a cover hides a video surface (inside the item or floating over it) or fills at least 60% of the window (Reels, Shorts), every known player in the app plays at volume 0, and volume changes the app makes meanwhile are only remembered. Sound returns when the cover goes, the window goes to the background, blocking is switched off, or the blocker disables itself after an error. The device's stream volume and mute state are never touched.
+
+Call sites rewritten in the 0.1 patched files: YouTube 4 `AudioTrack.play` and 5 `MediaPlayer.start`, Instagram 11 and 28, X 8 and 10. Limits: an uncovered video playing next to a covered one is muted too; the covered video keeps playing silently; YouTube's VR/360 audio (`libgvr_audio.so`, OpenSL ES) is not reached; a covered video can sound for a few seconds after the app starts, until the index has loaded. Verified only in the demo app on the emulator (an `AudioTrack` feed row and a `MediaPlayer` pager).
+
 ## Not covered
+
+- YouTube comments. The comments list is scanned, but its rows draw their own text (Litho): there is no `TextView`, no content description, and the accessibility tree carries no comment text unless an accessibility service is running. A fix needs a YouTube-specific hook on Litho's text drawable (`com.facebook.litho.TextContent` keeps its name; its implementation is obfuscated). Seen on the logged-out emulator build. Shorts comments and live chat were not checked.
+- Comments in X and Instagram were not checked (no account).
+- The audio hooks have not run in YouTube, X or Instagram.
 
 - Real phones, Firefox for Android, and the X and Instagram feeds were not tested. Nothing has run in X or Instagram, and everything on Android ran only in an emulator.
 - The X settings row has never been run.

@@ -78,6 +78,8 @@ Title checks are slower than in 0.1 and OCR is faster. Image recognition is stil
 - The Android fix for a feed that jumped on a real phone (image capture drawing host views). It was checked only by frame counters in the demo app on the emulator.
 - Video frames on Android. Only thumbnails and posters are scanned there.
 - TalkBack with real content, and push notifications from a real app. Both were tried only in the demo.
+- Silencing a covered video on Android in the real apps. The audio hooks are in the patch for YouTube, X and Instagram but ran only in the demo.
+- Comment sections in X and Instagram on Android (no account). In the browser, comments were tested on fixture pages only.
 
 **Behaviour to know about**
 
@@ -85,6 +87,8 @@ Title checks are slower than in 0.1 and OCR is faster. Image recognition is stil
 - Posts that name nothing ("that ending destroyed me") are not caught.
 - A single-word title at the start of a sentence, with no media word in that sentence, is not matched.
 - Not scanned in the browser: backgrounds set by a stylesheet, loose text directly inside a very large container, and media inside shadow roots is not dimmed until its verdict arrives.
+- YouTube comments on Android are not covered: the comment rows draw their own text (Litho) and expose it to nothing the blocker reads. Search results and the watch-page title are covered.
+- A covered post's video and audio are silenced. In the browser a player embedded from another site (a YouTube embed) that is already playing is hidden but not silenced. On Android every player in the app is muted while a covered video is on screen, the video keeps playing silently, YouTube's VR/360 audio is not reached, and a covered video can sound for a few seconds after the app starts, before the index has loaded.
 - Chinese, Japanese and Thai text has no word spaces, so titles inside such text do not match.
 - Each frame of a page loads its own copy of the index (about 3.3 MB).
 - Android patch sizes: the 0.2.0 bundle is 138 MB and the companion APK 1.5 MB. How much a patched app grows was measured for 0.1 only (roughly 100 to 115 MB over the original); not re-measured. X additionally needs `extractNativeLibs` set to true, which the patch does.
