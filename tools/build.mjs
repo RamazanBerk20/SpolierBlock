@@ -14,8 +14,9 @@ const clipN = +(args.find((a) => a.startsWith('--clip-n='))?.split('=')[1] ?? 20
 // best title row when that row scores at least `minScore`, beats the best generic "ordinary photo" prompt by `margin`
 // and the best row of an unrelated title family by `titleGap`; otherwise it is "unidentified media" when the media
 // prompts beat the generic ones by `mediaGate`.
-// Held out (two-fold, 397 media / 466 ordinary images, N=2000): 28 right, 4 wrong titles, 0 ordinary photos named.
-const CUT = { minScore: 0.1161, margin: 0.061, titleGap: 0.0275, mediaGate: 0.0514 };
+// Held out (two-fold, 397 media / 466 ordinary images, N=2000, 0.2 catalog): 22 right, 8 wrong titles, 2 ordinary photos
+// named; the folds disagree (titleGap 0 vs 0.0325), so these numbers are noisy.
+const CUT = { minScore: 0.1355, margin: 0.077, titleGap: 0.015, mediaGate: 0.0516 };
 // PP-OCR v5 mobile (Apache-2.0, PaddleOCR) as converted to ONNX by RapidOCR, pinned by release and sha256.
 const OCR_BASE = 'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5';
 const OCR_MODELS = {
