@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpolierBlock settings</title>
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <a class="skip" href="#library">Skip to the library</a>
+  <div class="frame">
+    <aside class="rail">
+      <div class="brand">
+        <p class="word">SpolierBlock</p>
+        <label class="switch" title="Blocking on or off">
+          <input type="checkbox" id="enabled" role="switch" aria-label="Blocking">
+          <span class="track" aria-hidden="true"></span>
+        </label>
+      </div>
+      <p id="state-line" class="soft state-line" aria-live="polite"></p>
+      <nav aria-label="Sections">
+        <a href="#library">Library</a>
+        <a href="#custom">Add by hand</a>
+        <a href="#blocking">Blocking</a>
+        <a href="#data">Data</a>
+        <a href="#about">About</a>
+      </nav>
+    </aside>
+
+    <main>
+      <section id="library" aria-labelledby="h-library">
+        <div class="head">
+          <h1 id="h-library">Library</h1>
+          <p class="soft" id="lib-summary"></p>
+        </div>
+        <div class="finder">
+          <label for="search" class="sr">Search the catalog</label>
+          <input type="search" id="search" autocomplete="off" spellcheck="false" placeholder="Search films, series, games and books to add  ( / )">
+          <p id="search-msg" class="soft" aria-live="polite" hidden></p>
+          <ul id="results" class="results" aria-label="Search results"></ul>
+        </div>
+
+        <div class="filters" role="group" aria-label="Filter the library">
+          <input type="search" id="filter" placeholder="Filter by title" aria-label="Filter by title">
+          <select id="f-type" aria-label="Type">
+            <option value="">All types</option>
+            <option value="movie">Films</option><option value="tv">Series</option><option value="game">Games</option>
+            <option value="book">Books</option><option value="anime">Anime</option><option value="manga">Manga</option><option value="comic">Comics</option>
+          </select>
+          <div class="seg" role="radiogroup" aria-label="State">
+            <label><input type="radio" name="f-state" value="" checked><span>All</span></label>
+            <label><input type="radio" name="f-state" value="seen"><span>Seen</span></label>
+            <label><input type="radio" name="f-state" value="blocked"><span>Blocked</span></label>
+          </div>
+        </div>
+
+        <div class="bulk" id="bulk">
+          <label class="check"><input type="checkbox" id="select-all"><span id="select-label">Select all shown</span></label>
+          <span class="bulk-actions" id="bulk-actions" hidden>
+            <button type="button" data-bulk="seen">Mark seen</button>
+            <button type="button" data-bulk="blocked">Mark blocked</button>
+            <button type="button" data-bulk="remove" class="danger">Remove</button>
+          </span>
+        </div>
+        <ul id="lib" class="lib" aria-label="Your works"></ul>
+        <button type="button" id="more" class="quiet more" hidden></button>
+        <div id="lib-empty" class="empty" hidden></div>
+      </section>
+
+      <section id="custom" aria-labelledby="h-custom">
+        <div class="head">
+          <h2 id="h-custom">Add by hand</h2>
+          <p class="soft">For anything the catalog does not know: an indie game, a new book, a local show. It is matched in pages like any other title.</p>
+        </div>
+        <form id="custom-form" class="form" autocomplete="off">
+          <label class="field wide"><span>Title</span><input type="text" id="c-title" required maxlength="200" placeholder="Hollow Pines"></label>
+          <label class="field wide"><span>Other names <span class="soft">(comma separated, optional)</span></span><input type="text" id="c-aliases" maxlength="600" placeholder="HP, Hollow Pines Saga"></label>
+          <label class="field"><span>Type</span>
+            <select id="c-type">
+              <option value="game">Game</option><option value="movie">Film</option><option value="tv">Series</option><option value="book">Book</option>
+              <option value="anime">Anime</option><option value="manga">Manga</option><option value="comic">Comic</option>
+            </select>
+          </label>
+          <label class="field"><span>When it comes up</span>
+            <select id="c-state"><option value="blocked">Cover it</option><option value="seen">I've seen it</option><option value="">Follow my default</option></select>
+          </label>
+          <div class="form-end"><button type="submit" class="primary">Add</button><span id="c-msg" class="soft" aria-live="polite"></span></div>
+        </form>
+        <ul id="custom-list" class="lib" aria-label="Works added by hand"></ul>
+      </section>
+
+      <section id="blocking" aria-labelledby="h-blocking">
+        <div class="head">
+          <h2 id="h-blocking">Blocking</h2>
+          <p class="soft">How SpolierBlock decides what to cover.</p>
+        </div>
+
+        <div class="style-pick">
+          <fieldset class="choices">
+            <legend>By default, for a work I have not seen</legend>
+            <label class="choice"><input type="radio" name="style" value="all"><span><b>Cover every mention</b><span class="soft">Anything that names it is hidden until you choose to show it.</span></span></label>
+            <label class="choice"><input type="radio" name="style" value="spoilers"><span><b>Cover only spoilers</b><span class="soft">A trailer or a news headline stays; plot details are covered. Checked on this device.</span></span></label>
+          </fieldset>
+          <div class="preview" aria-hidden="true">
+            <div class="post">
+              <p class="post-who">A post in your feed</p>
+              <div class="post-body">
+                <span class="line"></span><span class="line"></span><span class="line short"></span>
+                <div class="cover">
+                  <p id="preview-text">Mentions Hollow Pines</p>
+                  <p class="cover-btns"><span>Show once</span><span>I've seen it</span><span>⋮</span></p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <ul class="toggles">
+          <li><label class="toggle"><span><b>Cover works I have not listed</b><span class="soft">Off: only works you mark as blocked are ever covered.</span></span>
+            <span class="switch"><input type="checkbox" id="blockUnlisted" role="switch"><span class="track" aria-hidden="true"></span></span></label></li>
+          <li><label class="toggle"><span><b>Scan images and video</b><span class="soft">Posters, stills and frames are checked on this device.</span></span>
+            <span class="switch"><input type="checkbox" id="scanImages" role="switch"><span class="track" aria-hidden="true"></span></span></label></li>
+          <li><label class="toggle"><span><b>Cover unrecognised film and game images</b><span class="soft">Images that look like a film, show or game but carry no title we can name.</span></span>
+            <span class="switch"><input type="checkbox" id="unknownImages" role="switch"><span class="track" aria-hidden="true"></span></span></label></li>
+        </ul>
+
+        <div class="sites">
+          <h3>Paused sites</h3>
+          <p class="soft">Nothing is covered on these sites or their subdomains.</p>
+          <form id="site-form" class="inline">
+            <label for="site" class="sr">Site to pause</label>
+            <input type="text" id="site" placeholder="example.com" autocomplete="off" spellcheck="false">
+            <button type="submit">Pause site</button>
+            <span id="site-msg" class="soft" aria-live="polite"></span>
+          </form>
+          <ul id="sites" class="chips" aria-label="Paused sites"></ul>
+        </div>
+      </section>
+
+      <section id="data" aria-labelledby="h-data">
+        <div class="head">
+          <h2 id="h-data">Data</h2>
+          <p class="soft">Your lists and settings, in one file you can move to another browser or to the Android app.</p>
+        </div>
+        <div class="blocks">
+          <div class="block">
+            <h3>Export</h3>
+            <p class="soft">Saves <b>spolierblock-config.json</b> to your downloads.</p>
+            <button type="button" id="export">Export</button>
+          </div>
+          <div class="block">
+            <h3>Import</h3>
+            <p class="soft">Nothing changes until you confirm.</p>
+            <label class="btn file"><input type="file" id="import-file" accept=".json,application/json" class="sr">Choose file…</label>
+            <div id="import-panel" class="import" hidden>
+              <p id="import-summary"></p>
+              <div class="seg" role="radiogroup" aria-label="How to import">
+                <label><input type="radio" name="imode" value="merge" checked><span>Merge</span></label>
+                <label><input type="radio" name="imode" value="replace"><span>Replace</span></label>
+              </div>
+              <p id="imode-help" class="soft"></p>
+              <label class="check" id="isettings-row"><input type="checkbox" id="import-settings"><span>Also use the file's settings</span></label>
+              <div class="inline"><button type="button" id="import-go" class="primary">Import</button><button type="button" id="import-cancel" class="quiet">Cancel</button></div>
+            </div>
+            <p id="import-msg" role="alert" class="msg"></p>
+          </div>
+          <div class="block">
+            <h3>Catalog updates</h3>
+            <p class="soft">New titles come from Wikidata. Only the query is sent, nothing about you.</p>
+            <div class="inline">
+              <label for="catalogUpdate" class="sr">Update the catalog</label>
+              <select id="catalogUpdate">
+                <option value="off">Never on its own</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option>
+              </select>
+              <button type="button" id="updateNow">Update now</button>
+            </div>
+            <p id="catalogStatus" class="soft" role="status" aria-live="polite"></p>
+          </div>
+          <div class="block">
+            <h3>Reset</h3>
+            <p class="soft">Clears your library, works added by hand and settings.</p>
+            <button type="button" id="reset" class="danger">Reset everything…</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="about" aria-labelledby="h-about">
+        <div class="head">
+          <h2 id="h-about">About</h2>
+          <p class="soft" id="version"></p>
+        </div>
+        <p class="about-lead">Everything runs on this device. What you read, what you mark and what gets covered never leaves your browser.</p>
+        <ul class="facts">
+          <li><b>Title matching</b><span class="soft">A catalog of films, series, games and books, with their other names and main characters.</span></li>
+          <li><b>Spoiler check</b><span class="soft">A small language model that tells a spoiler from a mention.</span></li>
+          <li><b>Images</b><span class="soft">An image model and text recognition for posters, stills and screenshots.</span></li>
+          <li><b>Network</b><span class="soft">None, except catalog updates you switch on or start yourself.</span></li>
+        </ul>
+        <p class="soft">Turn blocking on or off from any page with <kbd id="shortcut">Alt+Shift+B</kbd>.</p>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="options.js"></script>
+</body>
+</html>
