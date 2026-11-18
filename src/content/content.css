@@ -1,14 +1,16 @@
-/* Injected at document_start, before any page content is painted. */
+/* Injected at document_start, before any page content is painted.
+   Nothing here may change the size of a box: the page may have measured it (virtualised feeds position posts by height). */
 
 /* Gate: page stays invisible until the matcher is loaded and the first scan ran (content.js has a fail-safe timeout). */
 html:not([data-sb-ready]):not([data-sb-off]) body { visibility: hidden !important; }
 
-/* Media is "pending" (dark neutral placeholder) until it has a verdict. */
-html:not([data-sb-off]):not([data-sb-noimg]) :is(img, video):not([data-sb-ok]) {
+/* Media is "pending" (dark neutral placeholder) until it has a verdict. [data-sb-bg]: inline CSS background photo. */
+html:not([data-sb-off]):not([data-sb-noimg]) :is(img, video, [data-sb-bg]):not([data-sb-ok]) {
   filter: brightness(0) invert(0.15) !important;
 }
 
-/* Blocked block: content hidden (also from screen readers), overlay on top. */
-[data-sb-blocked] { min-height: 64px !important; }
-[data-sb-blocked][data-sb-pos] { position: relative !important; }
+/* Covered block: its content hidden (also from screen readers), the cover (sb-overlay) on top. The block itself keeps
+   its visibility, so a cover inside a container the page hides stays hidden too.
+   position: relative only on a static block, so the cover has it as containing block; it does not change the block's size. */
 [data-sb-blocked] > :not(sb-overlay) { visibility: hidden !important; }
+[data-sb-blocked][data-sb-pos] { position: relative !important; }
