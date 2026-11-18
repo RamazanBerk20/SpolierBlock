@@ -320,7 +320,7 @@ final class Images {
             }
             if (!todo.isEmpty()) {
                 long t0 = SystemClock.uptimeMillis();
-                float[][] e = clip.embed(vision(), todo);
+                float[][] e = embed(todo);
                 long t1 = SystemClock.uptimeMillis();
                 stClip += t1 - t0; stClipN += todo.size();
                 for (int k = 0; k < todo.size(); k++) {
@@ -359,7 +359,19 @@ final class Images {
     private OrtSession visionCpu, visionAccel;
     private OrtSession.RunOptions ocrRun;
 
-    private OrtSession vision() { return visionAccel != null ? visionAccel : visionCpu; }
+    /** The vision run, accelerated when the self-check chose it; an accelerated run that fails sends us back to the CPU for good. */
+    private float[][] embed(List<byte[]> rgbs) throws Exception {
+        if (visionAccel == null) return clip.embed(visionCpu, rgbs);
+        try {
+            return clip.embed(visionAccel, rgbs);
+        } catch (Exception e) {
+            accel.failedAtRun(e);
+            try { visionAccel.close(); } catch (Exception ignored) { }
+            visionAccel = null;
+            try (OrtSession.SessionOptions o = cpuOptions()) { visionCpu = OrtEnvironment.getEnvironment().createSession(sb.directAsset("spoilerblock/vision/model.onnx"), o); }
+            return clip.embed(visionCpu, rgbs);
+        }
+    }
 
     private void load() {
         long t0 = SystemClock.uptimeMillis(), native0 = android.os.Debug.getNativeHeapAllocatedSize();
@@ -377,6 +389,7 @@ final class Images {
             Log.i(TAG, "image models loaded: vision " + (t1 - t0) + " ms, ocr " + (SystemClock.uptimeMillis() - t1) + " ms, " + threads() +
                 " threads, native heap +" + (android.os.Debug.getNativeHeapAllocatedSize() - native0) / (1 << 20) + " MB");
             visionAccel = accel.start(model, visionCpu, clip);
+            if (visionAccel != null) { visionCpu.close(); visionCpu = null; } // one copy of the weights in memory
         } catch (Throwable t) {
             loadFailed = true;
             closeModels();

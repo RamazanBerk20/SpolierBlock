@@ -57,9 +57,21 @@ final class Accel {
         Log.i(SpoilerBlock.TAG, "image acceleration: " + mode + " (" + why + ")");
     }
 
-    /** Worker thread, after the CPU vision session exists. The accelerated session to use, or null for the CPU. */
+    /** An accelerated run failed after the check had passed: the CPU from now on (until the next app or OS update). */
+    void failedAtRun(Exception e) {
+        result(FAILED, "a run failed: " + e.getClass().getSimpleName());
+    }
+
+    /**
+     * Worker thread, after the CPU vision session exists. The accelerated session to use (the caller then drops the CPU
+     * one), or null for the CPU. The float weights take about 330 MB more than the int8 ones (measured +550 MB native
+     * heap on the emulator), so phones with less than 6 GB of memory stay on the CPU.
+     */
     OrtSession start(ByteBuffer model, OrtSession cpu, Clip clip) {
         if (Build.VERSION.SDK_INT < 27) { result(CPU, "NNAPI needs Android 8.1"); return null; }
+        android.app.ActivityManager.MemoryInfo mem = new android.app.ActivityManager.MemoryInfo();
+        app.getSystemService(android.app.ActivityManager.class).getMemoryInfo(mem);
+        if (mem.totalMem < 6L << 30) { result(CPU, "acceleration needs 6 GB of memory, this device has " + (mem.totalMem >> 20) + " MB"); return null; }
         if (prefs.getBoolean("broken", false)) return null; // a native crash during an earlier attempt: off for good
         if (prefs.getBoolean("attempt", false)) {
             prefs.edit().putBoolean("broken", true).putBoolean("attempt", false).commit();
@@ -70,6 +82,7 @@ final class Accel {
         if (checked && !ACCELERATED.equals(prefs.getString("mode", ""))) return null; // CPU it is, until an update
         prefs.edit().putBoolean("attempt", true).commit(); // before anything accelerated runs
         OrtSession acc = null;
+        long heap0 = android.os.Debug.getNativeHeapAllocatedSize();
         try {
             try (OrtSession.SessionOptions o = new OrtSession.SessionOptions()) {
                 // basic optimisations run before the graph is split between providers: the int8 weights fold to float
@@ -89,7 +102,8 @@ final class Accel {
             double cos = cosine(a, c);
             long tAcc = median(acc, clip, ref), tCpu = median(cpu, clip, ref);
             prefs.edit().putBoolean("attempt", false).commit();
-            String why = String.format(java.util.Locale.US, "cosine %.4f, %d ms against %d ms on the CPU", cos, tAcc, tCpu);
+            String why = String.format(java.util.Locale.US, "cosine %.4f, %d ms against %d ms on the CPU, +%d MB", cos, tAcc, tCpu,
+                (android.os.Debug.getNativeHeapAllocatedSize() - heap0) >> 20);
             if (cos >= 0.99 && tAcc < tCpu) { result(ACCELERATED, why); return acc; }
             result(CPU, (cos < 0.99 ? "different results: " : "not faster: ") + why);
         } catch (Throwable t) {
