@@ -40,4 +40,5 @@
   {"id": "Q911520", "title": "The Switch", "type": "movie", "year": 2010, "aliases": ["Switch"], "characters": [], "pop": 36, "ambiguous": false}, 
   {"id": "Q17154554", "title": "Bloodborne", "type": "game", "year": 2015, "aliases": [], "characters": [], "pop": 35, "ambiguous": false}, 
   {"id": "Q13417189", "title": "Interstellar", "type": "movie", "year": 2014, "aliases": [], "characters": ["Joseph Cooper"], "pop": 98, "ambiguous": false}, 
-  {"id": "Q91487012", "title": "Severance", "type": "tv", "year": 2022, "aliases": [], "characters": [], "pop": 50, "ambiguous": true}]}
+  {"id": "Q91487012", "title": "Severance", "type": "tv", "year": 2022, "aliases": [], "characters": [], "pop": 50, "ambiguous": true}, 
+  {"id": "Q151895", "title": "Nosferatu", "type": "movie", "year": 1922, "aliases": ["Nosferatu, eine Symphonie des Grauens"], "characters": ["Count Orlok"], "pop": 60, "ambiguous": false}]}

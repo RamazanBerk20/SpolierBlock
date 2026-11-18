@@ -3,12 +3,13 @@
 // one side), ordinary photos by file name; then the sides are swapped and both held-out results are added up.
 // Images: test/fixtures/images/labels.json, plus the research sets when SB_RESEARCH points at a research/ directory
 // (results/images.json: Commons cosplay, posters, ordinary photos; results/v2/data/ordinary2).
-// Preprocessing mirrors src/background/engine.js: the whole image squashed to the model's square input, mean/std.
+// Preprocessing is the engine's own (src/background/pixels.js) on sharp's decoded pixels.
 // usage: [SB_RESEARCH=research] node tools/calibrate-clip.mjs [catalog=data/catalog.json] [--clip-n=N]
 import fs from 'node:fs';
 import sharp from 'sharp';
 import * as ort from 'onnxruntime-node';
 import { buildIndex } from './build-index.mjs';
+import { squashCHW } from '../src/background/pixels.js';
 import { buildClipText, clipRows, rowFamilies, visionModel, VISION } from './build-clip-text.mjs';
 
 const args = process.argv.slice(2);
@@ -44,10 +45,9 @@ const wantWorks = (want) => {
 };
 const res = [];
 for (const { file, want } of imgs) {
-  let px;
-  try { px = await sharp(file).removeAlpha().resize(S, S, { fit: 'fill' }).raw().toBuffer(); } catch { continue; }
-  const x = new Float32Array(3 * S * S);
-  for (let i = 0; i < S * S; i++) for (let c = 0; c < 3; c++) x[c * S * S + i] = (px[i * 3 + c] / 255 - VISION.mean[c]) / VISION.std[c];
+  let img;
+  try { const { data, info } = await sharp(file).ensureAlpha().raw().toBuffer({ resolveWithObject: true }); img = { data, width: info.width, height: info.height }; } catch { continue; }
+  const x = squashCHW(img, S, VISION.mean, VISION.std);
   const out = await sess.run({ [sess.inputNames[0]]: new ort.Tensor('float32', x, [1, 3, S, S]) });
   const v = out[VISION.output].data, n = Math.hypot(...v), e = Float32Array.from(v, (a) => a / n);
   const sc = q.map((r) => dot(r, e));

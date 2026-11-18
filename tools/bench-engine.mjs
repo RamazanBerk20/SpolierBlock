@@ -1,13 +1,24 @@
 // Per-image latency of the real engine (src/background/engine.js) inside the built extension: Chrome (cross-origin
 // isolated extension page, 4 WASM threads) or Zen/Firefox (1 thread). Runs through test/e2e/run.mjs --eval, which loads
 // dist/<target> in a temporary profile and serves test/fixtures/images on 127.0.0.1.
-// usage: node tools/bench-engine.mjs chrome|firefox [file-prefix-regex=.]     (after npm run build or build:fixture)
+// usage: node tools/bench-engine.mjs chrome|firefox [file-regex=.] [--stats]     (after npm run build or build:fixture)
+//   --stats: no timing; per image the title verdict inputs (best row, score, margin, gap, media) from two separate
+//   batch-1 runs and one batch-4 run, as JSON, to compare browsers and runs (tools/stats-diff.mjs)
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-const [target = 'chrome', re = '.'] = process.argv.slice(2);
+const args = process.argv.slice(2), STATS = args.includes('--stats');
+const [target = 'chrome', re = '.'] = args.filter((a) => a !== '--stats');
 const port = target === 'chrome' ? 8776 : 8766;
 const files = fs.readdirSync('test/fixtures/images').filter((f) => /\.(jpg|png)$/.test(f) && new RegExp(re).test(f)).sort();
-const fn = `async () => {
+const statsFn = `async () => {
+  const api = globalThis.browser ?? globalThis.chrome;
+  const m = await import(api.runtime.getURL('src/background/engine.js'));
+  const files = ${JSON.stringify(files)}, u = (f) => 'http://127.0.0.1:${port}/' + f, out = {};
+  for (const f of files) out[f] = { b1: (await m.titleStats([u(f)]))[0], b1again: (await m.titleStats([u(f)]))[0] };
+  for (let i = 0; i < files.length; i += 4) (await m.titleStats(files.slice(i, i + 4).map(u))).forEach((s, k) => { out[files[i + k]].b4 = s; });
+  return { threads: globalThis.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency) : 1, stats: out };
+}`;
+const fn = STATS ? statsFn : `async () => {
   const api = globalThis.browser ?? globalThis.chrome;
   const m = await import(api.runtime.getURL('src/background/engine.js'));
   const files = ${JSON.stringify(files)}, out = { threads: globalThis.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency) : 1, rows: [] };
@@ -33,6 +44,7 @@ const fn = `async () => {
 const r = spawnSync('node', ['test/e2e/run.mjs', target, '--eval', fn], { encoding: 'utf8', maxBuffer: 1 << 26 });
 const line = r.stdout.split('\n').findIndex((l) => l.startsWith('{'));
 const res = line >= 0 ? JSON.parse(r.stdout.split('\n').slice(line).join('\n')) : null;
+if (STATS && res?.stats) { console.log(JSON.stringify({ target, ...res })); process.exit(0); }
 if (!res?.rows) { console.log(r.stdout.slice(-3000), r.stderr.slice(-3000)); process.exit(1); }
 for (const row of res.rows) console.log(row.join('\t'));
 const { rows, ...summary } = res;

@@ -4,6 +4,7 @@
 import { env, AutoTokenizer } from '../../vendor/transformers.js';
 import * as ort from '../../vendor/ort.wasm.bundle.min.mjs'; // the same module instance transformers.js uses
 import { recognize } from './ocr.js';
+import { squashCHW } from './pixels.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
 const url = (p) => api.runtime.getURL(p);
@@ -83,28 +84,35 @@ const verdictCache = new Map(); // key -> hits: [[groupIdx, score]...]
 async function titleChecks(items) {
   const todo = items.filter((it) => !verdictCache.has(it.key));
   const bmps = await Promise.all(todo.map((it) => bitmap(it.key, it.src)));
-  const ok = todo.filter((_, i) => bmps[i]), imgs = bmps.filter(Boolean);
-  if (imgs.length) {
-    const { meta, mat, sess } = await vision();
-    // The whole image squashed to the model's square input (SigLIP's own preprocessing), normalised with mean/std.
-    const S = meta.size, P = S * S, x = new Float32Array(imgs.length * 3 * P);
-    imgs.forEach((bmp, b) => {
-      const px = pixels(bmp, S, S).data;
-      for (let i = 0; i < P; i++) for (let c = 0; c < 3; c++) x[(b * 3 + c) * P + i] = (px[i * 4 + c] / 255 - meta.mean[c]) / meta.std[c];
-    });
-    const out = (await sess.run({ [sess.inputNames[0]]: new ort.Tensor('float32', x, [imgs.length, 3, S, S]) }))[meta.output].data;
-    ok.forEach((it, b) => verdictCache.set(it.key, verdict(meta, mat, out.subarray(b * meta.dim, (b + 1) * meta.dim), it.key)));
+  const ok = todo.filter((_, i) => bmps[i]);
+  if (ok.length) {
+    const { meta, mat, out } = await embed(bmps.filter(Boolean));
+    ok.forEach((it, b) => verdictCache.set(it.key, verdict(meta, scores(meta, mat, out.subarray(b * meta.dim, (b + 1) * meta.dim)), it.key)));
   }
   for (const it of todo) if (!verdictCache.has(it.key)) verdictCache.set(it.key, []);
   while (verdictCache.size > 2000) verdictCache.delete(verdictCache.keys().next().value);
   return items.map((it) => verdictCache.get(it.key) ?? []);
 }
-function verdict(meta, mat, v, key) {
+// bitmaps -> image embeddings, one vision run for the whole batch
+async function embed(bmps) {
+  const { meta, mat, sess } = await vision();
+  // The whole image squashed to the model's square input (SigLIP's own preprocessing), resized in JS from the decoded
+  // pixels so both browsers feed the same numbers (shortcut: images over 2048 px are first scaled by the canvas).
+  const S = meta.size, x = new Float32Array(bmps.length * 3 * S * S);
+  bmps.forEach((bmp, b) => {
+    const k = Math.min(1, 2048 / Math.max(bmp.width, bmp.height));
+    squashCHW(pixels(bmp, Math.round(bmp.width * k), Math.round(bmp.height * k)), S, meta.mean, meta.std, x, b * 3 * S * S);
+  });
+  const out = (await sess.run({ [sess.inputNames[0]]: new ort.Tensor('float32', x, [bmps.length, 3, S, S]) }))[meta.output].data;
+  return { meta, mat, out };
+}
+// an embedding -> cosine of every title row (int8), the best row, its margin over the generic prompts, its gap to the
+// best row of an unrelated title family, and how much the media prompts beat the generic ones
+function scores(meta, mat, v) {
   let n2 = 0; for (const a of v) n2 += a * a;
   const inv = 1 / Math.sqrt(n2), D = meta.dim;
   const best = (vs) => { let m = -1; for (const t of vs) { let s = 0; for (let j = 0; j < D; j++) s += t[j] * v[j]; m = Math.max(m, s * inv); } return m; };
   const neg = best(meta.neg), media = best(meta.media) - neg;
-  // all title rows (int8): best row, and the best row of an unrelated title family
   const sc = new Float32Array(meta.n);
   let top = 0;
   for (let r = 0; r < meta.n; r++) {
@@ -115,7 +123,9 @@ function verdict(meta, mat, v, key) {
   }
   let second = -1;
   for (let r = 0; r < meta.n; r++) if (meta.rowFamily[r] !== meta.rowFamily[top] && sc[r] > second) second = sc[r];
-  const margin = sc[top] - neg, gap = sc[top] - second;
+  return { sc, top, neg, media, margin: sc[top] - neg, gap: sc[top] - second };
+}
+function verdict(meta, { sc, top, neg, media, margin, gap }, key) {
   let hits = [];
   if (sc[top] >= meta.minScore && margin >= meta.margin && gap >= meta.titleGap) {
     // a title: up to 3 groups of the best row's family (rows within the gap) that also clear the margin
@@ -128,6 +138,15 @@ function verdict(meta, mat, v, key) {
   }
   if (hits.length) console.debug('[SpolierBlock] image', key.slice(0, 80), hits, 'margin', margin.toFixed(3), 'gap', gap.toFixed(3));
   return hits;
+}
+// Tools only (tools/bench-engine.mjs --stats): the verdict inputs for these image URLs, embedded as one batch, uncached.
+export async function titleStats(srcs) {
+  const bmps = await Promise.all(srcs.map((u) => fetch(u, { cache: 'no-store' }).then((r) => r.blob()).then((b) => createImageBitmap(b))));
+  const { meta, mat, out } = await embed(bmps);
+  return srcs.map((_, b) => {
+    const { sc, top, media, margin, gap } = scores(meta, mat, out.subarray(b * meta.dim, (b + 1) * meta.dim));
+    return { group: meta.rowGroup[top], score: sc[top], margin, gap, media };
+  });
 }
 
 // ---------- OCR ----------
