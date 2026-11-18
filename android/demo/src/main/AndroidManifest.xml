@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- the real target apps have INTERNET; the demo needs it (and cleartext) only for the local mock SPARQL server -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- the demo's own test notifications (More.notifyFromBackground); the real apps already post notifications -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:name=".DemoApp"
         android:label="${appLabel}"

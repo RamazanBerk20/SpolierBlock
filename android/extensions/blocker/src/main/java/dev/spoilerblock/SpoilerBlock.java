@@ -191,6 +191,13 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         loader.start();
     }
 
+    /** Main thread: the config seen through this matcher (an index swapped in on another thread may be newer than works). */
+    Config.Works worksFor(Matcher m) {
+        Config.Works v = works;
+        if (v == null || v.seen.length != m.ids.length) works = v = new Config.Works(store.get(), m.ids);
+        return v;
+    }
+
     /** Any thread: the first pre-draw may be waiting for it on the main thread. */
     private void install(Matcher m, boolean rebuilt) {
         works = new Config.Works(store.get(), m.ids);
@@ -465,14 +472,60 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     Boolean spoilerVerdict(String text) {
         Boolean v = verdicts.get(text);
         if (v != null) return v;
-        if (classifying.add(text)) {
-            if (worker == null) worker = java.util.concurrent.Executors.newSingleThreadExecutor(r -> new Thread(() -> {
-                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); // never compete with frames
-                r.run();
-            }, "SpoilerBlock-classify"));
-            worker.execute(() -> classify(text));
-        }
+        if (classifying.add(text)) classifierThread().execute(() -> classify(text));
         return null;
+    }
+
+    /** The index, loading it if needed and waiting at most ms (for code that runs before any activity: notifications). */
+    Matcher matcherNow(long ms) {
+        startLoading();
+        long end = SystemClock.uptimeMillis() + ms;
+        try {
+            while (matcher == null && loader.isAlive() && SystemClock.uptimeMillis() < end) Thread.sleep(20);
+        } catch (InterruptedException ignored) { }
+        return matcher;
+    }
+
+    /**
+     * The decision rule for a text alone (no images), any thread: the cover's message, or null when nothing covers.
+     * Style "spoilers" runs the classifier and waits for it off the main thread; on the main thread it covers.
+     */
+    String textCover(Matcher m, String text) throws Exception {
+        Config.Works v = new Config.Works(store.get(), m.ids);
+        boolean unlisted = store.get().bool("blockUnlisted");
+        java.util.List<Integer> all = new ArrayList<>(), spoilers = new ArrayList<>();
+        for (int g : m.evaluate(text, v.seen)) {
+            int k = Config.group(m.groupWorks(g), v, unlisted);
+            if (k == Config.STYLE_ALL) all.add(g); else if (k == Config.STYLE_SPOILERS) spoilers.add(g);
+        }
+        java.util.List<Integer> named = new ArrayList<>(all);
+        named.addAll(spoilers);
+        if (named.isEmpty()) return null;
+        String label = m.labels[named.get(0)] + (named.size() > 1 ? " and " + (named.size() - 1) + " more" : "");
+        if (!all.isEmpty() || Looper.myLooper() == Looper.getMainLooper()) return "Mentions " + label;
+        java.util.concurrent.Future<Boolean> f = classifierThread().submit(() -> classifyNow(text));
+        Boolean spoiler;
+        try { spoiler = f.get(10, java.util.concurrent.TimeUnit.SECONDS); } catch (java.util.concurrent.TimeoutException e) { spoiler = true; }
+        return spoiler ? "Spoiler about " + label : null;
+    }
+
+    private synchronized java.util.concurrent.ExecutorService classifierThread() {
+        if (worker == null) worker = java.util.concurrent.Executors.newSingleThreadExecutor(r -> new Thread(() -> {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); // never compete with frames
+            r.run();
+        }, "SpoilerBlock-classify"));
+        return worker;
+    }
+
+    /** Worker thread: true for a spoiler, and on any failure (fail closed). */
+    private boolean classifyNow(String text) {
+        try {
+            if (classifier == null && !classifierFailed) loadClassifier();
+            if (classifier != null) return classifier.prob(text.length() > 4000 ? text.substring(0, 4000) : text) >= classifier.threshold;
+        } catch (Throwable t) {
+            Log.w(TAG, "classifier failed, text stays covered", t);
+        }
+        return true;
     }
 
     private void classify(String text) {
@@ -556,7 +609,8 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         if (dead) return;
         try {
             resumed = a;
-            store.recheck(); // the companion may have been installed or removed meanwhile
+            activityDecors.put(a.getWindow().getDecorView(), true); // before the window is added (after onResume)
+            store.recheck(); // the companion may have been installed or removed meanwhile, or changed while we were frozen
             if (a instanceof SettingsActivity) return; // our own screen lists titles: never covered
             checkManageIntent(a);
             Window w = a.getWindow();
@@ -618,10 +672,8 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         try {
             List<View> roots = android.view.inspector.WindowInspector.getGlobalWindowViews();
             for (View r : roots) {
-                if (scanners.containsKey(r)) continue;
-                Activity owner = activityOf(r.getContext());
-                // our own screen is never covered; activity windows get their scanner in onActivityResumed
-                if (owner instanceof SettingsActivity || (owner != null && owner.getWindow().getDecorView() == r)) continue;
+                // activity windows get their scanner in onActivityResumed; our own screen is never covered (nor its dialogs)
+                if (scanners.containsKey(r) || activityDecors.containsKey(r) || activityOf(r.getContext()) instanceof SettingsActivity) continue;
                 // not attached yet is fine: a new window's tree listeners are merged in at its first traversal
                 scanners.put(r, new Scanner(this, r, false));
                 Log.i(TAG, "scanning window " + r.getClass().getName());
@@ -632,6 +684,9 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
             }
         } catch (Throwable t) { fail("window watch", t); }
     }
+
+    // An activity's decor view has a DecorContext, not the activity, as its context: activity windows are known by their decor.
+    private final Map<View, Boolean> activityDecors = new WeakHashMap<>();
 
     static Activity activityOf(android.content.Context c) {
         while (c instanceof android.content.ContextWrapper && !(c instanceof Activity)) c = ((android.content.ContextWrapper) c).getBaseContext();

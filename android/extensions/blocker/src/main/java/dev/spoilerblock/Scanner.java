@@ -237,7 +237,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         // media views: their verdicts (requested here when missing) and the text OCR found in them
         media.clear();
         if (sb.imagesMatter()) sb.images.candidates(it, this, media, true);
-        Config.Works v = sb.works;
+        Config.Works v = sb.worksFor(m);
         boolean pending = false, unknown = false;
         List<Integer> imgGroups = new ArrayList<>();
         StringBuilder ocr = new StringBuilder(), key = new StringBuilder(text);

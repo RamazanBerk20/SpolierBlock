@@ -35,6 +35,8 @@ final class More {
         LinearLayout l = new LinearLayout(a);
         l.setOrientation(LinearLayout.VERTICAL);
         l.setBackgroundColor(0xFFFFFFFF);
+        if (a.getActionBar() != null) a.getActionBar().hide();
+        l.setFitsSystemWindows(true); // edge to edge (target 36): keep the bar out from under the status bar
         LinearLayout bar = new LinearLayout(a);
         bar.setPadding(a.dp(8), a.dp(8), a.dp(8), a.dp(8));
         EditText search = new EditText(a);
@@ -45,6 +47,10 @@ final class More {
         sheet.setText("Open sheet");
         sheet.setOnClickListener(v -> openSheet(a));
         bar.addView(sheet);
+        Button push = new Button(a);
+        push.setText("Notify");
+        push.setOnClickListener(v -> notifyFromBackground(a));
+        bar.addView(push);
         l.addView(bar);
 
         RecyclerView dm = new MainActivity.FeedList(a);
@@ -119,6 +125,24 @@ final class More {
             }
         });
         return l;
+    }
+
+    /**
+     * Two direct-message notifications posted from a background thread, as a push service posts them: a spoiler (its
+     * text must arrive hidden, see `dumpsys notification`) and a clean one (unchanged). Logged for the test.
+     */
+    static void notifyFromBackground(MainActivity a) {
+        android.app.NotificationManager nm = a.getSystemService(android.app.NotificationManager.class);
+        nm.createNotificationChannel(new android.app.NotificationChannel("dm", "Messages", android.app.NotificationManager.IMPORTANCE_DEFAULT));
+        new Thread(() -> {
+            for (int post : new int[]{0, 1}) {
+                android.app.Notification n = new android.app.Notification.Builder(a, "dm").setSmallIcon(android.R.drawable.stat_notify_chat)
+                    .setContentTitle("@deniz").setContentText(MainActivity.body(post))
+                    .setStyle(new android.app.Notification.BigTextStyle().bigText(MainActivity.body(post))).build();
+                nm.notify("dm", post, n);
+                android.util.Log.i(MainActivity.TAG, "NOTIFY posted post " + post);
+            }
+        }, "demo-push").start();
     }
 
     /** A bottom sheet: a dialog window of its own holding one message, no list. */

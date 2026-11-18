@@ -61,14 +61,19 @@ public class MainActivity extends Activity {
     };
     static long frames, checks, mismatches, blockerLayouts, blockerDraws;
 
-    /** True when the blocker (dev.spoilerblock.*, not this demo) is on the stack: it must never lay out or draw host views. */
+    /**
+     * True when the blocker (dev.spoilerblock.*, not this demo) made this call: the first caller below the overriding
+     * method that is not framework code. The blocker must never lay out or draw host views. (It is further down the
+     * stack of every touch, since its TouchGate hands touches to the app: that is the app's own work.)
+     */
     static boolean fromBlocker(String what, View v) {
-        for (StackTraceElement e : new Throwable().getStackTrace()) {
-            String c = e.getClassName();
-            if (c.startsWith("dev.spoilerblock.") && !c.startsWith("dev.spoilerblock.demo.")) {
-                Log.e(TAG, "BLOCKER " + what + " on " + v.getClass().getName() + " via " + c + "." + e.getMethodName(), new Throwable());
-                return true;
-            }
+        StackTraceElement[] st = new Throwable().getStackTrace();
+        for (int i = 2; i < st.length; i++) { // 0: this method, 1: the override
+            String c = st[i].getClassName();
+            if (c.startsWith("android.") || c.startsWith("java.") || c.startsWith("com.android.") || c.startsWith("dalvik.")) continue;
+            if (!c.startsWith("dev.spoilerblock.") || c.startsWith("dev.spoilerblock.demo.")) return false;
+            Log.e(TAG, "BLOCKER " + what + " on " + v.getClass().getName() + " via " + c + "." + st[i].getMethodName(), new Throwable());
+            return true;
         }
         return false;
     }

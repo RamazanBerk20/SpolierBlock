@@ -1,6 +1,14 @@
 package dev.spoilerblock.patches
 
 import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.replaceInstruction
+import app.morphe.patcher.patch.classDefForEach
+import com.android.tools.smali.dexlib2.Opcode
+import com.android.tools.smali.dexlib2.iface.instruction.Instruction
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.formats.Instruction35c
+import com.android.tools.smali.dexlib2.iface.instruction.formats.Instruction3rc
+import com.android.tools.smali.dexlib2.iface.reference.MethodReference
 import app.morphe.patcher.patch.ApkFileType
 import app.morphe.patcher.patch.AppTarget
 import app.morphe.patcher.patch.Compatibility
@@ -38,7 +46,16 @@ private fun renameSonames(elf: ByteArray): ByteArray {
     }
     return elf
 }
-private const val TEXT = "Ldev/spoilerblock/SpoilerBlock;->text(Landroid/view/View;Ljava/lang/Object;)V"
+/** invoke-virtual NotificationManager.notify(int, Notification) or notify(String, int, Notification). */
+private fun isNotify(i: Instruction): Boolean {
+    if (i.opcode != Opcode.INVOKE_VIRTUAL && i.opcode != Opcode.INVOKE_VIRTUAL_RANGE) return false
+    val r = (i as ReferenceInstruction).reference as? MethodReference ?: return false
+    return r.definingClass == "Landroid/app/NotificationManager;" && r.name == "notify" && r.returnType == "V" &&
+        (r.parameterTypes.map { it.toString() } == listOf("I", "Landroid/app/Notification;") ||
+            r.parameterTypes.map { it.toString() } == listOf("Ljava/lang/String;", "I", "Landroid/app/Notification;"))
+}
+
+private const val TEXT ="Ldev/spoilerblock/SpoilerBlock;->text(Landroid/view/View;Ljava/lang/Object;)V"
 
 private fun bundled(name: String) = object {}.javaClass.getResourceAsStream("/spoilerblock/$name")?.use { it.readBytes() }
     ?: throw PatchException("bundle lacks spoilerblock/$name")
@@ -47,11 +64,11 @@ private fun bundled(name: String) = object {}.javaClass.getResourceAsStream("/sp
 private class TextHook(val type: String, val method: String, val param: String)
 
 /**
- * A row in the host's own settings screen, added to a preference XML. [file]: the screen; [itemLayout]: the layout the
- * screen's own rows use, set only when the app has it. The row opens SettingsActivity with an explicit intent whose
+ * A row in the host's own settings screen, added to a preference XML. [file]: the screen. The
+ * row opens SettingsActivity with an explicit intent whose
  * package is written last (finalize), after any patch that renames the app (Morphe's GmsCore support renames YouTube).
  */
-private class SettingsRow(val file: String, val itemLayout: String? = null, val order: String? = null, val inLastCategory: Boolean = false)
+private class SettingsRow(val file: String, val order: String? = null, val inCategory: Boolean = false)
 
 private const val SETTINGS_KEY = "spoilerblock_settings"
 private const val SETTINGS_ACTIVITY = "dev.spoilerblock.SettingsActivity"
@@ -122,13 +139,19 @@ private fun spoilerBlockPatch(
             xml.use {
                 if (it.elementByAttributeOrNull("android:key", SETTINGS_KEY) != null) return@use
                 val screen = it.root
-                val parent = if (row.inLastCategory) screen.children("PreferenceCategory").lastOrNull() ?: screen else screen
-                val layout = row.itemLayout?.takeIf { l -> resourceXmlOrNull("res/layout/$l.xml")?.use { true } == true }
+                // look like the rows around it: the layouts the screen's own rows and section headers use, when they set one
+                val layout = screen.elements("Preference").mapNotNull { p -> p.attribute("android:layout") }.firstOrNull()
+                val categoryLayout = screen.elements("PreferenceCategory").mapNotNull { p -> p.attribute("android:layout") }.firstOrNull()
+                // a screen made of sections gets a section of its own
+                val parent = if (!row.inCategory) screen else screen.appendChild("PreferenceCategory") {
+                    setAttribute("android:title", "SpolierBlock")
+                    if (categoryLayout != null) setAttribute("android:layout", categoryLayout)
+                }
                 parent.appendChild("Preference") {
                     setAttribute("android:key", SETTINGS_KEY)
-                    setAttribute("android:title", "SpolierBlock")
-                    setAttribute("android:summary", "Spoiler blocking, your library, backup")
-                    if (layout != null) setAttribute("android:layout", "@layout/$layout")
+                    setAttribute("android:title", if (row.inCategory) "Spoiler blocking" else "SpolierBlock")
+                    setAttribute("android:summary", "Your library, what to cover, backup")
+                    if (layout != null) setAttribute("android:layout", layout)
                     if (row.order != null) setAttribute("android:order", row.order)
                     appendChild("intent") {
                         setAttribute("android:targetPackage", pkg) // rewritten in finalize with the final package name
@@ -145,6 +168,34 @@ private fun spoilerBlockPatch(
             if (m == null) Logger.getLogger("SpoilerBlock").warning("text hook not found: ${h.type}->${h.method}(${h.param})")
             else m.addInstruction(0, "invoke-static/range { p0 .. p1 }, $TEXT")
         }
+
+        // Push notifications: every NotificationManager.notify call in the app's own code (androidx's
+        // NotificationManagerCompat and Firebase's display code included) goes through Notifications.notify, which
+        // hides a spoiler in the text. The call sites name the framework method, which obfuscation never renames.
+        val extensionClass = Regex("Ldev/spoilerblock/[^/]+;")
+        val callers = mutableListOf<String>()
+        classDefForEach { c ->
+            if (!extensionClass.matches(c.type) && c.methods.any { m -> m.implementation?.instructions?.any(::isNotify) == true }) callers += c.type
+        }
+        var calls = 0
+        for (type in callers) for (m in mutableClassDefBy(type).methods) {
+            val ins = m.implementation?.instructions ?: continue
+            for (i in ins.indices) {
+                val call = ins[i]
+                if (!isNotify(call)) continue
+                val target = "Ldev/spoilerblock/Notifications;->notify(Landroid/app/NotificationManager;" +
+                    ((call as ReferenceInstruction).reference as MethodReference).parameterTypes.joinToString("") + ")V"
+                val regs = when (call) {
+                    is Instruction35c -> "{" + listOf(call.registerC, call.registerD, call.registerE, call.registerF, call.registerG)
+                        .take(call.registerCount).joinToString(", ") { "v$it" } + "}"
+                    is Instruction3rc -> "{v${call.startRegister} .. v${call.startRegister + call.registerCount - 1}}"
+                    else -> continue
+                }
+                m.replaceInstruction(i, "invoke-static${if (call is Instruction3rc) "/range" else ""} $regs, $target")
+                calls++
+            }
+        }
+        Logger.getLogger("SpoilerBlock").info("notification calls routed through the blocker: $calls in ${callers.size} classes")
 
         // test builds only (the demo): the catalog update talks to a local mock instead of query.wikidata.org
         if (testEndpoint != null) resourceFile("assets/spoilerblock/test-endpoint.txt", false).writeText(testEndpoint)
@@ -206,7 +257,7 @@ val youtubePatch = spoilerBlockPatch(
     tested("com.google.android.youtube", "YouTube", "21.30.216", ApkFileType.APK, 0xFF0000),
     // The settings list exists twice (21.30 shows the "Cairo" one); Morphe's own settings patch edits both as well.
     settingsRows = listOf(SettingsRow("res/xml/settings_fragment.xml"),
-        SettingsRow("res/xml/settings_fragment_cairo.xml", itemLayout = "preference_with_icon", inLastCategory = true)),
+        SettingsRow("res/xml/settings_fragment_cairo.xml", inCategory = true)),
 )
 
 @Suppress("unused")

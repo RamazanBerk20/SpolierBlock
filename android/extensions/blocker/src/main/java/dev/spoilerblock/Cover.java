@@ -22,7 +22,7 @@ final class Cover {
     final Scanner scanner;
     final View item;
     private final ViewGroup host; // item itself, or its list when the item is a plain View (no ViewGroupOverlay)
-    private final LinearLayout root;
+    private final LinearLayout root, row;
     private final TextView msg, once, seen, manage;
     private String message;
     private int group = -1; // the work group "I've seen it" marks; -1: none (unidentified or pending image)
@@ -48,7 +48,7 @@ final class Cover {
         msg.setMaxLines(3);
         msg.setEllipsize(TextUtils.TruncateAt.END);
         root.addView(msg);
-        LinearLayout row = new LinearLayout(ctx);
+        row = new LinearLayout(ctx);
         row.setGravity(Gravity.CENTER);
         row.setPadding(0, dp(8), 0, 0);
         once = button(ctx, p, "Show once");
@@ -60,7 +60,7 @@ final class Cover {
         row.addView(seen);
         row.addView(manage);
         // dialogs and popups have no touch gate of ours: no buttons that would not work
-        if (scanner.activityWindow) root.addView(row);
+        if (scanner.activityWindow) root.addView(row, Ui.wrap());
         host.getOverlay().add(root);
         // TalkBack must not read what the cover hides
         savedA11y = item.getImportantForAccessibility();
@@ -102,6 +102,25 @@ final class Cover {
         return true;
     }
 
+    private Boolean compact;
+
+    /**
+     * A short item (one line of a message, a list row) has no room for the message above the buttons: then they sit
+     * side by side, the buttons as tall as the item allows, so the buttons are never cut off.
+     */
+    private void compact(boolean on) {
+        int h = item.getHeight();
+        for (TextView b : new TextView[]{once, seen, manage}) b.setMinHeight(on ? Math.max(dp(24), Math.min(dp(44), h - dp(4))) : dp(44));
+        if (compact != null && compact == on) return;
+        compact = on;
+        root.setOrientation(on ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+        root.setPadding(dp(12), on ? 0 : dp(12), on ? dp(4) : dp(12), on ? 0 : dp(12));
+        msg.setGravity(on ? Gravity.START | Gravity.CENTER_VERTICAL : Gravity.CENTER);
+        msg.setMaxLines(on ? 2 : 3);
+        msg.setLayoutParams(on ? new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1) : Ui.wrap());
+        row.setPadding(0, on ? 0 : dp(8), 0, 0);
+    }
+
     /** Keeps the cover the size (and, for a plain-View item, the position) of its item. */
     void sync() { layout(false); }
 
@@ -112,6 +131,7 @@ final class Cover {
             if (host != item) { root.setTranslationX(item.getTranslationX()); root.setTranslationY(item.getTranslationY()); }
             return;
         }
+        compact(h < dp(120));
         root.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY));
         root.layout(x, y, x + w, y + h);
         if (host != item) { root.setTranslationX(item.getTranslationX()); root.setTranslationY(item.getTranslationY()); }

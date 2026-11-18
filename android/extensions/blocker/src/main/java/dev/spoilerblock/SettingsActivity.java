@@ -72,9 +72,17 @@ public final class SettingsActivity extends Activity {
         p = Ui.palette(this);
         setTheme(p.dark ? android.R.style.Theme_Material_NoActionBar : android.R.style.Theme_Material_Light_NoActionBar);
         super.onCreate(b);
+        try {
+            build(b);
+        } catch (Throwable t) { // inside another app: never take the app down with us
+            Log.e(SpoilerBlock.TAG, "settings screen failed", t);
+            finish();
+        }
+    }
+
+    private void build(Bundle b) {
         store = Store.get(this);
         tab = b != null ? b.getInt("tab", 0) : 0;
-        setupWindow();
 
         FrameLayout frame = new FrameLayout(this);
         LinearLayout root = new LinearLayout(this);
@@ -144,6 +152,7 @@ public final class SettingsActivity extends Activity {
         frame.addView(notice, nl);
 
         setContentView(frame);
+        setupWindow(); // after setContentView: the insets controller needs the decor view
         showTab(tab);
         store.listen(onConfig);
         if (matcher() == null) new Thread(() -> { // titles for the library and its search
@@ -176,7 +185,7 @@ public final class SettingsActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
-        store.unlisten(onConfig);
+        if (store != null) store.unlisten(onConfig);
         if (SpoilerBlock.I != null) SpoilerBlock.I.catalogListener = null;
         super.onDestroy();
     }
@@ -313,7 +322,7 @@ public final class SettingsActivity extends Activity {
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.VERTICAL);
         top.setPadding(dp(16), dp(12), dp(16), dp(8));
-        EditText search = field("Search a film, show, game or book");
+        EditText search = field("Search titles");
         search.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
         top.addView(search, Ui.matchWidth());
         Ui.Segmented filter = new Ui.Segmented(this, p, new String[]{"All", "Seen", "Blocked"}, new String[]{"all", Config.SEEN, Config.BLOCKED}, "Show");

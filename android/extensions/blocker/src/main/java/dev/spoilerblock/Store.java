@@ -147,17 +147,23 @@ final class Store {
         Log.w(TAG, "companion unavailable (" + why + "), using this app's own settings");
     }
 
-    /** On every activity resume: the companion may have been installed or removed since. Cheap when nothing changed. */
+    /**
+     * On every activity resume: the companion may have been installed or removed since, and a change made elsewhere
+     * while this app sat frozen in the background (cached apps are frozen) is fetched now instead of whenever the
+     * queued change notice arrives.
+     */
     void recheck() {
         if (!owner) io.execute(() -> {
             boolean present = app.getPackageManager().resolveContentProvider(AUTHORITY, 0) != null;
             if (present != remote) connect();
+            else if (remote) refresh();
         });
     }
 
     private void publish(Config c) {
         if (c.json().equals(cfg.json())) return;
         cfg = c;
+        Log.i(TAG, "settings changed in the companion: " + c.works.length() + " works");
         if (remote) prefs.edit().putString("config", c.json()).apply(); // mirror: a fallback starts from the shared list
         main.post(() -> { for (Runnable r : listeners) r.run(); });
     }

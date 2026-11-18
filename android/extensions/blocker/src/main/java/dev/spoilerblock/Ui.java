@@ -116,6 +116,7 @@ final class Ui {
             this.values = values;
             segs = new TextView[labels.length];
             setOrientation(HORIZONTAL);
+            setBaselineAligned(false); // a label that wraps to two lines must not push its segment down
             float r = dp(c, 20);
             setBackground(shape(0, p.outline, dp(c, 1), r));
             setContentDescription(null);
@@ -125,7 +126,7 @@ final class Ui {
                 s.setGravity(Gravity.CENTER);
                 s.setMinHeight(dp(c, 48));
                 s.setMaxLines(2);
-                s.setPadding(dp(c, 12), 0, dp(c, 12), 0);
+                s.setPadding(dp(c, 6), dp(c, 4), dp(c, 6), dp(c, 4));
                 s.setContentDescription(description + ": " + labels[i]);
                 String v = values[i];
                 s.setOnClickListener(x -> { if (!v.equals(value)) { select(v); if (listener != null) listener.picked(v); } });
