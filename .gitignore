@@ -14,3 +14,4 @@ tools/catalog/cache/
 *.log
 .impeccable/
 research/scripts/node_modules
+.claude/
