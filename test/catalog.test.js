@@ -76,3 +76,12 @@ test('posts that are not about a work stay uncovered on the real catalog', { ski
     assert.ok(labels(s).includes(l), `${s} -> ${labels(s)}`);
   }
 });
+
+test('the sentence says what the work is, or that someone played, watched or finished it', { skip: !has && 'no data/catalog.json' }, () => {
+  const labels = (t) => m.evaluate(t).map((g) => built.meta.groups[g][0]);
+  for (const [t, l] of [['Portal is a perfect game', 'Portal'], ['Us is such a creepy movie', 'Us'], ['Heat is the best heist movie ever made', 'Heat'],
+  ['just beat Portal, GLaDOS is terrifying', 'Portal'], ['Dune is one of the best films ever', 'Dune'], ['Portal harika bir oyun', 'Portal'],
+  ['The ending of Portal blew my mind', 'Portal'], ['Frozen is my daughter\'s favourite movie', 'Frozen']]) assert.ok(labels(t).includes(l), `${t} -> ${labels(t)}`);
+  for (const t of ['Turkey is a great place to shoot a movie', 'Switch 2 sales are huge', 'My Switch broke again', 'Palestine will be free',
+  'Reading Proverbs this morning', 'It was a great movie']) assert.deepEqual(labels(t), [], t);
+});

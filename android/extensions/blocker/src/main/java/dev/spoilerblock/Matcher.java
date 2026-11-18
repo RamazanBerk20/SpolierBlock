@@ -249,10 +249,13 @@ public final class Matcher {
             if (c.part || !upperAt(text, c.s)) continue; // remaining rules need a capitalized form
             if (sent == null) sent = sentences(text, tk);
             int si = sent[c.i], mask = typeMask(c.g);
-            boolean near = false;
+            // the sentence says what it is ("Portal is a perfect game") or that someone consumed it ("just beat Portal")
+            Integer verb = c.i > 0 && sent[c.i - 1] == si ? VERBS.get(tk.toks.get(c.i - 1)) : null;
+            boolean said = (c.n > 1 || !SUBJECT.contains(c.key)) && described(tk, sent, c.i + c.n, si, mask) || verb != null && (verb & mask) != 0;
+            boolean near = said;
             for (int j = Math.max(0, c.i - 3), hi = Math.min(len, c.i + c.n + 3); j < hi && !near; j++) near = fits(c, j, si, mask, sent, tk);
             int after = c.i + c.n + (c.i + c.n < len && DIGITS.matcher(tk.toks.get(c.i + c.n)).matches() ? 1 : 0); // "Lost 2. sezon"
-            boolean adjacent = fits(c, c.i - 1, si, mask, sent, tk) || fits(c, after, si, mask, sent, tk);
+            boolean adjacent = said || fits(c, c.i - 1, si, mask, sent, tk) || fits(c, after, si, mask, sent, tk);
             // a name that mostly means something else: a media word near it, right next to it for an everyday word
             // at the start of a sentence ("Go to channel TV")
             if (c.other) { if (c.common && sentenceStart(text, c.s) ? adjacent : near) out.add(c.g); continue; }
@@ -306,6 +309,32 @@ public final class Matcher {
     // a media word of the work's type in the name's own sentence, outside the name
     private static boolean fits(Cand c, int j, int si, int mask, int[] sent, Tokens tk) {
         return j >= 0 && j < sent.length && sent[j] == si && (j < c.i || j >= c.i + c.n) && (contextMask(tk.toks.get(j)) & mask) != 0;
+    }
+
+    // verbs of consuming a work, only right before the name; "<name> is (such) a ... game" (see the JS)
+    private static final Map<String, Integer> VERBS = new HashMap<>();
+    static {
+        for (String w : "beat beating".split(" ")) VERBS.put(w, GAME);
+        for (String w : "binged binging".split(" ")) VERBS.put(w, SCREEN);
+        for (String w : "finished finishing completed started starting".split(" ")) VERBS.put(w, ALL);
+    }
+    private static final java.util.Set<String> SUBJECT = words("it this that he she they we you i there here what who which"),
+        COPULA = words("is was are were es ist war est etait"),
+        DET = words("a an the such my our your his her their this one un una ein eine einen une um uma bir"),
+        STOP = words("to of for in on at with about from that which who where when because but and or if than like as by while");
+    private static java.util.Set<String> words(String s) { return new java.util.HashSet<>(Arrays.asList(s.split(" "))); }
+
+    private static boolean described(Tokens tk, int[] sent, int j, int si, int mask) {
+        boolean cop = j < sent.length && sent[j] == si && COPULA.contains(tk.toks.get(j));
+        if (cop) j++;
+        boolean det = false;
+        for (int k = j; k < Math.min(tk.size(), j + 8) && sent[k] == si; k++) {
+            String t = tk.toks.get(k);
+            if (DET.contains(t)) { det = det || cop || t.equals("bir"); continue; }
+            if (det && (contextMask(t) & mask) != 0) return true;
+            if (STOP.contains(t) && !(t.equals("of") && tk.toks.get(k - 1).equals("one"))) return false; // "one of the best films"
+        }
+        return false;
     }
 
     static int contextMask(String t) {

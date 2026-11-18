@@ -198,11 +198,13 @@
         sent ??= sentences(text, tk);
         const si = sent[c.h.i], mask = this.typeMask(c.g);
         const fits = (j) => sent[j] === si && (j < c.h.i || j >= c.h.i + c.h.n) && (contextMask(tk.toks[j]) & mask) !== 0;
-        let near = false;
+        // the sentence says what it is ("Portal is a perfect game") or that someone consumed it ("just beat Portal")
+        const said = (c.h.n > 1 || !SUBJECT.has(c.key)) && described(tk, sent, c.h.i + c.h.n, si, mask) || (sent[c.h.i - 1] === si && ((VERBS.get(tk.toks[c.h.i - 1]) ?? 0) & mask) !== 0);
+        let near = said;
         for (let j = Math.max(0, c.h.i - 3), hi = Math.min(tk.toks.length, c.h.i + c.h.n + 3); j < hi && !near; j++) near = fits(j);
         // only a media word right next to it ("Lost season 6", "Lost 2. sezon")
         const after = c.h.i + c.h.n + (/^\d+$/.test(tk.toks[c.h.i + c.h.n] ?? '') ? 1 : 0);
-        const adjacent = fits(c.h.i - 1) || fits(after);
+        const adjacent = said || fits(c.h.i - 1) || fits(after);
         // a name that mostly means something else (Palestine, Napoleon) only takes a media word near it; as an everyday
         // word at the start of a sentence ("Go to channel TV") only one right next to it
         if (c.other) { if (c.common && sentenceStart(text, c.s) ? adjacent : near) out.add(c.g); continue; }
@@ -236,6 +238,29 @@
       }
       return m;
     }
+  }
+  // Verbs of consuming a work, counted only right before the name ("beat Portal", "finished Severance")
+  const VERBS = new Map([...'beat beating'.split(' ').map((w) => [w, GAME]), ...'binged binging'.split(' ').map((w) => [w, SCREEN]),
+    ...'finished finishing completed started starting'.split(' ').map((w) => [w, ALL])]);
+  // "<name> is/was (such) a/the ... game": a copula, a determiner, then a media word of the work's type before any
+  // preposition or conjunction ("Turkey is a great place to shoot a movie" stops at "to"). Turkish needs no copula
+  // ("Portal harika bir oyun").
+  // subject pronouns are the subject of "is a great movie" themselves ("It was a great movie"); "Us is" is a title
+  const SUBJECT = new Set('it this that he she they we you i there here what who which'.split(' '));
+  const COPULA = new Set('is was are were es ist war est etait'.split(' '));
+  const DET = new Set('a an the such my our your his her their this one un una ein eine einen une um uma bir'.split(' '));
+  const STOP = new Set('to of for in on at with about from that which who where when because but and or if than like as by while'.split(' '));
+  function described(tk, sent, j, si, mask) {
+    const cop = sent[j] === si && COPULA.has(tk.toks[j]);
+    if (cop) j++;
+    let det = false;
+    for (let k = j; k < Math.min(tk.toks.length, j + 8) && sent[k] === si; k++) {
+      const t = tk.toks[k];
+      if (DET.has(t)) { det ||= cop || t === 'bir'; continue; }
+      if (det && (contextMask(t) & mask) !== 0) return true;
+      if (STOP.has(t) && !(t === 'of' && tk.toks[k - 1] === 'one')) return false; // "one of the best films"
+    }
+    return false;
   }
   function contextMask(t) {
     const m = CONTEXT.get(t);

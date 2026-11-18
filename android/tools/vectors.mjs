@@ -155,6 +155,12 @@ assert.ok(D.run('TLOU2 broke me').some((l) => l.startsWith('The Last of Us')));
 assert.ok(D.run('Rocky 2 is underrated').includes('Rocky II'));
 assert.ok(D.run('Final Fantasy 7 remake').some((l) => l.startsWith('Final Fantasy VII')));
 for (const t of ['Chapter 6 of my thesis', 'Windows 11 update', 'top 5 tips', 'iPhone 16']) assert.deepEqual(D.run(t), [], t);
+// "<name> is a ... game", "beat <name>" (test/catalog.test.js)
+for (const [t, l] of [['Portal is a perfect game', 'Portal'], ['Us is such a creepy movie', 'Us'], ['Heat is the best heist movie ever made', 'Heat'],
+  ['just beat Portal, GLaDOS is terrifying', 'Portal'], ['Dune is one of the best films ever', 'Dune'], ['Portal harika bir oyun', 'Portal'],
+  ['The ending of Portal blew my mind', 'Portal'], ['Frozen is my daughter\'s favourite movie', 'Frozen']]) assert.ok(D.run(t).includes(l), t);
+for (const t of ['Turkey is a great place to shoot a movie', 'Switch 2 sales are huge', 'My Switch broke again', 'Palestine will be free',
+  'Reading Proverbs this morning', 'It was a great movie']) assert.deepEqual(D.run(t), [], t);
 
 // ---------- seeded random corpus ----------
 let seed = 0x5eed;
