@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpolierBlock virtual feed</title>
+<!-- A virtualised feed that behaves like X's timeline: cells are absolutely positioned with translateY, the list
+     measures each cell's height once when it fills the cell and positions the rest from those numbers, cell nodes are
+     recycled (the same node shows another post with new text and a new image), and images arrive late (?d= delays the
+     server). Photos are drawn by a background-image div; the <img> on top is transparent (react-native-web style). -->
+<style>
+  body { font: 15px/1.4 system-ui, sans-serif; margin: 0; background: #fff; color: #0f1419; }
+  #tl { position: relative; max-width: 600px; margin: 0 auto; }
+  .cell { position: absolute; left: 0; right: 0; top: 0; }
+  article { border-bottom: 1px solid #eff3f4; padding: 8px 12px; }
+  article p { margin: 0; }
+  .who { font-size: 13px; color: #536471; line-height: 18px; }
+  .media { position: relative; margin-top: 6px; height: 180px; border-radius: 12px; overflow: hidden; }
+  .media .bg { position: absolute; inset: 0; background-size: cover; background-position: center; }
+  .media img { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
+</style>
+</head>
+<body>
+<div id="tl"></div>
+<script>
+  const IMG = '{{IMG}}';
+  // kind -> [text, image, expected cover label or null]
+  const KINDS = [
+    ['lol', null, null],
+    ['Weekend vibes.', 'spoiler_starwars_trooper.jpg', 'Image from Star Wars'],
+    ['same', null, null],
+    ["Can't believe Walter White ends up like that in the last episode.", null, 'Mentions Breaking Bad'],
+    ['My buddy.', 'clean_dog.jpg', null],
+    ['ok', null, null],
+    ['Comic con!', 'spoiler_got_throne.jpg', 'Possible film, show or game image'],
+    ['Lovely weather in the park today, the ducks were out and so was everyone else in town.', null, null],
+  ];
+  const N = 64;
+  const items = Array.from({ length: N }, (_, i) => {
+    const [text, img, expect] = KINDS[i % KINDS.length];
+    // a new URL per round of kinds, so every round's images load (and are judged) late again
+    return { i, text, img: img && `${IMG}/${img}?r=${Math.floor(i / KINDS.length)}&d=1500`, expect };
+  });
+  const EST = 120, OVERSCAN = 200;
+  const heights = new Array(N).fill(null);
+  const active = new Map(); // item -> node
+  const free = [];
+  const tl = document.getElementById('tl');
+
+  function makeNode() {
+    const n = document.createElement('div');
+    n.className = 'cell';
+    n.innerHTML = '<article><div class="who"></div><p></p><div class="media"><div class="bg"></div><img alt=""></div></article>';
+    tl.appendChild(n);
+    return n;
+  }
+  function fill(n, it) { // recycle: same nodes, new content
+    n.dataset.item = it.i;
+    n.querySelector('.who').textContent = '@user' + it.i;
+    n.querySelector('p').textContent = it.text;
+    const m = n.querySelector('.media'), img = m.querySelector('img'), bg = m.querySelector('.bg');
+    m.hidden = !it.img;
+    if (it.img) { img.src = it.img; bg.style.backgroundImage = `url("${it.img}")`; }
+    else { img.removeAttribute('src'); bg.style.backgroundImage = ''; }
+  }
+  const tops = () => { const t = []; let y = 0; for (let i = 0; i < N; i++) { t.push(y); y += heights[i] ?? EST; } t.push(y); return t; };
+  function render() {
+    let t = tops();
+    const lo = scrollY - OVERSCAN, hi = scrollY + innerHeight + OVERSCAN;
+    const want = new Set();
+    for (let i = 0; i < N; i++) if (t[i + 1] > lo && t[i] < hi) want.add(i);
+    for (const [i, n] of active) if (!want.has(i)) { active.delete(i); free.push(n); }
+    for (const i of want) {
+      if (active.has(i)) continue;
+      const n = free.pop() ?? makeNode();
+      fill(n, items[i]);
+      active.set(i, n);
+      heights[i] = n.offsetHeight; // measured once, when the cell is filled
+    }
+    t = tops();
+    for (const n of free) n.style.transform = 'translateY(-10000px)';
+    for (const [i, n] of active) n.style.transform = `translateY(${t[i]}px)`;
+    tl.style.height = t[N] + 'px';
+  }
+  addEventListener('scroll', () => requestAnimationFrame(render));
+  render();
+
+  // Read by test/e2e/run.mjs: one row per visible cell.
+  window.feedState = () => [...active].sort((a, b) => a[0] - b[0]).map(([i, n]) => {
+    const art = n.querySelector('article'), r = n.getBoundingClientRect();
+    const img = n.querySelector('img'), bg = n.querySelector('.bg');
+    return {
+      i, expect: items[i].expect, measured: heights[i], height: n.offsetHeight, top: r.top, bottom: r.bottom,
+      covered: art.hasAttribute('data-sb-blocked') || !!n.querySelector('[data-sb-blocked]'),
+      label: n.querySelector('sb-overlay')?.shadowRoot?.querySelector('p')?.textContent ?? null,
+      pendingVisible: !!items[i].img && !img.hasAttribute('data-sb-ok') && getComputedStyle(bg).filter === 'none' &&
+        !art.hasAttribute('data-sb-blocked'),
+    };
+  });
+</script>
+</body>
+</html>

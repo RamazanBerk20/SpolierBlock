@@ -25,21 +25,45 @@ const EXT = path.join(ROOT, 'build/e2e-ext', target);
 fs.rmSync(EXT, { recursive: true, force: true });
 fs.cpSync(path.join(ROOT, 'dist', target), EXT, { recursive: true });
 fs.writeFileSync(path.join(EXT, 'data/update-config.json'), JSON.stringify({ endpoint: `http://127.0.0.1:${SPARQL}/sparql` }));
+// The content script needs to run in frames (embedded posts, YouTube live chat). Applied here until manifest.json has it.
+const mf = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
+Object.assign(mf.content_scripts[0], { all_frames: true, match_about_blank: true });
+fs.writeFileSync(path.join(EXT, 'manifest.json'), JSON.stringify(mf, null, 2));
+// SB_CONTENT=<dir with content.js/content.css>: run another content script (e.g. 0.1) against the same pages
+if (process.env.SB_CONTENT) for (const f of ['content.js', 'content.css']) fs.copyFileSync(path.join(process.env.SB_CONTENT, f), path.join(EXT, 'src/content', f));
+const only = process.env.ONLY; // ONLY=1: skip the 0.1 flow and run the 0.2 cases only; ONLY=feed,coverage: those cases
+const want = (s) => !only || only === '1' || only.split(',').includes(s);
 
 const types = { '.jpg': 'image/jpeg', '.png': 'image/png', '.webm': 'video/webm', '.html': 'text/html' };
+const PAGES = { '/': 'fixture.html', '/feed': 'feed.html', '/coverage': 'coverage.html' };
+// a long static feed for the scan-cost measurement: 3,000 posts, one in ten names a work
+const longPage = () => '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>long feed</title></head><body><main id="feed">' +
+  Array.from({ length: 3000 }, (_, i) => `<article class="post"><div class="who">@user${i}</div><p>${i % 10 === 3
+    ? "Can't believe Walter White ends up like that in the last episode."
+    : `Post number ${i}: lovely weather in the park today, the ducks were out and the coffee was good.`}</p></article>`).join('') +
+  '</main><script>window.burst = () => new Promise((r) => { const t = performance.now(), f = document.getElementById("feed");' +
+  'for (let i = 0; i < 500; i++) { const a = document.createElement("article"); a.className = "post";' +
+  'a.innerHTML = `<div class="who">@new${i}</div><p>${i % 10 === 3 ? "Snape kills Dumbledore at the end of the sixth book." : "Another ordinary post about lunch " + i}</p>`; f.prepend(a); }' +
+  'requestAnimationFrame(() => r(performance.now() - t)); });</script></body></html>';
 function staticServer(port, name, html) {
   return http.createServer((req, res) => {
     log[name].push(`${req.method} ${req.url} ua=${(req.headers['user-agent'] ?? '').slice(0, 20)} sec-fetch-site=${req.headers['sec-fetch-site'] ?? ''}`);
     const u = new URL(req.url, 'http://x');
-    if (html && u.pathname === '/') {
+    if (html && u.pathname === '/long') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(longPage()); }
+    const page = html ? PAGES[u.pathname] : u.pathname === '/frame.html' && 'frame.html';
+    if (page) {
       res.writeHead(200, { 'content-type': 'text/html' });
-      return res.end(fs.readFileSync(path.join(ROOT, 'test/e2e/fixture.html'), 'utf8')
-        .replaceAll('{{IMG}}', `http://127.0.0.1:${IMG}`).replaceAll('{{SELF}}', `http://localhost:${PAGE}/img`));
+      return res.end(fs.readFileSync(path.join(ROOT, 'test/e2e', page), 'utf8')
+        .replaceAll('{{IMG}}', `http://127.0.0.1:${IMG}`).replaceAll('{{SELF}}', `http://localhost:${PAGE}/img`)
+        .replaceAll('{{FRAME}}', `http://127.0.0.1:${IMG}/frame.html`));
     }
     const f = path.join(IMG_DIR, path.basename(u.pathname));
     if (!fs.existsSync(f)) { res.writeHead(404); return res.end(); }
-    res.writeHead(200, { 'content-type': types[path.extname(f)] ?? 'application/octet-stream', 'cache-control': 'max-age=3600' });
-    fs.createReadStream(f).pipe(res);
+    // ?d=ms delays the answer: images that arrive after the page has laid out and recycled the post
+    setTimeout(() => {
+      res.writeHead(200, { 'content-type': types[path.extname(f)] ?? 'application/octet-stream', 'cache-control': 'max-age=3600' });
+      fs.createReadStream(f).pipe(res);
+    }, +(u.searchParams.get('d') ?? 0));
   }).listen(port, '127.0.0.1');
 }
 const servers = [staticServer(PAGE, 'page', true), staticServer(IMG, 'img', false)];
@@ -212,6 +236,7 @@ const section = async (name, extra = '') => {
   return s;
 };
 
+if (!only) {
 // 1) first paint: is anything spoilery ever visible? Sample the DOM as early as possible.
 const t0 = Date.now();
 await page.goto(`http://localhost:${PAGE}/`, { waitUntil: 'domcontentloaded' });
@@ -243,12 +268,13 @@ await sleep(1500);
 report.push(`## after popup "Add" Breaking Bad: ${fmt((await state()).filter((x) => x.id === 't-breaking'))}`);
 report.push(`## popup search "star wars"\n${JSON.stringify(await popupSearch('star wars'))}`);
 
-// 3) "I've seen {title}" on an overlay: marks every work of the name group in one write
+// 3) "I've seen it" on an overlay: marks every work of the name group in one write to `works`, keeping the
+// works the 0.1 popup put in `seen` (migrated on that first write)
 const dynLabel = (await state()).find((x) => x.id === 't-dynamic').overlay;
 await page.evaluate(() => document.querySelector('#t-dynamic > sb-overlay').shadowRoot.querySelector('[data-a="seen"]').click());
 await sleep(1500);
-const seenNow = await storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('seen')).seen);
-report.push(`## after overlay "I've seen" on #t-dynamic (${dynLabel}): ${fmt((await state()).filter((x) => x.id === 't-dynamic'))}\nstorage.seen: ${Object.keys(seenNow).length} works: ${Object.values(seenNow).map((w) => w.title).join(' | ')}`);
+const seenNow = await storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('works')).works ?? {});
+report.push(`## after overlay "I've seen" on #t-dynamic (${dynLabel}): ${fmt((await state()).filter((x) => x.id === 't-dynamic'))}\nstorage.works: ${Object.keys(seenNow).length} works: ${Object.values(seenNow).map((w) => `${w.title} (${w.state})`).join(' | ')}`);
 await page.reload({ waitUntil: 'domcontentloaded' });
 await section('after-seen-reload');
 report.push(`## content-script init on this tab (fetch index + parse + first scan): ${await page.evaluate(() => document.documentElement.getAttribute('data-sb-ready'))} ms`);
@@ -302,6 +328,181 @@ report.push(`## content-script init with the updated (stored) index: ${await pag
 await extEval(() => document.getElementById('spoilerMode').click());
 await sleep(500);
 await section('back-to-any-mode-live');
+}
+
+// ---------- 0.2 (docs/agents/contract.md): states, styles, wording, recycled feed, coverage, scan cost ----------
+const META = JSON.parse(fs.readFileSync(path.join(EXT, 'data/index.json'), 'utf8'));
+const worksOf = (label, entry) => Object.fromEntries(META.groups.find((g) => g[0] === label).slice(1)
+  .map((w) => [META.ids[w], { title: META.titles[w], type: META.types[w], year: META.years[w] || null, ts: 1, style: null, ...entry }]));
+const DEF = { enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], catalogUpdate: 'off' };
+const setConfig = async (works, s = {}) => {
+  await storage((a) => (globalThis.browser ?? chrome).storage.local.set(a), { works, settings: { ...DEF, ...s } });
+  await sleep(1000);
+};
+const check = (name, ok, detail = '') => {
+  report.push(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ` :: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}` : ''}`);
+  if (!ok) process.exitCode = 1;
+};
+// cover of an element: null when not covered, else its label, buttons, theme and heights (cover vs block)
+const INFO = `(el) => {
+  if (!el) return 'missing';
+  if (!el.hasAttribute('data-sb-blocked')) return null;
+  const ov = [...el.children, ...(el.shadowRoot?.children ?? [])].find((c) => c.localName === 'sb-overlay');
+  const sr = ov?.shadowRoot;
+  return { label: sr?.querySelector('p')?.textContent ?? null, seen: sr ? !sr.querySelector('[data-a="seen"]').hidden : null,
+    menu: sr?.querySelector('[data-a="menu"]')?.getAttribute('aria-label') ?? null, dark: !!ov?.hasAttribute('data-dark'),
+    oh: ov ? Math.round(ov.getBoundingClientRect().height) : null, bh: Math.round(el.getBoundingClientRect().height) };
+}`;
+const covered = (ids, ctx = page) => ctx.evaluate(`(${JSON.stringify(ids)}).reduce((o, id) => (o[id] = (${INFO})(document.getElementById(id)), o), {})`);
+const lab = (x) => x?.label ?? null;
+const open = async (p) => {
+  await page.goto(`http://localhost:${PAGE}${p}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => document.documentElement.hasAttribute('data-sb-ready'));
+};
+const POSTS = ['t-breaking', 't-neutral', 't-spoiler', 't-got-neutral', 't-got-spoiler', 'i-trooper', 'i-got', 'v-trooper'];
+
+let c;
+if (want('states')) {
+// A) defaults: every work unlisted, style all, unknown images off
+await setConfig({});
+await open('/');
+await settle();
+c = await covered(POSTS);
+report.push(`## 0.2 defaults\n${JSON.stringify(c)}`);
+check('style all: "Mentions {t}"', lab(c['t-breaking']) === 'Mentions Breaking Bad' && lab(c['t-neutral']) === 'Mentions Star Wars', c['t-breaking']);
+check('buttons: Show once, I\'ve seen it, settings', c['t-breaking']?.seen === true && c['t-breaking']?.menu === 'SpolierBlock settings');
+check('image identified: "Image from {t}"', lab(c['i-trooper']) === 'Image from Star Wars', c['i-trooper']);
+check('unknownImages off: unidentified media image not covered', c['i-got'] === null, c['i-got']);
+
+// B) unknownImages on (live)
+await setConfig({}, { unknownImages: true });
+c = await covered(['i-got']);
+check('unknownImages on: "Possible film, show or game image" without "I\'ve seen it"', lab(c['i-got']) === 'Possible film, show or game image' && c['i-got'].seen === false, c['i-got']);
+
+// C) seen never covers; blockUnlisted off covers only blocked groups
+await setConfig(worksOf('Breaking Bad', { state: 'seen' }));
+c = await covered(POSTS);
+check('seen work not covered', c['t-breaking'] === null && lab(c['t-spoiler']) === 'Mentions Star Wars', c);
+await setConfig(worksOf('Game of Thrones', { state: 'blocked' }), { blockUnlisted: false });
+c = await covered(POSTS);
+check('blockUnlisted off: only the blocked work is covered', lab(c['t-got-neutral']) === 'Mentions Game of Thrones' &&
+  c['t-breaking'] === null && c['t-spoiler'] === null && c['i-trooper'] === null, c);
+
+// D) style spoilers: "Checking …" while the classifier runs, then "Spoiler about {t}" or uncovered
+await setConfig({}, { style: 'spoilers' });
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForFunction(() => document.documentElement.hasAttribute('data-sb-ready'));
+const early = await covered(['t-spoiler']);
+report.push(`## style spoilers, first label: ${JSON.stringify(early)}`);
+await settle();
+c = await covered(POSTS);
+check('style spoilers: first label is "Checking {t} for spoilers…" (timing-dependent)', lab(early['t-spoiler']) === 'Checking Star Wars for spoilers…' || lab(early['t-spoiler']) === 'Spoiler about Star Wars', early);
+check('style spoilers: "Spoiler about {t}", neutral post uncovered', lab(c['t-spoiler']) === 'Spoiler about Star Wars' && c['t-neutral'] === null, c);
+check('style spoilers: identified image still covered', lab(c['i-trooper']) === 'Image from Star Wars', c['i-trooper']);
+// per-work style overrides the default
+await setConfig(worksOf('Star Wars', { state: 'blocked', style: 'all' }), { style: 'spoilers' });
+c = await covered(POSTS);
+check('per-work style all under default spoilers', lab(c['t-neutral']) === 'Mentions Star Wars', c['t-neutral']);
+
+// E) "I've seen it" writes works; the settings button sends ui.openSettings
+await setConfig({});
+await extEval(() => { window.__sbMsgs = []; (globalThis.browser ?? chrome).runtime.onMessage.addListener((m) => { window.__sbMsgs.push(m); }); });
+await page.evaluate(() => document.querySelector('#t-breaking > sb-overlay').shadowRoot.querySelector('[data-a="menu"]')?.click());
+await sleep(800);
+check('settings button sends {type: "ui.openSettings"}', (await extEval(() => window.__sbMsgs)).some((m) => m?.type === 'ui.openSettings'));
+await page.evaluate(() => document.querySelector('#t-breaking > sb-overlay').shadowRoot.querySelector('[data-a="seen"]').click());
+await sleep(1200);
+const w = await storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('works')).works);
+c = await covered(['t-breaking']);
+check('"I\'ve seen it" writes works[id].state = "seen"', Object.values(w ?? {}).some((x) => x.title === 'Breaking Bad' && x.state === 'seen') && c['t-breaking'] === null, w);
+
+}
+
+if (want('feed')) {
+// F) virtualised, recycled, height-measured feed with late images (scan images on, unknown images on)
+await setConfig({}, { unknownImages: true });
+await open('/feed');
+const problems = new Set();
+const inspect = async (final) => {
+  const rows = await page.evaluate(() => window.feedState());
+  for (const r of rows) {
+    if (Math.abs(r.height - r.measured) > 0.5) problems.add(`item ${r.i}: height changed after the feed measured it (${r.measured} -> ${r.height})`);
+    if (r.pendingVisible) problems.add(`item ${r.i}: photo visible before its verdict`);
+    if (r.covered && !r.expect) problems.add(`item ${r.i}: clean post covered ("${r.label}")`);
+    if (final && r.expect && r.label !== r.expect) problems.add(`item ${r.i}: label ${JSON.stringify(r.label)}, want "${r.expect}"`);
+  }
+  for (let k = 1; k < rows.length; k++) {
+    const a = rows[k - 1], b = rows[k];
+    if (b.i === a.i + 1 && a.bottom > b.top + 0.5) problems.add(`items ${a.i} and ${b.i} overlap by ${Math.round(a.bottom - b.top)} px`);
+  }
+};
+const feedEnd = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
+for (let y = 0; y <= feedEnd + 300; y += 350) { await page.evaluate((y) => scrollTo(0, y), y); await sleep(120); await inspect(false); }
+for (let y = feedEnd; y >= 0; y -= 500) { await page.evaluate((y) => scrollTo(0, y), y); await sleep(300); await inspect(false); }
+for (const y of [0, Math.round(feedEnd / 2), feedEnd]) {
+  await page.evaluate((y) => scrollTo(0, y), y);
+  const visibleIn = () => page.evaluate(() => document.documentElement.getAttribute('data-sb-busy') === '0' &&
+    [...document.querySelectorAll('.cell')].filter((n) => !n.querySelector('.media').hidden && n.getBoundingClientRect().bottom > 0 &&
+      n.getBoundingClientRect().top < innerHeight).every((n) => n.querySelector('img').hasAttribute('data-sb-ok')));
+  for (let k = 0; k < 120 && !(await visibleIn()); k++) await sleep(500);
+  await sleep(800);
+  await inspect(true);
+}
+await page.screenshot({ path: path.join(OUT, `${target}-feed.png`) });
+const kinds = {};
+for (const p of problems) (kinds[['overlap', 'height changed', 'before its verdict', 'clean post covered', 'label'].find((k) => p.includes(k))] ??= []).push(p);
+check('recycled feed: no overlap, no height change, covers belong to their post, labels right', !problems.size,
+  Object.values(kinds).map((ps) => `${ps.length}x, e.g. ${ps.slice(0, 3).join(' | ')}`).join('; '));
+}
+
+if (want('coverage')) {
+// G) coverage: DMs, typeahead, notifications, quote post, background image, shadow DOM, frames, title, height, theme
+await setConfig({}, { unknownImages: false });
+await open('/coverage');
+await sleep(3000); // sb-late-card is defined after 1.2 s
+for (let k = 0; k < 120 && !(await page.evaluate(() => document.documentElement.getAttribute('data-sb-busy') === '0' && document.querySelector('.pic')?.hasAttribute('data-sb-ok'))); k++) await sleep(500);
+c = await covered(['dm-23', 'dm-22', 'dm-thread', 'ta-spoil', 'ta-clean', 'n-spoil', 'n-clean', 'quoted', 'quote', 'bg-post', 'short', 'short-twin', 'dark-post']);
+report.push(`## coverage\n${JSON.stringify(c)}`);
+check('DM: the message row is covered, not the thread', lab(c['dm-23']) === 'Mentions Breaking Bad' && c['dm-22'] === null && c['dm-thread'] === null, c['dm-23']);
+check('search suggestion covered', lab(c['ta-spoil']) === 'Mentions Breaking Bad' && c['ta-clean'] === null, c['ta-spoil']);
+check('notification covered', lab(c['n-spoil']) === 'Mentions Breaking Bad' && c['n-clean'] === null, c['n-spoil']);
+// the outer post's text includes the quote, so the whole post is covered; its cover hides the inner one
+const quoteVisible = await page.evaluate(() => [...document.querySelectorAll('#quote sb-overlay')].filter((o) => getComputedStyle(o).visibility === 'visible').length);
+check('quote post: covered, one visible cover', lab(c['quote']) === 'Mentions Game of Thrones' && quoteVisible === 1, { quote: c['quote'], quoteVisible });
+check('CSS background-image photo identified', lab(c['bg-post']) === 'Image from Star Wars', c['bg-post']);
+const twinH = await page.evaluate(() => document.getElementById('short-twin').getBoundingClientRect().height);
+check('short block: height unchanged, cover not taller than the block', c['short'] && c['short'].bh === Math.round(twinH) && c['short'].oh <= c['short'].bh, { short: c['short'], twinH });
+check('dark section: dark cover', c['dark-post']?.dark === true && c['short']?.dark === false, { dark: c['dark-post'], light: c['short'] });
+const shadow = await page.evaluate(`({
+  open: (${INFO})(document.getElementById('sh-open').shadowRoot.querySelector('article')),
+  closed: (${INFO})(window.__closedRoot.querySelector('article')),
+  late: (${INFO})(document.getElementById('sh-late').shadowRoot?.querySelector('article')),
+  srcdoc: (${INFO})(document.getElementById('fr-srcdoc').contentDocument?.getElementById('f1')),
+  title: document.title })`);
+const cross = page.frames().find((f) => f.url().includes('frame.html'));
+const crossC = cross ? (await covered(['f2'], cross)).f2 : 'no frame';
+report.push(`## shadow DOM, frames, title\n${JSON.stringify({ ...shadow, cross: crossC })}`);
+check('open shadow root covered', lab(shadow.open) === 'Mentions Star Wars', shadow.open);
+check('closed shadow root covered', lab(shadow.closed) === 'Mentions Harry Potter', shadow.closed);
+check('shadow root attached after the element was seen', lab(shadow.late) === 'Mentions Game of Thrones', shadow.late);
+check('about:srcdoc iframe covered', lab(shadow.srcdoc) === 'Mentions Harry Potter', shadow.srcdoc);
+check('cross-origin iframe covered', lab(crossC) === 'Mentions Star Wars', crossC);
+check('document.title replaced', shadow.title === 'Mentions Breaking Bad', shadow.title);
+
+}
+
+if (want('perf')) {
+// H) scan cost on a long feed: first scan of 3,000 posts (init), and 500 posts inserted at once (to the next frame)
+await setConfig({});
+const burst = async () => { const r = []; for (let k = 0; k < 3; k++) { await open('/long'); r.push(await page.evaluate(() => window.burst())); } return r.sort((a, b) => a - b)[1]; };
+const inits = [];
+for (let k = 0; k < 3; k++) { await open('/long'); inits.push(+(await page.evaluate(() => document.documentElement.getAttribute('data-sb-ready')))); }
+const on = await burst();
+await setConfig({}, { pausedSites: ['localhost'] });
+const offB = await burst();
+report.push(`## scan cost, 3,000-post page: init + first scan ${inits.sort((a, b) => a - b)[1]} ms (median of 3); 500 posts inserted -> next frame ${on.toFixed(1)} ms active, ${offB.toFixed(1)} ms paused`);
+await setConfig({});
+}
 
 // 7) pause the site live
 await storage(() => (globalThis.browser ?? chrome).storage.local.set({ settings: { enabled: true, scanImages: true, pausedSites: ['localhost'], mode: 'any' } }));

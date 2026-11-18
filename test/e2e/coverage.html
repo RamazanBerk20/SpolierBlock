@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Breaking Bad finale reaction thread</title>
+<!-- Surfaces the content script must reach besides plain posts. test/e2e/run.mjs checks each id. -->
+<style>
+  body { font: 15px/1.4 system-ui, sans-serif; margin: 0; background: #fff; color: #111; }
+  main { max-width: 640px; margin: 0 auto; padding: 12px; }
+  section { margin: 12px 0; }
+  .thread { height: 240px; overflow: auto; border: 1px solid #ddd; }
+  .bubble { padding: 4px 8px; }
+  .short { padding: 2px 8px; border: 1px solid #ddd; }
+  .bgpost .pic { height: 160px; background-size: cover; }
+  #dark { background: #15202b; color: #e7e9ea; padding: 8px; }
+  iframe { width: 100%; height: 90px; border: 1px solid #ddd; }
+</style>
+</head>
+<body>
+<main>
+  <!-- direct messages: one long conversation (well over 3,000 characters), messages are role=row -->
+  <section id="dm"><div class="thread" id="dm-thread"></div></section>
+
+  <!-- search suggestions -->
+  <section><input aria-label="Search"><div role="listbox" id="typeahead">
+    <div role="option" id="ta-clean">weather tomorrow</div>
+    <div role="option" id="ta-spoil">Breaking Bad finale explained</div>
+  </div></section>
+
+  <!-- notifications list -->
+  <section><div id="notifs">
+    <div role="listitem" id="n-clean">Ben liked your photo</div>
+    <div role="listitem" id="n-spoil">Cem replied: Walter White dies at the end, sorry</div>
+  </div></section>
+
+  <!-- quote post: only the quoted part names the work -->
+  <article id="quote"><p>This take is wild</p>
+    <blockquote id="quoted">Game of Thrones: the Red Wedding where Robb Stark gets murdered.</blockquote></article>
+
+  <!-- web components -->
+  <sb-open-card id="sh-open"></sb-open-card>
+  <sb-closed-card id="sh-closed"></sb-closed-card>
+  <sb-late-card id="sh-late"></sb-late-card>
+
+  <!-- photo drawn as a CSS background (no img) -->
+  <article class="bgpost" id="bg-post"><p>Weekend vibes.</p><div class="pic" style="background-image: url('{{IMG}}/spoiler_starwars_trooper.jpg?bg=1')"></div></article>
+
+  <!-- a cover must not change the height of a short block: #short-twin is the same box with clean text -->
+  <div class="short" id="short">Walter White</div>
+  <div class="short" id="short-twin">Hello there</div>
+
+  <section id="dark"><article id="dark-post"><p>Lost season 6 finale still makes me angry, the ending made no sense.</p></article></section>
+
+  <iframe id="fr-srcdoc" srcdoc="<article id=f1><p>Snape kills Dumbledore at the end of the sixth book.</p></article>"></iframe>
+  <iframe id="fr-cross" src="{{FRAME}}"></iframe>
+</main>
+<script>
+  const thread = document.getElementById('dm-thread');
+  for (let i = 0; i < 40; i++) {
+    const row = document.createElement('div');
+    row.setAttribute('role', 'row');
+    row.id = 'dm-' + i;
+    row.innerHTML = '<div class="bubble"><span></span></div>';
+    row.querySelector('span').textContent = i === 23 ? 'Did you know Walter White dies in the last episode?'
+      : `Message ${i}: just catching up on the week, work was busy and the weather was strange, talk later maybe.`;
+    thread.appendChild(row);
+  }
+  const card = (txt) => `<article><p>${txt}</p></article>`;
+  customElements.define('sb-open-card', class extends HTMLElement {
+    constructor() { super(); this.attachShadow({ mode: 'open' }).innerHTML = card('Wild that Luke finds out Darth Vader is his father.'); }
+  });
+  customElements.define('sb-closed-card', class extends HTMLElement {
+    constructor() { super(); window.__closedRoot = this.attachShadow({ mode: 'closed' }); window.__closedRoot.innerHTML = card('Snape kills Dumbledore at the end of the sixth book.'); }
+  });
+  // defined (upgraded) after the content script has seen the element
+  setTimeout(() => customElements.define('sb-late-card', class extends HTMLElement {
+    constructor() { super(); this.attachShadow({ mode: 'open' }).innerHTML = card('Game of Thrones: the Red Wedding where Robb Stark gets murdered.'); }
+  }), 1200);
+</script>
+</body>
+</html>
