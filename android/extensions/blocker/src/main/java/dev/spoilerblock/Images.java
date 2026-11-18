@@ -481,7 +481,7 @@ final class Images {
 
     // ---------- pixels ----------
 
-    /** The whole picture squashed to S x S RGB (SigLIP's preprocessing, no crop), see the int[] overload. */
+    /** The whole picture squashed to S x S RGB, as the extension does (see the int[] overload). */
     static byte[] visionPixels(Bitmap src, int S) {
         int w = src.getWidth(), h = src.getHeight();
         int[] px = new int[w * h];
@@ -490,51 +490,59 @@ final class Images {
     }
 
     /**
-     * Resize to S x S with a triangle (linear) filter as wide as the scale factor on each axis, vertical pass then
-     * horizontal, rounding in between: what sharp/libvips 'linear' does (within 2 levels), close to the extension's
-     * canvas and to tools/calibrate-clip.mjs. Plain bilinear sampling aliases on downscaling.
+     * src/background/pixels.js squashCHW, up to the 8-bit rounding (the normalisation is Clip.embed's): the whole picture
+     * squashed to S x S with separable triangle-filter weights (PIL's antialiased BILINEAR, SigLIP's own preprocessing),
+     * horizontal pass first into float32 rows, then vertical, rounded to 8 bits. Same order of operations as the JS.
      */
-    static byte[] visionPixels(int[] argb, int w, int h, int S) {
-        double[] v = new double[S * w * 3]; // vertical pass straight from the source pixels, rounded like 8-bit storage
-        double[][] wy = weights(h, S), wx = weights(w, S);
-        for (int o = 0; o < S; o++) {
-            int lo = (int) wy[o][0];
-            for (int x = 0; x < w; x++) for (int q = 0; q < 3; q++) {
-                double a = 0;
-                for (int k = 1; k < wy[o].length; k++) {
-                    int y = Math.min(Math.max(lo + k - 1, 0), h - 1);
-                    a += wy[o][k] * ((argb[y * w + x] >> (16 - 8 * q)) & 0xFF);
-                }
-                v[(o * w + x) * 3 + q] = Math.round(a);
+    static byte[] visionPixels(int[] argb, int W, int H, int S) {
+        Object[] tx = taps(W, S), ty = taps(H, S);
+        int[] xlo = (int[]) tx[0], ylo = (int[]) ty[0];
+        double[][] xw = (double[][]) tx[1], yw = (double[][]) ty[1];
+        float[] row = new float[H * S * 3];
+        for (int y = 0; y < H; y++) for (int x = 0; x < S; x++) {
+            double r = 0, g = 0, b = 0;
+            double[] w = xw[x];
+            for (int k = 0; k < w.length; k++) {
+                int c = argb[y * W + xlo[x] + k];
+                r += ((c >> 16) & 0xFF) * w[k]; g += ((c >> 8) & 0xFF) * w[k]; b += (c & 0xFF) * w[k];
             }
+            int q = (y * S + x) * 3;
+            row[q] = (float) r; row[q + 1] = (float) g; row[q + 2] = (float) b;
         }
         byte[] rgb = new byte[S * S * 3];
-        for (int o = 0; o < S; o++) {
-            int lo = (int) wx[o][0];
-            for (int y = 0; y < S; y++) for (int q = 0; q < 3; q++) {
-                double a = 0;
-                for (int k = 1; k < wx[o].length; k++) a += wx[o][k] * v[(y * w + Math.min(Math.max(lo + k - 1, 0), w - 1)) * 3 + q];
-                rgb[(y * S + o) * 3 + q] = (byte) Math.max(0, Math.min(255, Math.round(a)));
+        for (int y = 0; y < S; y++) {
+            double[] w = yw[y];
+            for (int x = 0; x < S; x++) {
+                double v0 = 0, v1 = 0, v2 = 0;
+                for (int k = 0; k < w.length; k++) {
+                    int q = ((ylo[y] + k) * S + x) * 3;
+                    v0 += row[q] * w[k]; v1 += row[q + 1] * w[k]; v2 += row[q + 2] * w[k];
+                }
+                int o = (y * S + x) * 3;
+                rgb[o] = (byte) Math.min(255, Math.max(0, Ocr.jsRound(v0)));
+                rgb[o + 1] = (byte) Math.min(255, Math.max(0, Ocr.jsRound(v1)));
+                rgb[o + 2] = (byte) Math.min(255, Math.max(0, Ocr.jsRound(v2)));
             }
         }
         return rgb;
     }
 
-    /** Per output pixel: {first input index, normalised tent weights...}; tent as wide as the scale (1 when enlarging). */
-    private static double[][] weights(int len, int n) {
-        double f = len / (double) n, r = Math.max(f, 1);
-        double[][] out = new double[n][];
-        for (int o = 0; o < n; o++) {
-            double c = (o + 0.5) * f - 0.5;
-            int lo = (int) Math.ceil(c - r), hi = (int) Math.floor(c + r);
-            double[] wt = new double[hi - lo + 2];
-            wt[0] = lo;
+    /** pixels.js taps(n, m): {first input index per output, normalised weights per output}. */
+    private static Object[] taps(int n, int m) {
+        double scale = n / (double) m, fs = Math.max(scale, 1);
+        int[] lo = new int[m];
+        double[][] w = new double[m][];
+        for (int x = 0; x < m; x++) {
+            double c = (x + 0.5) * scale;
+            int a = (int) Math.max(0, Math.floor(c - fs)), hi = (int) Math.min(n, Math.ceil(c + fs));
+            double[] t = new double[hi - a];
             double sum = 0;
-            for (int i = lo; i <= hi; i++) sum += wt[i - lo + 1] = Math.max(0, 1 - Math.abs(i - c) / r);
-            for (int i = 1; i < wt.length; i++) wt[i] /= sum;
-            out[o] = wt;
+            for (int i = a; i < hi; i++) sum += t[i - a] = Math.max(0, 1 - Math.abs((i + 0.5 - c) / fs));
+            for (int i = 0; i < t.length; i++) t[i] /= sum;
+            lo[x] = a;
+            w[x] = t;
         }
-        return out;
+        return new Object[]{lo, w};
     }
 
     private static long hash(byte[] b) {

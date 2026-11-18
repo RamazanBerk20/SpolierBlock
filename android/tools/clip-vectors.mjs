@@ -1,9 +1,10 @@
 // Test vectors for the Java port of the image checks (ClipTest, OcrTest and the demo app's on-device ImageEval).
 // For every image of test/fixtures/images/labels.json:
-//  - <file>.rgb: the 256x256 RGB pixels of the whole image squashed (sharp, as tools/calibrate-clip.mjs prepares them),
-//    and its verdict and embedding from src/background/engine.js's title check on them (shipped model, onnxruntime-web
-//    WASM 1 thread as in the browser, shipped clip-text.bin + clip-meta.json) -> clip-cases.json
-//  - <file>.src.rgba: the image at <= 512 px (sharp), from which Java's own resize (Images.visionPixels) is checked
+//  - <file>.src.rgba: the decoded image (sharp; over 2048 px scaled down first, as the engine does), from which Java's
+//    own resize (Images.visionPixels) is checked
+//  - <file>.rgb: the 256x256 RGB pixels the engine's src/background/pixels.js makes of it, and the verdict and embedding
+//    of src/background/engine.js's title check on them (shipped model, onnxruntime-web WASM 1 thread as in the browser,
+//    shipped clip-text.bin + clip-meta.json) -> clip-cases.json
 // For the ocr* images: <file>.rgba at <= 1280 px (the extension's OCR input size) and the text of the extension's own
 // src/background/ocr.js recognize() on it -> ocr-cases.json.
 // usage (repo root): node android/tools/clip-vectors.mjs
@@ -13,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import * as ort from 'onnxruntime-web';
 import { recognize } from '../../src/background/ocr.js';
+import { squashCHW } from '../../src/background/pixels.js';
 
 ort.env.wasm.numThreads = 1;
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -79,10 +81,13 @@ const chars = fs.readFileSync(path.join(dist, 'models/ocr/dict.txt'), 'utf8').sp
 for (const [file, want] of Object.entries(labels)) {
   const f = path.join(DIR, file);
   if (!fs.existsSync(f)) continue;
-  const px = await sharp(f).removeAlpha().resize(S, S, { fit: 'fill' }).raw().toBuffer();
-  fs.writeFileSync(path.join(out, file + '.rgb'), px);
-  const src = await fit(f, 512, true);
+  const src = await fit(f, 2048, true);
   fs.writeFileSync(path.join(out, file + '.src.rgba'), src.raw);
+  // pixels.js with mean 0 and std 1/255 gives the 8-bit values it rounds to, before the engine's normalisation
+  const u8 = squashCHW({ data: src.raw, width: src.w, height: src.h }, S, [0, 0, 0], [1 / 255, 1 / 255, 1 / 255]);
+  const px = Buffer.alloc(S * S * 3);
+  for (let i = 0; i < S * S; i++) for (let c = 0; c < 3; c++) px[i * 3 + c] = Math.round(u8[c * S * S + i]);
+  fs.writeFileSync(path.join(out, file + '.rgb'), px);
   const v = await embed(px);
   const { hits, top, neg, media, margin, gap } = verdict(v);
   let n2 = 0; for (const a of v) n2 += a * a;
