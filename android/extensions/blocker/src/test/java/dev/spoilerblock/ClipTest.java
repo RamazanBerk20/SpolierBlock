@@ -58,10 +58,9 @@ public class ClipTest {
             }
             System.out.printf("image titles: %d images in %d ms; extension's pixels: %d verdicts differ, embedding 1-cos max %.1e, top score max diff %.3f; " +
                 "Java resize: %d differ, 1-cos max %.1e%n", cases.length(), (System.nanoTime() - t0) / 1_000_000, differ, worst, worstScore, differResize, worstResize);
-            // the same model on ORT 1.32's native x86-64 kernels against the extension's WASM 1.22: measured 1-cos 1.5e-3,
-            // top scores within 0.002 (the cut-offs' smallest step is 0.0275 apart)
+            // the same model and ORT version (1.22) natively on x86-64 against the extension's WASM: measured 1-cos 1.3e-8
             assertEquals("verdicts differ on the extension's own pixels", 0, differ);
-            assertTrue("embedding drifted: 1-cos " + worst, worst < 5e-3);
+            assertTrue("embedding drifted: 1-cos " + worst, worst < 1e-4);
             // another resize (triangle filter vs sharp's lanczos3): a borderline image may flip
             assertTrue("too many verdicts differ after Java's resize: " + differResize, differResize <= 3);
         }

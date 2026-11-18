@@ -15,7 +15,10 @@ import java.util.List;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtSession;
 
-/** Java OCR == src/background/ocr.js recognize() on the same pixels (android/tools/clip-vectors.mjs, ocr* fixtures). */
+/**
+ * Java OCR == src/background/ocr.js recognize() on the same pixels (android/tools/clip-vectors.mjs, ocr* fixtures).
+ * Runs on desktop ONNX Runtime 1.32 (task ocrTestDebugUnitTest, see build.gradle.kts).
+ */
 public class OcrTest {
     private static final File V = new File(System.getProperty("sb.vectors"), "clip");
     private static final File OCR = new File(System.getProperty("sb.dist"), "../models/ocr");
@@ -43,7 +46,7 @@ public class OcrTest {
                 else System.err.println("OCR DIFFERS " + c.getString("file") + "\n  js:   " + c.getString("text").replace('\n', '|') + "\n  java: " + text.replace('\n', '|'));
             }
             System.out.printf("ocr: %d images in %d ms, %d texts identical, %d with other boxes%n", cases.length(), (System.nanoTime() - t0) / 1_000_000, same, boxesOff);
-            // native x86-64 kernels against WASM: a probability on the 0.3 / 0.6 edge may move one box or character
+            // ORT 1.32 natively against the extension's WASM 1.22: a probability on the 0.3 / 0.6 edge may move one box or character
             assertTrue("too many texts differ: " + (cases.length() - same), cases.length() - same <= 1);
         }
     }
