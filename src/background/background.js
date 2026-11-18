@@ -135,6 +135,6 @@ api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   const p = route(msg);
   if (!p) return false;
   // sendResponse + `return true` works on both Firefox and Chrome (Chrome ignores returned promises)
-  p.then(sendResponse, (e) => { console.error('[SpolierBlocker]', msg.type, e); sendResponse({ error: String(e?.message ?? e) }); });
+  p.then(sendResponse, (e) => { console.error('[SpolierBlock]', msg.type, e); sendResponse({ error: String(e?.message ?? e) }); });
   return true;
 });

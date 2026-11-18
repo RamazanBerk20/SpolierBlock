@@ -1,12 +1,12 @@
-# SpolierBlocker
+# SpolierBlock
 
 Version 0.1.0.
 
-SpolierBlocker hides spoilers about films, shows, games, books, manga, anime and comics. It runs entirely on the device.
+SpolierBlock hides spoilers about films, shows, games, books, manga, anime and comics. It runs entirely on the device.
 
 Every work is treated as unseen by default. Anything about an unseen work is covered with the text "Contains spoiler about {title}" and two buttons: "Show once" and "I've seen {title}". Marking a work as seen is stored locally, and from then on posts about it are left alone.
 
-The project name is spelled "SpolierBlocker". The Android package and classes use "SpoilerBlocker".
+The project name is spelled "SpolierBlock". The Android package and classes use "SpoilerBlock".
 
 There are two parts:
 

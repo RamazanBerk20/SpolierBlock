@@ -1,4 +1,4 @@
-package dev.spoilerblocker.demo;
+package dev.spoilerblock.demo;
 
 import android.app.Application;
 import android.util.Log;

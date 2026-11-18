@@ -15,7 +15,7 @@ if (removed.length) bundle.catalog = { ...bundle.catalog, works: bundle.catalog.
 const data = {};
 const storage = { get: async () => ({}), set: async (o) => Object.assign(data, o) };
 // Node only: identify the client as Wikimedia's policy asks (browsers send their own User-Agent)
-const fetchUA = (url, init) => fetch(url, { ...init, headers: { ...init.headers, 'User-Agent': 'spolierblocker-update-test/1.0 (local test run)' } })
+const fetchUA = (url, init) => fetch(url, { ...init, headers: { ...init.headers, 'User-Agent': 'spolierblock-update-test/1.0 (local test run)' } })
   .catch((e) => { console.log('fetch failed:', e.message, e.cause?.message ?? ''); throw e; });
 const t0 = performance.now();
 const meta = await runUpdate({ storage, loadBundle: async () => bundle, fetch: fetchUA, endpoint: ENDPOINT,

@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import android.graphics.Rect;
 import android.graphics.Canvas;
@@ -34,7 +34,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     private static final long RECHECK_MS = 1000;
     private static final long REDISCOVER_MS = 500;
 
-    final SpoilerBlocker sb;
+    final SpoilerBlock sb;
     final View decor;
     private final List<View> containers = new ArrayList<>();
     private final Map<View, Item> items = new WeakHashMap<>();
@@ -54,7 +54,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         @Override public void onViewDetachedFromWindow(View v) { stale = true; }
     }
 
-    Scanner(SpoilerBlocker sb, View decor) {
+    Scanner(SpoilerBlock sb, View decor) {
         this.sb = sb;
         this.decor = decor;
         decor.getViewTreeObserver().addOnPreDrawListener(this);
@@ -78,7 +78,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     @Override public void onGlobalLayout() { layoutDirty = true; }
 
     @Override public boolean onPreDraw() {
-        if (SpoilerBlocker.dead) return true;
+        if (SpoilerBlock.dead) return true;
         try {
             long t0 = System.nanoTime();
             scan();
@@ -86,7 +86,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             statFrames++; statNs += dt; statMaxNs = Math.max(statMaxNs, dt);
             long now = SystemClock.uptimeMillis();
             if (now - statLast > 10_000 && statFrames > 0) {
-                Log.i(SpoilerBlocker.TAG, "scan " + decor.getContext().getClass().getSimpleName() + ": " + statFrames + " frames, avg " +
+                Log.i(SpoilerBlock.TAG, "scan " + decor.getContext().getClass().getSimpleName() + ": " + statFrames + " frames, avg " +
                     statNs / statFrames / 1000 + " us, max " + statMaxNs / 1000 + " us, " + statReads + " item reads (avg " +
                     (statReads > 0 ? statReadNs / statReads / 1000 : 0) + " us), " + statEvals + " matcher runs (avg " +
                     (statEvals > 0 ? statEvalNs / statEvals / 1000 : 0) + " us), " +
@@ -94,7 +94,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
                 statFrames = statNs = statMaxNs = statReads = statReadNs = statEvals = statEvalNs = 0; statLast = now;
             }
         } catch (Throwable t) {
-            SpoilerBlocker.fail("scan", t);
+            SpoilerBlock.fail("scan", t);
         }
         return true;
     }
@@ -172,7 +172,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
                 if (d == null) {
                     shades.put(v, d = new Shade(v));
                     v.getOverlay().add(d);
-                    if (Log.isLoggable(SpoilerBlocker.TAG, Log.DEBUG)) Log.d(SpoilerBlocker.TAG, "shade floating " + v.getClass().getName());
+                    if (Log.isLoggable(SpoilerBlock.TAG, Log.DEBUG)) Log.d(SpoilerBlock.TAG, "shade floating " + v.getClass().getName());
                 }
                 d.setBounds(0, 0, v.getWidth(), v.getHeight());
                 d.update(rectCovers.get(k), loc[0] - r.left, loc[1] - r.top);
@@ -265,17 +265,17 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         String reveal = key.toString(); // "Show once" is for this text with these images
         Cover cv = coverOf(it);
         boolean block = (show.length > 0 || pending) && !sb.revealed.contains(reveal);
-        boolean log = Log.isLoggable(SpoilerBlocker.TAG, Log.DEBUG);
+        boolean log = Log.isLoggable(SpoilerBlock.TAG, Log.DEBUG);
         if (block) {
             if (cv == null) covers.add(cv = new Cover(this, it, parent));
             if (cv.show(m, show, reveal) && log) {
-                Log.d(SpoilerBlocker.TAG, "block " + (show.length == 0 ? "(pending image)" : show[0] == Clip.UNKNOWN ? "(unrecognised image)" : m.labels[show[0]]) +
+                Log.d(SpoilerBlock.TAG, "block " + (show.length == 0 ? "(pending image)" : show[0] == Clip.UNKNOWN ? "(unrecognised image)" : m.labels[show[0]]) +
                     " " + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)) + " text=" + full.replace('\n', '|'));
             }
         } else if (cv != null) {
             cv.remove();
             covers.remove(cv);
-            if (log) Log.d(SpoilerBlocker.TAG, "unblock " + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)));
+            if (log) Log.d(SpoilerBlock.TAG, "unblock " + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)));
         }
     }
 
@@ -292,7 +292,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         h = h * 31 + System.identityHashCode(v.getContentDescription());
         if (v instanceof TextView) h = h * 31 + System.identityHashCode(((TextView) v).getText());
         else if (v instanceof android.widget.ImageView) h = h * 31 + Images.key(v); // a new picture is judged before it is drawn
-        else h = h * 31 + System.identityHashCode(SpoilerBlocker.hookedText.get(v));
+        else h = h * 31 + System.identityHashCode(SpoilerBlock.hookedText.get(v));
         if (v instanceof ViewGroup && !containers.contains(v)) { // nested lists are judged item by item
             ViewGroup g = (ViewGroup) v;
             for (int i = 0; i < g.getChildCount(); i++) h = fingerprint(g.getChildAt(i), h);
@@ -313,13 +313,13 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             CharSequence t = ((TextView) v).getText();
             out.add(t);
         }
-        CharSequence hooked = SpoilerBlocker.hookedText.get(v);
+        CharSequence hooked = SpoilerBlock.hookedText.get(v);
         out.add(hooked);
         if (v.getAccessibilityNodeProvider() != null) {
             try {
                 v.onProvideVirtualStructure(new TextCapture(out));
             } catch (RuntimeException e) { // a host provider that cannot answer outside accessibility: skip that view
-                Log.w(SpoilerBlocker.TAG, "virtual text of " + v.getClass().getName() + ": " + e);
+                Log.w(SpoilerBlock.TAG, "virtual text of " + v.getClass().getName() + ": " + e);
             }
         }
         if (v instanceof ViewGroup) {
@@ -400,7 +400,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         sb.revealed.add(c.text);
         c.remove();
         covers.remove(c);
-        Log.i(SpoilerBlocker.TAG, "shown once");
+        Log.i(SpoilerBlock.TAG, "shown once");
     }
 
     /** Opaque shade over a floating view, repeating the part of the item's cover underneath (so its buttons stay visible). */

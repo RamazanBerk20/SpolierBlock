@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import android.graphics.Bitmap;
 
@@ -10,7 +10,7 @@ import java.io.File;
  * Text inside images, as the extension reads it: Tesseract (here the native build of Tesseract4Android, in the extension
  * tesseract.js) with the same eng 4.0.0_best_int model, LSTM engine and default page segmentation, and the same rule
  * that a mean confidence below 60 means "no text" (photos without text give low-confidence garbage).
- * Not thread-safe; SpoilerBlocker runs it on its image worker thread.
+ * Not thread-safe; SpoilerBlock runs it on its image worker thread.
  */
 final class Ocr implements AutoCloseable {
     static final long TIMEOUT_MS = 10_000; // as the extension's OCR_RUN_MS

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Frame times of the installed demo over a fixed swipe script (dumpsys gfxinfo). Usage: demo-jank.sh <label>
 set -euo pipefail
-p=dev.spoilerblocker.demo
+p=dev.spoilerblock.demo
 adb shell am force-stop $p
 adb shell am start -W -n $p/.MainActivity >/dev/null
 sleep 3

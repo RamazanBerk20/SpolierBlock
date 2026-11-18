@@ -6,7 +6,7 @@ Read the [limits in the README](../README.md#status-and-known-limits) first. In 
 
 ## What the patch does
 
-The bundle contains one patch, `SpoilerBlocker` (enabled by default), registered once per target app.
+The bundle contains one patch, `SpoilerBlock` (enabled by default), registered once per target app.
 
 | App | Package | Tested version | APK type |
 |---|---|---|---|
@@ -18,11 +18,11 @@ Other versions are marked experimental in the patch. Nothing is fingerprinted, s
 
 For each app the patch:
 
-1. Merges the extension (`extensions/blocker.mpe`, package `dev.spoilerblocker`) into the app.
-2. Writes the matcher index and catalog files under `assets/spoilerblocker/`: `index.bin`, `index.json`, `catalog.json`, `common-words.txt`, `catalog-classes.json`, `catalog-info.json`.
-3. Writes the models under `assets/spoilerblocker/`: the spoiler classifier (`spoiler/`), the CLIP vision model and text matrix (`clip/`), and the OCR data (`ocr/eng.traineddata.gz`). They are loaded only when the matching feature is used.
+1. Merges the extension (`extensions/blocker.mpe`, package `dev.spoilerblock`) into the app.
+2. Writes the matcher index and catalog files under `assets/spoilerblock/`: `index.bin`, `index.json`, `catalog.json`, `common-words.txt`, `catalog-classes.json`, `catalog-info.json`.
+3. Writes the models under `assets/spoilerblock/`: the spoiler classifier (`spoiler/`), the CLIP vision model and text matrix (`clip/`), and the OCR data (`ocr/eng.traineddata.gz`). They are loaded only when the matching feature is used.
 4. Adds native libraries: `libonnxruntime.so`, `libonnxruntime4j_jni.so` and the Tesseract set (`libjpeg.so`, `libpngx.so`, `libleptonica.so`, `libtesseract.so`), for `arm64-v8a` and `x86_64`.
-5. Adds one call, `SpoilerBlocker.init(Application)`, at the start of `Application.onCreate`. The Application class is read from the manifest, then the first class up its hierarchy that implements `onCreate()` is patched. Nothing depends on obfuscated names.
+5. Adds one call, `SpoilerBlock.init(Application)`, at the start of `Application.onCreate`. The Application class is read from the manifest, then the first class up its hierarchy that implements `onCreate()` is patched. Nothing depends on obfuscated names.
 6. For X and Instagram, adds text hooks (see below).
 
 The patch changes no permissions. The three apps already hold the network permission the catalog update needs.
@@ -83,8 +83,8 @@ cd android
 - `--install` must be the first argument. It installs over `adb` on the first device, or on `$ANDROID_SERIAL` if that is set.
 - The Morphe CLI merges split bundles into one APK.
 - The package name is read from the input. `.apkm` uses `info.json` (`pname`), `.xapk` uses `manifest.json` (`package_name`), `.apk` and `.apks` use `aapt2`.
-- Supported packages: `com.twitter.android`, `com.google.android.youtube`, `com.instagram.android` and `dev.spoilerblocker.demo` (the demo app). Others stop with exit code 2.
-- Output defaults to `android/out/<package>-spoilerblocker.apk`. A result file `<output>.result.json` is written next to it. Patching must report `"success": true` or the script exits with code 3.
+- Supported packages: `com.twitter.android`, `com.google.android.youtube`, `com.instagram.android` and `dev.spoilerblock.demo` (the demo app). Others stop with exit code 2.
+- Output defaults to `android/out/<package>-spoilerblock.apk`. A result file `<output>.result.json` is written next to it. Patching must report `"success": true` or the script exits with code 3.
 - The patcher runs with `-Xmx3g`.
 
 Environment variables:
@@ -95,11 +95,11 @@ Environment variables:
 | `ANDROID_HOME` | `$HOME/Android/Sdk` | Where to find `aapt2` for `.apk` and `.apks` inputs. |
 | `ANDROID_SERIAL` | first device | Device for `--install`. |
 | `ABIS` | see below | Comma-separated list passed to the CLI as `--striplibs`. |
-| `KEYSTORE` | `android/keystore/spoilerblocker.keystore` | Keystore to sign with. If you set it, the file must exist. |
+| `KEYSTORE` | `android/keystore/spoilerblock.keystore` | Keystore to sign with. If you set it, the file must exist. |
 | `KEYSTORE_PASSWORD` | the generated password, or none when `KEYSTORE` is set | Keystore password. |
 | `KEY_ALIAS` | `Morphe` | Key alias. |
 | `KEY_PASSWORD` | the keystore password | Key password. |
-| `MORPHE_ALL` | unset | When set, `--exclusive` is not passed, so every patch enabled by default in the given sources runs, not only `SpoilerBlocker` and, for YouTube, `GmsCore support`. |
+| `MORPHE_ALL` | unset | When set, `--exclusive` is not passed, so every patch enabled by default in the given sources runs, not only `SpoilerBlock` and, for YouTube, `GmsCore support`. |
 | `MORPHE_PATCHES` | `https://github.com/MorpheApp/morphe-patches` | Source of the official patches used for YouTube. |
 
 Native libraries are reduced to `ABIS`. Defaults:
@@ -115,7 +115,7 @@ The patch only adds its libraries to ABIs the app already ships. So a patched ap
 
 ### Signing
 
-- If no keystore is given and `android/keystore/spoilerblocker.keystore` does not exist, the script creates it once: PKCS12, alias `Morphe`, RSA 4096, valid 10,000 days, subject `CN=SpoilerBlocker local`. The password is random and stored in `android/keystore/password`. Keep both files to install later builds over earlier ones. They are ignored by git.
+- If no keystore is given and `android/keystore/spoilerblock.keystore` does not exist, the script creates it once: PKCS12, alias `Morphe`, RSA 4096, valid 10,000 days, subject `CN=SpoilerBlock local`. The password is random and stored in `android/keystore/password`. Keep both files to install later builds over earlier ones. They are ignored by git.
 - The result is not signed with the original developer key. For X and Instagram, uninstall the store app before installing the patched one.
 - To update an app that Morphe Manager already patched (same signature, data kept), sign with the Manager's key. Export it in Manager (Settings, Signing key, Export). The script's header says it is a BKS file whose alias and password are both `Morphe`. Then run:
 
@@ -136,13 +136,13 @@ The patch only adds its libraries to ABIs the app already ships. So a patched ap
 - New library files are written compressed into the APK. That only installs with `extractNativeLibs=true`. X declares `false`, so the patch sets it to `true`. X's own libraries stay stored in the APK and are now also extracted at install. YouTube and Instagram already extract.
 - The patch adds libraries only to ABI folders the app already has. A new ABI folder would make a device of that ABI pick it and lose the app's own libraries. If the app has no native code at all, it gets both.
 - The libraries have unique names (`libonnxruntime*.so`) and a statically linked C++ runtime.
-- Tesseract4Android's libraries have generic names (`libjpeg.so`, `libpngx.so`, `libleptonica.so`, `libtesseract.so`). The patch rewrites their sonames, and the references between them, to same-length SpoilerBlocker names (`libsbjp.so`, `libsbpn.so`, `libsbleptoni.so`, `libsbtessera.so`). They never bind to a host library that happens to share a soname.
+- Tesseract4Android's libraries have generic names (`libjpeg.so`, `libpngx.so`, `libleptonica.so`, `libtesseract.so`). The patch rewrites their sonames, and the references between them, to same-length SpoilerBlock names (`libsbjp.so`, `libsbpn.so`, `libsbleptoni.so`, `libsbtessera.so`). They never bind to a host library that happens to share a soname.
 - If the host app already ships one of these files for an ABI, it is kept and a warning is logged. Then "Only block actual spoilers" fails closed if the host's version does not fit.
 - The patch touches one manifest attribute and adds assets, libraries and one `onCreate` call. This is why it can run next to other patches, such as the official ones: it does not edit shared classes or resources.
 
 ## Using the bundle in Morphe Manager
 
-Not verified on a real device. The bundle is an ordinary `.mpp` file, so the intent is to add `patches-0.1.0.mpp` as a local patch source in Morphe Manager and enable `SpoilerBlocker` together with the other patches you want. The menu steps are not described here because they could not be checked in this repository. If you do this, also read the signing notes above.
+Not verified on a real device. The bundle is an ordinary `.mpp` file, so the intent is to add `patches-0.1.0.mpp` as a local patch source in Morphe Manager and enable `SpoilerBlock` together with the other patches you want. The menu steps are not described here because they could not be checked in this repository. If you do this, also read the signing notes above.
 
 ## How text and pixels are captured
 
@@ -184,7 +184,7 @@ Open the dialog with the ⋮ button on any cover, or long-press the app icon and
 | Update catalog: Off, Daily, Weekly, Monthly | `catalogMode` | Off |
 | Seen list, with a Remove button per work | `seen` (a set of Wikidata ids) | empty |
 
-"Update now" runs one update at once, even when the mode is Off. The status line shows the catalog size, the number of added titles, the time of the last success and the last error. Preferences are stored in the app's private `spoilerblocker` preferences. An updated index is stored as `spoilerblocker-index.dat` in the app's files directory, and dropped if it was built from a different bundled catalog.
+"Update now" runs one update at once, even when the mode is Off. The status line shows the catalog size, the number of added titles, the time of the last success and the last error. Preferences are stored in the app's private `spoilerblock` preferences. An updated index is stored as `spoilerblock-index.dat` in the app's files directory, and dropped if it was built from a different bundled catalog.
 
 Resource use:
 

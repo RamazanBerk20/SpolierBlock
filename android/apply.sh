@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Patches X, YouTube or Instagram (or the demo app) with SpoilerBlocker and writes a signed, installable APK.
+# Patches X, YouTube or Instagram (or the demo app) with SpoilerBlock and writes a signed, installable APK.
 #
 #   ./apply.sh <app.apk|app.apkm|app.xapk|app.apks> [out.apk]
 #   ./apply.sh --install <app...> [out.apk]      also installs over adb (first device, or $ANDROID_SERIAL)
 #
 # Split bundles are merged into one APK by the Morphe CLI. Native libraries are reduced to ABIS (default: arm64-v8a,
 # plus x86_64 where the app ships a full x86_64 build), which runs on arm64 phones and on x86_64 emulators (Android 11+
-# images translate arm64). The same keystore (keystore/spoilerblocker.keystore, created on first use) signs every
+# images translate arm64). The same keystore (keystore/spoilerblock.keystore, created on first use) signs every
 # build so updates install over each other; it is not the original signature, so uninstall the store app first.
 #
 # To update an app Morphe Manager already patched (same signature, data kept), sign with the Manager's key instead:
@@ -52,25 +52,25 @@ The patched app is installed as app.morphe.android.youtube next to the store app
 (ad blocking, ...) can be added with: MORPHE_ALL=1 ./apply.sh ..." ;;
   com.twitter.android) abis=${ABIS:-arm64-v8a}; note="No official Morphe patches are needed for X." ;;
   com.instagram.android) abis=${ABIS:-arm64-v8a}; note="No official Morphe patches are needed for Instagram." ;;
-  dev.spoilerblocker.demo) abis=${ABIS:-arm64-v8a,armeabi-v7a,x86,x86_64}; note="Demo app." ;;
-  *) echo "error: unsupported package '${pkg:-unknown}' in $in (supported: com.twitter.android, com.google.android.youtube, com.instagram.android, dev.spoilerblocker.demo)" >&2; exit 2 ;;
+  dev.spoilerblock.demo) abis=${ABIS:-arm64-v8a,armeabi-v7a,x86,x86_64}; note="Demo app." ;;
+  *) echo "error: unsupported package '${pkg:-unknown}' in $in (supported: com.twitter.android, com.google.android.youtube, com.instagram.android, dev.spoilerblock.demo)" >&2; exit 2 ;;
 esac
 
-out=${2:-$here/out/$pkg-spoilerblocker.apk}
+out=${2:-$here/out/$pkg-spoilerblock.apk}
 mkdir -p "$(dirname "$out")" "$here/keystore"
-ks=${KEYSTORE:-$here/keystore/spoilerblocker.keystore}
+ks=${KEYSTORE:-$here/keystore/spoilerblock.keystore}
 [ -n "${KEYSTORE:-}" ] && [ ! -f "$ks" ] && { echo "error: keystore $ks not found" >&2; exit 1; }
 if [ ! -f "$ks" ]; then # local signing key, created once; keep it to install updates over earlier builds
   (umask 077; head -c 24 /dev/urandom | base64 | tr -d '/+=' > "$here/keystore/password")
   "$(dirname "$java")/keytool" -genkeypair -keystore "$ks" -storetype PKCS12 -alias Morphe -keyalg RSA -keysize 4096 \
-    -validity 10000 -dname "CN=SpoilerBlocker local" -storepass "$(cat "$here/keystore/password")" >/dev/null
+    -validity 10000 -dname "CN=SpoilerBlock local" -storepass "$(cat "$here/keystore/password")" >/dev/null
 fi
 pw=${KEYSTORE_PASSWORD:-$( [ -n "${KEYSTORE:-}" ] || cat "$here/keystore/password")}
 exclusive=(--exclusive)
 [ -n "${MORPHE_ALL:-}" ] && exclusive=()
 echo "patching $pkg -> $out (ABIs: $abis)"
 status=0
-"$java" -Xmx3g -jar "$cli" patch -p "$mpp" -e SpoilerBlocker "${official[@]}" "${exclusive[@]}" \
+"$java" -Xmx3g -jar "$cli" patch -p "$mpp" -e SpoilerBlock "${official[@]}" "${exclusive[@]}" \
   --striplibs "$abis" --keystore "$ks" --keystore-password "$pw" --keystore-entry-alias "${KEY_ALIAS:-Morphe}" --keystore-entry-password "${KEY_PASSWORD:-$pw}" \
   -t "$tmp/work" -r "$out.result.json" -o "$out" "${install[@]}" "$in" || status=$?
 [ "$status" = 0 ] && grep -q '"success" *: *true' "$out.result.json" || { echo "error: patching failed (exit $status), see $out.result.json" >&2; exit 3; }

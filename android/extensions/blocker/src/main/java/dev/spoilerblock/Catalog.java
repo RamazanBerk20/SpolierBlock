@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import java.io.IOException;
 import java.io.Reader;

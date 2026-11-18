@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import android.app.Activity;
 import android.content.Context;
@@ -125,10 +125,10 @@ final class Cover {
     /** x, y in screen coordinates; the gesture was already taken away from the app. */
     void tap(float x, float y) {
         if (hit(once, x, y)) scanner.revealOnce(this);
-        else if (hit(seen, x, y) && groups.length > 0 && groups[0] != Clip.UNKNOWN) SpoilerBlocker.I.markSeen(groups[0]);
+        else if (hit(seen, x, y) && groups.length > 0 && groups[0] != Clip.UNKNOWN) SpoilerBlock.I.markSeen(groups[0]);
         else if (hit(manage, x, y)) {
             Activity a = activity(item.getContext());
-            if (a != null) ManageDialog.show(a, SpoilerBlocker.I);
+            if (a != null) ManageDialog.show(a, SpoilerBlock.I);
         }
     }
 

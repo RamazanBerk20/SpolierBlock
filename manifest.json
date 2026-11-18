@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "SpolierBlocker",
+  "name": "SpolierBlock",
   "version": "0.1.0",
   "description": "Blacks out spoilers about movies, shows, games and books you have not seen. Runs fully offline.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "spolierblocker@local",
+      "id": "spolierblock@local",
       "strict_min_version": "140.0",
       "data_collection_permissions": { "required": ["none"] }
     },
@@ -29,7 +29,7 @@
     { "resources": ["data/index.bin", "data/index.json", "data/catalog-info.json"], "matches": ["<all_urls>"] }
   ],
   "action": {
-    "default_title": "SpolierBlocker",
+    "default_title": "SpolierBlock",
     "default_popup": "src/popup/popup.html"
   },
   "options_ui": {

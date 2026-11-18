@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import android.graphics.Matrix;
 import android.os.Bundle;

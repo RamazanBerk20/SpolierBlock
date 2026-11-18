@@ -1,4 +1,4 @@
-package dev.spoilerblocker.demo;
+package dev.spoilerblock.demo;
 
 import android.content.Context;
 import android.os.SystemClock;
@@ -17,7 +17,7 @@ import java.nio.file.Files;
 
 /**
  * On-device parity run (test app only): scores android/build/vectors/spoiler-eval.json, pushed to the app's external
- * files dir, with the patched-in dev.spoilerblocker.Classifier (reached by reflection: the demo is built without it).
+ * files dir, with the patched-in dev.spoilerblock.Classifier (reached by reflection: the demo is built without it).
  * Logs "SBEVAL i p" per post; android/tools/spoiler-eval-compare.mjs compares them with the extension's values.
  */
 final class SpoilerEval {
@@ -26,14 +26,14 @@ final class SpoilerEval {
             try {
                 JSONArray cases = new JSONObject(new String(Files.readAllBytes(new File(c.getExternalFilesDir(null), "spoiler-eval.json").toPath()),
                     StandardCharsets.UTF_8)).getJSONArray("cases");
-                byte[] model = read(c, "spoilerblocker/spoiler/model_int8.onnx");
+                byte[] model = read(c, "spoilerblock/spoiler/model_int8.onnx");
                 ByteBuffer buf = ByteBuffer.allocateDirect(model.length).put(model);
                 buf.flip();
-                Class<?> k = Class.forName("dev.spoilerblocker.Classifier");
+                Class<?> k = Class.forName("dev.spoilerblock.Classifier");
                 Constructor<?> ctor = k.getDeclaredConstructor(ByteBuffer.class, String.class, String.class);
                 ctor.setAccessible(true);
-                Object cl = ctor.newInstance(buf, new String(read(c, "spoilerblocker/spoiler/tokenizer.json"), StandardCharsets.UTF_8),
-                    new String(read(c, "spoilerblocker/spoiler/meta.json"), StandardCharsets.UTF_8));
+                Object cl = ctor.newInstance(buf, new String(read(c, "spoilerblock/spoiler/tokenizer.json"), StandardCharsets.UTF_8),
+                    new String(read(c, "spoilerblock/spoiler/meta.json"), StandardCharsets.UTF_8));
                 Method prob = k.getDeclaredMethod("prob", String.class);
                 prob.setAccessible(true);
                 long t0 = SystemClock.uptimeMillis();

@@ -8,7 +8,7 @@ const { Matcher } = globalThis.SBMatcher;
 
 const DIR = 'build/corpus';
 fs.mkdirSync(DIR, { recursive: true });
-const UA = { 'user-agent': 'spoilerblocker-fp-test/1.0 (local test)' };
+const UA = { 'user-agent': 'spoilerblock-fp-test/1.0 (local test)' };
 const TOPICS = ['Bread', 'Coffee', 'Rain', 'Bicycle', 'Tax', 'Kitchen', 'Dog', 'Garden', 'Hospital', 'Train', 'Mortgage',
   'Football', 'Tennis', 'Marathon', 'Volcano', 'Photosynthesis', 'Inflation', 'Vaccine', 'Electricity', 'Plumbing',
   'Wedding', 'Birthday', 'Holiday', 'Airport', 'Cheese', 'Wine', 'Agriculture', 'Pottery', 'Carpentry', 'Hiking',

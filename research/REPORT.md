@@ -1,4 +1,4 @@
-# SpolierBlocker on-device ML research (2026-11-18)
+# SpolierBlock on-device ML research (2026-11-18)
 
 Machine: i5-10500H (6 cores / 12 threads), 16 GB RAM, Intel UHD 630 integrated GPU. `lspci` lists an RTX 3060, but `nvidia-smi` reports "No devices were found" and Vulkan sees only the Intel GPU, so in practice there is no dGPU. Other agents were running at the same time (load average 6–10), so latencies are ±30%; compare only rows measured back to back. Browsers: Chrome for Testing 157 and Zen 1.24.2b (Firefox 160), both with temporary profiles and the probe extension in `ext-probe/`.
 

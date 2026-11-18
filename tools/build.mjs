@@ -110,7 +110,7 @@ async function catalogClasses() {
       if (fs.existsSync(f)) rows = JSON.parse(fs.readFileSync(f, 'utf8'));
       else {
         const r = await fetch('https://query.wikidata.org/sparql', { method: 'POST', body: new URLSearchParams({ query: q }),
-          headers: { 'User-Agent': 'spolierblocker-build/1.0', Accept: 'application/sparql-results+json' } });
+          headers: { 'User-Agent': 'spolierblock-build/1.0', Accept: 'application/sparql-results+json' } });
         rows = (await r.json()).results.bindings;
       }
       for (const r of rows) set.add(qid(r.c.value));

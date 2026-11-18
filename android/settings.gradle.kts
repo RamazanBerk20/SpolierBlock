@@ -1,4 +1,4 @@
-rootProject.name = "spoilerblocker-android"
+rootProject.name = "spoilerblock-android"
 
 pluginManagement {
     repositories {
@@ -17,7 +17,7 @@ plugins {
 
 settings {
     extensions {
-        defaultNamespace = "dev.spoilerblocker"
+        defaultNamespace = "dev.spoilerblock"
     }
 }
 

@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import org.json.JSONObject;
 
@@ -17,7 +17,7 @@ import ai.onnxruntime.OrtSession;
  * "Only block actual spoilers": the browser extension's sentence classifier (models/spoiler: MiniLM fine-tuned, int8
  * ONNX) on ONNX Runtime, run exactly like src/background/engine.js classify(): strip @handles, split into sentences,
  * score each sentence alone (the int8 model quantizes activations per tensor, so batching/padding would shift the
- * scores), take the max. Not thread-safe; SpoilerBlocker runs it on one worker thread.
+ * scores), take the max. Not thread-safe; SpoilerBlock runs it on one worker thread.
  */
 final class Classifier implements AutoCloseable {
     // text.split(/(?<=[.!?])\s+|\n+/) with JavaScript's \s

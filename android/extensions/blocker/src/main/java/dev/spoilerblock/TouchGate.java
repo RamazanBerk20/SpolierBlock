@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import android.view.ActionMode;
 import android.view.KeyEvent;
@@ -24,11 +24,11 @@ final class TouchGate implements Window.Callback {
     void toApp(MotionEvent ev) { app.dispatchTouchEvent(ev); }
 
     @Override public boolean dispatchTouchEvent(MotionEvent ev) {
-        if (!SpoilerBlocker.dead) {
+        if (!SpoilerBlock.dead) {
             try {
                 if (scanner.onTouch(this, ev)) return true;
             } catch (Throwable t) {
-                SpoilerBlocker.fail("touch", t);
+                SpoilerBlock.fail("touch", t);
             }
         }
         return app.dispatchTouchEvent(ev);

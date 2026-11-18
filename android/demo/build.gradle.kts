@@ -3,10 +3,10 @@ plugins {
 }
 
 android {
-    namespace = "dev.spoilerblocker.demo"
+    namespace = "dev.spoilerblock.demo"
     compileSdk = 36
     defaultConfig {
-        applicationId = "dev.spoilerblocker.demo"
+        applicationId = "dev.spoilerblock.demo"
         minSdk = 28
         targetSdk = 36
         versionCode = 1

@@ -81,7 +81,7 @@ if (target === 'firefox') {
     'network.proxy.type': 1, 'network.proxy.http': '127.0.0.1', 'network.proxy.http_port': PROXY,
     'network.proxy.ssl': '127.0.0.1', 'network.proxy.ssl_port': PROXY, 'network.proxy.no_proxies_on': 'localhost, 127.0.0.1',
     'network.proxy.allow_hijacking_localhost': false,
-    'extensions.webextensions.uuids': JSON.stringify({ 'spolierblocker@local': uuid }),
+    'extensions.webextensions.uuids': JSON.stringify({ 'spolierblock@local': uuid }),
   };
   const args = ['web-ext', 'run', '--source-dir', EXT, '--firefox=/usr/bin/zen-browser',
     '--no-reload', '--no-input', '--start-url', 'about:blank', `--arg=--remote-debugging-port=${BIDI}`,
@@ -121,7 +121,7 @@ if (target === 'firefox') {
     return (r.result ?? r).result?.value;
   };
   let host;
-  for (let i = 0; i < 30 && !host; i++) { host = await chromeEval(`WebExtensionPolicy.getByID('spolierblocker@local')?.mozExtensionHostname ?? null`); if (!host) await sleep(500); }
+  for (let i = 0; i < 30 && !host; i++) { host = await chromeEval(`WebExtensionPolicy.getByID('spolierblock@local')?.mozExtensionHostname ?? null`); if (!host) await sleep(500); }
   extBase = `moz-extension://${host}`;
   await chromeEval(`openTrustedLinkIn(${JSON.stringify('moz-extension://' + host + '/src/popup/popup.html')}, 'tab'); true`);
   let ctx;
@@ -328,7 +328,7 @@ report.push(`## requests to the cross-origin image server (refetches by the back
 const hosts = {};
 for (const l of log.proxy) hosts[l] = (hosts[l] ?? 0) + 1;
 report.push(`## requests that tried to leave the machine (proxy log, all refused; unique)\n${Object.entries(hosts).map(([h, n]) => `${n}x ${h}`).join('\n') || '(none)'}`);
-report.push(`## page console\n${consoleLog.filter((l) => /SpolierBlocker|error/i.test(l)).slice(0, 40).join('\n') || '(clean)'}`);
+report.push(`## page console\n${consoleLog.filter((l) => /SpolierBlock|error/i.test(l)).slice(0, 40).join('\n') || '(clean)'}`);
 fs.writeFileSync(path.join(OUT, `${target}-report.txt`), report.join('\n\n') + '\n');
 console.log(report.join('\n\n'));
 

@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -41,7 +41,7 @@ import java.util.zip.GZIPInputStream;
  */
 final class Images {
     private static final int MIN_DP = 96, MAX_SIDE = 768, QUEUE = 8;
-    static final String TAG = SpoilerBlocker.TAG;
+    static final String TAG = SpoilerBlock.TAG;
 
     /** Verdict of one media view for one drawable (main thread). */
     static final class State {
@@ -52,7 +52,7 @@ final class Images {
         State(long key) { this.key = key; }
     }
 
-    private final SpoilerBlocker sb;
+    private final SpoilerBlock sb;
     private final Map<View, State> states = new WeakHashMap<>();
     private final ArrayDeque<Job> jobs = new ArrayDeque<>(); // guarded by itself; newest first (just scrolled in)
     private Thread worker;
@@ -85,7 +85,7 @@ final class Images {
         Job(View view, State state, Bitmap bmp) { this.view = view; this.state = state; this.bmp = bmp; }
     }
 
-    Images(SpoilerBlocker sb) {
+    Images(SpoilerBlock sb) {
         this.sb = sb;
         density = sb.app.getResources().getDisplayMetrics().density;
     }
@@ -160,7 +160,7 @@ final class Images {
                 sb.main.post(() -> { if (states.get(old.view) == old.state && !old.state.done) states.remove(old.view); });
             }
             if (worker == null) {
-                worker = new Thread(this::work, "SpoilerBlocker-images");
+                worker = new Thread(this::work, "SpoilerBlock-images");
                 worker.start();
             }
             jobs.notifyAll();
@@ -191,7 +191,7 @@ final class Images {
             return;
         }
         if (renderer == null) { // one off-screen renderer for every capture: creating one costs a new GPU surface
-            thread = new android.os.HandlerThread("SpoilerBlocker-capture");
+            thread = new android.os.HandlerThread("SpoilerBlock-capture");
             thread.start();
             reader = ImageReader.newInstance(MAX_SIDE, MAX_SIDE, PixelFormat.RGBA_8888, 3,
                 HardwareBuffer.USAGE_GPU_COLOR_OUTPUT | HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE | HardwareBuffer.USAGE_CPU_READ_OFTEN);
@@ -212,7 +212,7 @@ final class Images {
             }, new android.os.Handler(thread.getLooper()));
             renderer = new HardwareRenderer();
             renderer.setSurface(reader.getSurface());
-            node = new RenderNode("SpoilerBlocker");
+            node = new RenderNode("SpoilerBlock");
             node.setPosition(0, 0, MAX_SIDE, MAX_SIDE);
             renderer.setContentRoot(node);
         }
@@ -308,15 +308,15 @@ final class Images {
     private void load() {
         long t0 = SystemClock.uptimeMillis(), native0 = android.os.Debug.getNativeHeapAllocatedSize();
         try {
-            clip = new Clip(sb.directAsset("spoilerblocker/clip/vision_model_quantized.onnx"), sb.asset("spoilerblocker/clip/clip-text.bin"),
-                new String(sb.asset("spoilerblocker/clip/clip-meta.json"), java.nio.charset.StandardCharsets.UTF_8));
+            clip = new Clip(sb.directAsset("spoilerblock/clip/vision_model_quantized.onnx"), sb.asset("spoilerblock/clip/clip-text.bin"),
+                new String(sb.asset("spoilerblock/clip/clip-meta.json"), java.nio.charset.StandardCharsets.UTF_8));
             long t1 = SystemClock.uptimeMillis();
-            File dir = new File(sb.app.getNoBackupFilesDir(), "spoilerblocker-ocr");
+            File dir = new File(sb.app.getNoBackupFilesDir(), "spoilerblock-ocr");
             File data = new File(dir, "tessdata/eng.traineddata");
             if (!data.exists()) { // tesseract reads its model from a file
                 data.getParentFile().mkdirs();
                 File tmp = new File(data.getPath() + ".tmp");
-                try (InputStream in = new GZIPInputStream(sb.app.getAssets().open("spoilerblocker/ocr/eng.traineddata.gz"));
+                try (InputStream in = new GZIPInputStream(sb.app.getAssets().open("spoilerblock/ocr/eng.traineddata.gz"));
                      FileOutputStream out = new FileOutputStream(tmp)) {
                     byte[] buf = new byte[1 << 16];
                     for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
@@ -348,7 +348,7 @@ final class Images {
         Matcher m = sb.matcher;
         if (!sb.updatedIndex || raw.isEmpty() || raw.get(0)[0] == Clip.UNKNOWN) return raw;
         if (mappedFor != m) {
-            Matcher b = new Matcher(sb.asset("spoilerblocker/index.bin"), new String(sb.asset("spoilerblocker/index.json"), java.nio.charset.StandardCharsets.UTF_8));
+            Matcher b = new Matcher(sb.asset("spoilerblock/index.bin"), new String(sb.asset("spoilerblock/index.json"), java.nio.charset.StandardCharsets.UTF_8));
             Map<String, List<Integer>> byLabel = new java.util.HashMap<>();
             for (int g = 0; g < m.labels.length; g++) byLabel.computeIfAbsent(m.labels[g], x -> new ArrayList<>()).add(g);
             Map<String, Integer> pos = new java.util.HashMap<>();

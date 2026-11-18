@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -279,7 +279,7 @@ final class CatalogUpdate {
                 // of the three target apps uses HttpURLConnection's default handler for its own traffic.
                 c.setRequestProperty("Accept", "application/sparql-results+json");
                 c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-                c.setRequestProperty("User-Agent", "SpoilerBlocker-catalog-update/0.2");
+                c.setRequestProperty("User-Agent", "SpoilerBlock-catalog-update/0.2");
                 byte[] body = form.getBytes(StandardCharsets.UTF_8);
                 c.setFixedLengthStreamingMode(body.length);
                 try (OutputStream o = c.getOutputStream()) { o.write(body); }

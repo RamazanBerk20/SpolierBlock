@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -18,7 +18,7 @@ import ai.onnxruntime.OrtSession;
 /**
  * Image verdict of the browser extension (src/background/engine.js clipCheck): the CLIP ViT-B/32 int8 vision model and
  * the shipped int8 text matrix of the 2,000 most popular names (dist data/clip-text.bin + clip-meta.json), with the same
- * media gate, min score, margin and title gap. Not thread-safe; SpoilerBlocker runs it on its one worker thread.
+ * media gate, min score, margin and title gap. Not thread-safe; SpoilerBlock runs it on its one worker thread.
  */
 final class Clip implements AutoCloseable {
     static final int S = 224;

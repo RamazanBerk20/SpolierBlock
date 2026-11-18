@@ -106,7 +106,7 @@ async function clipCheck(key, src) {
       // group -1 = media image whose title is not certain: blocked as "unrecognised", never offered as "I've seen"
       hits = best - second >= meta.titleGap ? scores.slice(0, 3).map(([r, s]) => [meta.rowGroup[r], s]) : [[-1, best]];
     }
-    if (hits.length) console.debug('[SpolierBlocker] clip', key.slice(0, 80), hits, 'neg', neg.toFixed(3));
+    if (hits.length) console.debug('[SpolierBlock] clip', key.slice(0, 80), hits, 'neg', neg.toFixed(3));
   }
   verdictCache.set(key, hits);
   if (verdictCache.size > 2000) verdictCache.delete(verdictCache.keys().next().value);

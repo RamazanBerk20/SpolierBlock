@@ -1,4 +1,4 @@
-// SpolierBlocker content script (document_start). Matches catalog works in text synchronously from a
+// SpolierBlock content script (document_start). Matches catalog works in text synchronously from a
 // MutationObserver (runs before paint), sends media to the background for CLIP/OCR verdicts, and covers
 // the containing "post-like" block with an overlay.
 (() => {
@@ -446,5 +446,5 @@
     root.setAttribute('data-sb-ready', String(Math.round(performance.now() - t0))); // init time in ms, read by the e2e test
     setBusy(0);
   }
-  init().catch((e) => { console.error('[SpolierBlocker]', e); clearTimeout(failSafe); root.setAttribute('data-sb-ready', ''); });
+  init().catch((e) => { console.error('[SpolierBlock]', e); clearTimeout(failSafe); root.setAttribute('data-sb-ready', ''); });
 })();

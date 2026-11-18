@@ -1,4 +1,4 @@
-package dev.spoilerblocker.demo;
+package dev.spoilerblock.demo;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -31,16 +31,16 @@ final class ImageEval {
             try {
                 File dir = c.getExternalFilesDir(null);
                 JSONArray cases = new JSONArray(new String(Files.readAllBytes(new File(dir, "clip-cases.json").toPath()), StandardCharsets.UTF_8));
-                Class<?> clipK = Class.forName("dev.spoilerblocker.Clip"), imgK = Class.forName("dev.spoilerblocker.Images");
+                Class<?> clipK = Class.forName("dev.spoilerblock.Clip"), imgK = Class.forName("dev.spoilerblock.Images");
                 Constructor<?> ctor = clipK.getDeclaredConstructor(ByteBuffer.class, byte[].class, String.class);
                 ctor.setAccessible(true);
                 long t0 = SystemClock.uptimeMillis();
-                byte[] model = read(c, "spoilerblocker/clip/vision_model_quantized.onnx");
+                byte[] model = read(c, "spoilerblock/clip/vision_model_quantized.onnx");
                 ByteBuffer buf = ByteBuffer.allocateDirect(model.length).put(model);
                 buf.flip();
                 model = null;
-                Object clip = ctor.newInstance(buf, read(c, "spoilerblocker/clip/clip-text.bin"),
-                    new String(read(c, "spoilerblocker/clip/clip-meta.json"), StandardCharsets.UTF_8));
+                Object clip = ctor.newInstance(buf, read(c, "spoilerblock/clip/clip-text.bin"),
+                    new String(read(c, "spoilerblock/clip/clip-meta.json"), StandardCharsets.UTF_8));
                 Log.i("SBIMG", "clip loaded in " + (SystemClock.uptimeMillis() - t0) + " ms");
                 Method pixels = imgK.getDeclaredMethod("clipPixels", Bitmap.class), check = clipK.getDeclaredMethod("check", byte[].class);
                 pixels.setAccessible(true);
@@ -75,13 +75,13 @@ final class ImageEval {
                 ((AutoCloseable) clip).close();
 
                 // OCR fixtures
-                Class<?> ocrK = Class.forName("dev.spoilerblocker.Ocr");
+                Class<?> ocrK = Class.forName("dev.spoilerblock.Ocr");
                 Constructor<?> oc = ocrK.getDeclaredConstructor(File.class);
                 oc.setAccessible(true);
                 File data = new File(c.getCacheDir(), "ocr-eval");
                 File td = new File(data, "tessdata/eng.traineddata");
                 td.getParentFile().mkdirs();
-                try (InputStream in = new java.util.zip.GZIPInputStream(c.getAssets().open("spoilerblocker/ocr/eng.traineddata.gz"));
+                try (InputStream in = new java.util.zip.GZIPInputStream(c.getAssets().open("spoilerblock/ocr/eng.traineddata.gz"));
                      java.io.FileOutputStream out = new java.io.FileOutputStream(td)) {
                     byte[] bb = new byte[1 << 16];
                     for (int n; (n = in.read(bb)) > 0; ) out.write(bb, 0, n);
@@ -91,9 +91,9 @@ final class ImageEval {
                 Log.i("SBIMG", "ocr loaded in " + (SystemClock.uptimeMillis() - l0) + " ms");
                 Method text = ocrK.getDeclaredMethod("text", Bitmap.class, java.util.concurrent.ScheduledExecutorService.class);
                 text.setAccessible(true);
-                Class<?> mK = Class.forName("dev.spoilerblocker.Matcher");
-                Object m = mK.getConstructor(byte[].class, String.class).newInstance(read(c, "spoilerblocker/index.bin"),
-                    new String(read(c, "spoilerblocker/index.json"), StandardCharsets.UTF_8));
+                Class<?> mK = Class.forName("dev.spoilerblock.Matcher");
+                Object m = mK.getConstructor(byte[].class, String.class).newInstance(read(c, "spoilerblock/index.bin"),
+                    new String(read(c, "spoilerblock/index.json"), StandardCharsets.UTF_8));
                 String[] labels = (String[]) mK.getField("labels").get(m);
                 String[] ids = (String[]) mK.getField("ids").get(m);
                 Method eval = mK.getMethod("evaluate", String.class, boolean[].class);

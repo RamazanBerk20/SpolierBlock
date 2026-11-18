@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -16,7 +16,7 @@ import java.util.List;
 
 /** Management screen: master switch, spoiler mode and the list of seen works. Built in code: the extension has no resources. */
 final class ManageDialog {
-    static void show(Activity a, SpoilerBlocker sb) {
+    static void show(Activity a, SpoilerBlock sb) {
         try {
             int pad = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 20, a.getResources().getDisplayMetrics());
             LinearLayout box = new LinearLayout(a);
@@ -66,9 +66,9 @@ final class ManageDialog {
                 rb.setText(labels[i]);
                 rb.setId(1000 + i);
                 modes.addView(rb);
-                if (SpoilerBlocker.CATALOG_MODES[i].equals(sb.catalogMode())) rb.setChecked(true);
+                if (SpoilerBlock.CATALOG_MODES[i].equals(sb.catalogMode())) rb.setChecked(true);
             }
-            modes.setOnCheckedChangeListener((g, id) -> sb.setCatalogMode(SpoilerBlocker.CATALOG_MODES[id - 1000]));
+            modes.setOnCheckedChangeListener((g, id) -> sb.setCatalogMode(SpoilerBlock.CATALOG_MODES[id - 1000]));
             box.addView(modes);
             TextView status = new TextView(a);
             status.setText(sb.catalogStatus());
@@ -107,7 +107,7 @@ final class ManageDialog {
             new AlertDialog.Builder(a).setTitle("Spoiler settings").setView(sv).setPositiveButton("Close", null)
                 .setOnDismissListener(d -> sb.catalogListener = null).show();
         } catch (Throwable t) {
-            SpoilerBlocker.fail("manage dialog", t);
+            SpoilerBlock.fail("manage dialog", t);
         }
     }
 

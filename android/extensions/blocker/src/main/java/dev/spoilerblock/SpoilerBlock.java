@@ -1,4 +1,4 @@
-package dev.spoilerblocker;
+package dev.spoilerblock;
 
 import android.app.Activity;
 import android.app.Application;
@@ -28,11 +28,11 @@ import java.util.WeakHashMap;
  * Entry point called by the patch from Application.onCreate. App-agnostic: it only uses public Android APIs on the
  * host's views. Every call from host code is wrapped; any internal error disables the blocker for the session.
  */
-public final class SpoilerBlocker implements Application.ActivityLifecycleCallbacks {
-    static final String TAG = "SpoilerBlocker";
-    static final String EXTRA_MANAGE = "dev.spoilerblocker.MANAGE";
+public final class SpoilerBlock implements Application.ActivityLifecycleCallbacks {
+    static final String TAG = "SpoilerBlock";
+    static final String EXTRA_MANAGE = "dev.spoilerblock.MANAGE";
     static volatile boolean dead;
-    static SpoilerBlocker I;
+    static SpoilerBlock I;
 
     final Application app;
     final SharedPreferences prefs;
@@ -49,15 +49,15 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
 
     public static void init(Application app) {
         try {
-            if (I == null && !dead) I = new SpoilerBlocker(app);
+            if (I == null && !dead) I = new SpoilerBlock(app);
         } catch (Throwable t) {
             fail("init", t);
         }
     }
 
-    private SpoilerBlocker(Application app) {
+    private SpoilerBlock(Application app) {
         this.app = app;
-        prefs = app.getSharedPreferences("spoilerblocker", 0);
+        prefs = app.getSharedPreferences("spoilerblock", 0);
         enabled = prefs.getBoolean("enabled", true);
         spoilerMode = "spoiler".equals(prefs.getString("mode", "any"));
         scanImages = prefs.getBoolean("scanImages", true);
@@ -87,7 +87,7 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
     static void fail(String where, Throwable t) {
         dead = true;
         Log.e(TAG, "disabled for this session after an error in " + where, t);
-        SpoilerBlocker b = I;
+        SpoilerBlock b = I;
         if (b == null) return;
         b.main.post(() -> {
             for (Scanner s : b.scanners.values()) try { s.clear(); } catch (Throwable ignored) { }
@@ -102,7 +102,7 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
                 long t0 = SystemClock.uptimeMillis();
                 CatalogUpdate.Stored st = storedIndex();
                 Matcher m = st != null ? new Matcher(st.bin, st.json)
-                    : new Matcher(asset("spoilerblocker/index.bin"), new String(asset("spoilerblocker/index.json"), StandardCharsets.UTF_8));
+                    : new Matcher(asset("spoilerblock/index.bin"), new String(asset("spoilerblock/index.json"), StandardCharsets.UTF_8));
                 seenWork = seenArray(m);
                 updatedIndex = st != null;
                 matcher = m;
@@ -112,7 +112,7 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
             } catch (Throwable t) {
                 fail("index load", t);
             }
-        }, "SpoilerBlocker-index");
+        }, "SpoilerBlock-index");
         loader.start();
     }
 
@@ -155,7 +155,7 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
     private volatile boolean updating;
     Runnable catalogListener; // the open manage dialog's status line
 
-    private File indexFile() { return new File(app.getFilesDir(), "spoilerblocker-index.dat"); }
+    private File indexFile() { return new File(app.getFilesDir(), "spoilerblock-index.dat"); }
 
     /** The updated index, or null when there is none or it was built from an older bundled catalog than this APK's. */
     private CatalogUpdate.Stored storedIndex() {
@@ -174,7 +174,7 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
     }
 
     private String bundledBuiltAt() throws Exception {
-        return CatalogUpdate.builtAtOf(new String(asset("spoilerblocker/catalog-info.json"), StandardCharsets.UTF_8));
+        return CatalogUpdate.builtAtOf(new String(asset("spoilerblock/catalog-info.json"), StandardCharsets.UTF_8));
     }
 
     String catalogMode() { return prefs.getString("catalogMode", "off"); }
@@ -192,7 +192,7 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
         if (updating) return;
         updating = true;
         notifyCatalog();
-        Thread t = new Thread(this::updateCatalog, "SpoilerBlocker-catalog");
+        Thread t = new Thread(this::updateCatalog, "SpoilerBlock-catalog");
         t.setPriority(Thread.MIN_PRIORITY);
         t.start();
     }
@@ -206,9 +206,9 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
         String error = null;
         try {
             CatalogUpdate.Bundle b = new CatalogUpdate.Bundle(
-                Catalog.readWorks(new java.io.InputStreamReader(app.getAssets().open("spoilerblocker/catalog.json"), StandardCharsets.UTF_8)),
-                new String(asset("spoilerblocker/common-words.txt"), StandardCharsets.UTF_8),
-                CatalogUpdate.readClasses(new String(asset("spoilerblocker/catalog-classes.json"), StandardCharsets.UTF_8)),
+                Catalog.readWorks(new java.io.InputStreamReader(app.getAssets().open("spoilerblock/catalog.json"), StandardCharsets.UTF_8)),
+                new String(asset("spoilerblock/common-words.txt"), StandardCharsets.UTF_8),
+                CatalogUpdate.readClasses(new String(asset("spoilerblock/catalog-classes.json"), StandardCharsets.UTF_8)),
                 bundledBuiltAt());
             CatalogUpdate.Stored prev = storedIndex();
             u = new CatalogUpdate(CatalogUpdate.httpTransport(), endpoint(), Thread::sleep);
@@ -249,7 +249,7 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
     // Test builds only: the demo patch ships this asset to point the update at a local mock server.
     private String endpoint() {
         try {
-            return new String(asset("spoilerblocker/test-endpoint.txt"), StandardCharsets.UTF_8).trim();
+            return new String(asset("spoilerblock/test-endpoint.txt"), StandardCharsets.UTF_8).trim();
         } catch (Exception e) {
             return CatalogUpdate.ENDPOINT;
         }
@@ -282,7 +282,7 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
         private final long base = rt.totalMemory() - rt.freeMemory();
         private volatile boolean running = true;
         volatile long peak;
-        private final Thread t = new Thread(this, "SpoilerBlocker-heap");
+        private final Thread t = new Thread(this, "SpoilerBlock-heap");
 
         HeapProbe() { t.setDaemon(true); t.start(); }
 
@@ -362,7 +362,7 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
             if (worker == null) worker = java.util.concurrent.Executors.newSingleThreadExecutor(r -> new Thread(() -> {
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); // never compete with frames
                 r.run();
-            }, "SpoilerBlocker-classify"));
+            }, "SpoilerBlock-classify"));
             worker.execute(() -> classify(text));
         }
         return true; // covered until the verdict is in
@@ -393,8 +393,8 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
     private void loadClassifier() {
         long t0 = SystemClock.uptimeMillis(), native0 = android.os.Debug.getNativeHeapAllocatedSize();
         try {
-            classifier = new Classifier(directAsset("spoilerblocker/spoiler/model_int8.onnx"), new String(asset("spoilerblocker/spoiler/tokenizer.json"), StandardCharsets.UTF_8),
-                new String(asset("spoilerblocker/spoiler/meta.json"), StandardCharsets.UTF_8));
+            classifier = new Classifier(directAsset("spoilerblock/spoiler/model_int8.onnx"), new String(asset("spoilerblock/spoiler/tokenizer.json"), StandardCharsets.UTF_8),
+                new String(asset("spoilerblock/spoiler/meta.json"), StandardCharsets.UTF_8));
             Log.i(TAG, "spoiler model loaded in " + (SystemClock.uptimeMillis() - t0) + " ms, native heap +" +
                 (android.os.Debug.getNativeHeapAllocatedSize() - native0) / (1 << 20) + " MB");
         } catch (Throwable t) { // e.g. no ONNX Runtime library for this ABI: every match stays covered, as in "any" mode
@@ -505,7 +505,7 @@ public final class SpoilerBlocker implements Application.ActivityLifecycleCallba
         if (launch == null || sm == null) return;
         launch.setAction(Intent.ACTION_MAIN).addCategory(EXTRA_MANAGE).putExtra(EXTRA_MANAGE, true);
         try {
-            sm.addDynamicShortcuts(Collections.singletonList(new ShortcutInfo.Builder(app, "spoilerblocker")
+            sm.addDynamicShortcuts(Collections.singletonList(new ShortcutInfo.Builder(app, "spoilerblock")
                 .setShortLabel("Spoiler settings").setIntent(launch).build()));
         } catch (RuntimeException e) { // rate limits / launcher quirks: not fatal
             Log.w(TAG, "shortcut not added: " + e);

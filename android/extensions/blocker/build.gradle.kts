@@ -5,7 +5,7 @@ extension {
 }
 
 configure<ApplicationExtension> {
-    namespace = "dev.spoilerblocker"
+    namespace = "dev.spoilerblock"
     defaultConfig { minSdk = 28 }
     testOptions { unitTests.isReturnDefaultValues = true }
 }

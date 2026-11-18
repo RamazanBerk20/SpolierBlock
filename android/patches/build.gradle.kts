@@ -1,11 +1,11 @@
-group = "dev.spoilerblocker"
+group = "dev.spoilerblock"
 
 patches {
     about {
-        name = "SpoilerBlocker patches"
+        name = "SpoilerBlock patches"
         description = "Blacks out feed items about films, shows, games and books you have not seen. On-device only."
         source = "na" // Manager reads "na" as absent (no repository to open)
-        author = "SpoilerBlocker"
+        author = "SpoilerBlock"
         contact = "na"
         website = "na"
         // The bundle links against morphe-patcher (GPLv3).
@@ -33,25 +33,25 @@ tasks.processResources {
     from(indexDir) {
         // the index, plus what the opt-in catalog update rebuilds it from (zip-compressed in the bundle and the APK)
         include("index.bin", "index.json", "catalog.json", "common-words.txt", "catalog-classes.json", "catalog-info.json")
-        into("spoilerblocker")
+        into("spoilerblock")
     }
     from(modelDir) {
         include("model_int8.onnx", "tokenizer.json", "meta.json")
-        into("spoilerblocker/spoiler")
+        into("spoilerblock/spoiler")
     }
     // "Scan images and video": the extension's CLIP vision model and text matrix (npm run build), and its OCR model
     from(rootDir.resolve("../dist/firefox")) {
         include("models/clip/onnx/vision_model_quantized.onnx", "data/clip-text.bin", "data/clip-meta.json")
-        eachFile { path = "spoilerblocker/clip/$name" }
+        eachFile { path = "spoilerblock/clip/$name" }
         includeEmptyDirs = false
     }
     from(rootDir.resolve("../node_modules/@tesseract.js-data/eng/4.0.0_best_int")) {
         include("eng.traineddata.gz")
-        into("spoilerblocker/ocr")
+        into("spoilerblock/ocr")
     }
     // arm64-v8a for phones, x86_64 for emulators; 32-bit devices fail closed (spoiler mode blocks every match)
     from(provider { ortNative.map { zipTree(it) } }) {
         include("jni/arm64-v8a/*.so", "jni/x86_64/*.so")
-        into("spoilerblocker")
+        into("spoilerblock")
     }
 }
