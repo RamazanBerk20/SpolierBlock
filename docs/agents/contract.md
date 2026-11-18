@@ -31,7 +31,7 @@ same JSON (local preferences, or the companion app's provider when it is install
 - `style`: `"all"` (cover anything about the work), `"spoilers"` (cover only what the classifier calls a spoiler) or
   `null` (use `settings.style`).
 - `type`: `movie`, `tv`, `game`, `book`, `anime`, `manga`, `comic`.
-- Custom ids are `custom:<n>`. A custom work may also carry a `works` entry.
+- Custom ids are `custom:<n>`. A custom work may also carry a `works` entry. Custom works are indexed as catalog works with a popularity of 1000 (`CUSTOM_POP` in `src/background/catalog-update.js`, `SpoilerBlock.CUSTOM_POP` on Android; `CustomWorkTest` checks that they agree) and the aliases as given.
 
 Migration from 0.1: `seen[id]` becomes `works[id]` with `state: "seen"`; `settings.mode` `"any"`/`"spoiler"` becomes
 `settings.style` `"all"`/`"spoilers"`.
@@ -71,6 +71,8 @@ Identical strings on both platforms. `{t}` is the group label; with several grou
 | style `spoilers`, classifier said spoiler | `Spoiler about {t}` |
 | image identified as the work | `Image from {t}` |
 | unidentified media image | `Possible film, show or game image` |
+
+Android only: while an item's pictures are still being judged it shows `Checking image…` (the extension dims pending pictures instead).
 
 Buttons: `Show once`, `I've seen it` (absent for the unidentified image) and a settings button (`⋮`, accessible name
 `SpolierBlock settings`).

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildIndex } from './build-index.mjs';
 import { createHash } from 'node:crypto';
-import { TYPES, EXCLUDE, qid, subclassQuery } from '../src/shared/catalog-rules.js';
+import { TYPES, EXCLUDE, qid, subclassQuery, SAME_SENSE_ROOTS } from '../src/shared/catalog-rules.js';
 import { buildClipText, packClipText, clipRows, rowFamilies, pinned, visionModel, VISION } from './build-clip-text.mjs';
 
 const args = process.argv.slice(2);
@@ -96,24 +96,26 @@ for (const target of ['firefox', 'chrome']) {
   console.log(`built ${out}`);
 }
 
+async function subclasses(root) {
+  const q = subclassQuery(root), f = `tools/catalog/cache/${createHash('sha1').update(q).digest('hex')}.json`;
+  if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
+  const r = await fetch('https://query.wikidata.org/sparql', { method: 'POST', body: new URLSearchParams({ query: q }),
+    headers: { 'User-Agent': 'spolierblock-build/1.0', Accept: 'application/sparql-results+json' } });
+  return (await r.json()).results.bindings;
+}
+
 // type -> class QIDs (roots + P279+ subclasses of the deep roots, minus excluded), from the catalog build's query cache
 async function catalogClasses() {
   const out = {};
   for (const [type, { roots, deep }] of Object.entries(TYPES)) {
     const set = new Set(roots);
-    for (const root of deep) {
-      const q = subclassQuery(root), f = `tools/catalog/cache/${createHash('sha1').update(q).digest('hex')}.json`;
-      let rows;
-      if (fs.existsSync(f)) rows = JSON.parse(fs.readFileSync(f, 'utf8'));
-      else {
-        const r = await fetch('https://query.wikidata.org/sparql', { method: 'POST', body: new URLSearchParams({ query: q }),
-          headers: { 'User-Agent': 'spolierblock-build/1.0', Accept: 'application/sparql-results+json' } });
-        rows = (await r.json()).results.bindings;
-      }
-      for (const r of rows) set.add(qid(r.c.value));
-    }
+    for (const root of deep) for (const r of await subclasses(root)) set.add(qid(r.c.value));
     for (const x of EXCLUDE) set.delete(x);
     out[type] = [...set];
   }
+  // classes of franchises, series and fictional things, for the update's "name means something else" check
+  const same = new Set(SAME_SENSE_ROOTS);
+  for (const root of SAME_SENSE_ROOTS) for (const r of await subclasses(root)) same.add(qid(r.c.value));
+  out.sameSense = [...same];
   return out;
 }

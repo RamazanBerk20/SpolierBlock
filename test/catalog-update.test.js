@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { buildIndex } from '../tools/build-index.mjs';
-import { runUpdate, rebuild, mergeCatalog, alarmPlan, deltaQuery } from '../src/background/catalog-update.js';
+import { runUpdate, rebuild, mergeCatalog, alarmPlan, deltaQuery, fetchDelta, customWorks, MAX_SENSE_QUERIES } from '../src/background/catalog-update.js';
 const { Matcher } = globalThis.SBMatcher;
 
 const catalog = JSON.parse(fs.readFileSync(new URL('./fixtures/catalog.small.json', import.meta.url)));
@@ -44,16 +44,23 @@ test('delta query: dated on or after the window start, sitelinks bar, P31 return
   assert.match(q, /wdt:P31 \?cls/);
 });
 
-// fake SPARQL endpoint: answers the four query kinds runUpdate sends
+// fake SPARQL endpoint: answers the query kinds runUpdate sends. senses: label -> [{ e, sl, cs }]; kinds: id -> classes
 const json = (rows) => new Response(JSON.stringify({ results: { bindings: rows } }), { status: 200 });
 const wd = (id) => ({ value: 'http://www.wikidata.org/entity/' + id });
-function mockFetch(mode) {
+function mockFetch(mode, { senses = {}, kinds = {}, senseMode = 'ok' } = {}) {
   const calls = [];
   return Object.assign(async (url, init) => {
     const q = new URLSearchParams(init.body).get('query');
     calls.push(q);
     if (mode === '429') return new Response('slow down', { status: 429, headers: { 'retry-after': '1' } });
     if (mode === 'bad') return new Response('<html>oops</html>', { status: 200 });
+    if (q.includes('VALUES ?l')) {
+      if (senseMode === '429') return new Response('slow down', { status: 429, headers: { 'retry-after': '1' } });
+      const labels = [...q.matchAll(/("(?:[^"\\]|\\.)*")@en/g)].map((m) => JSON.parse(m[1]));
+      return json(labels.flatMap((l) => (senses[l] ?? []).filter((s) => !s.alias === q.includes('rdfs:label ?l'))
+        .map((s) => ({ l: { value: l }, e: wd(s.e), sl: { value: String(s.sl) }, cs: { value: (s.cs ?? []).map((c) => wd(c).value).join(' ') } }))));
+    }
+    if (q.includes('wdt:P7937')) return json(Object.entries(kinds).flatMap(([id, cs]) => cs.map((c) => ({ w: wd(id), v: wd(c) }))));
     if (q.includes('hint:rangeSafe')) return json(q.includes('P577') ? [{ item: wd(NEW.id), cls: wd('Q7889'), sl: { value: '22' } }, { item: wd(NEW.id), cls: wd('Q5'), sl: { value: '22' } },
       { item: wd(catalog.works[0].id), cls: wd('Q11424'), sl: { value: '300' } }, { item: wd('Q1'), cls: wd('Q13442814'), sl: { value: '40' } }] : []);
     if (q.includes('rdfs:label ?en')) return json([{ w: wd(NEW.id), en: { value: NEW.title } }]);
@@ -72,7 +79,7 @@ test('successful update stores a rebuilt index in one write; the new work matche
   const meta = await runUpdate({ storage, loadBundle: async () => bundle, fetch, endpoint: 'http://mock/sparql', now: 1000, sleep: async () => {} });
   assert.equal(meta.lastError, null);
   assert.equal(meta.added, 1);
-  assert.equal(meta.stats.queries, 6); // 3 date windows, labels, years, aliases (no characters below popularity 40)
+  assert.equal(meta.stats.queries, 9); // 3 date windows, labels, kinds, years, aliases, 2 senses (no characters below popularity 40)
   const idx = storage.data.catalogIndex, bin = Buffer.from(idx.bin, 'base64');
   const m = new Matcher(bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.length), idx.meta);
   assert.deepEqual(m.evaluate('Moonfall Protocol has a wild ending').map((g) => idx.meta.groups[g][0]), ['Moonfall Protocol']);
@@ -95,3 +102,51 @@ for (const mode of ['429', 'bad']) {
     if (mode === '429') { assert.equal(meta.stats.queries, 3); assert.deepEqual(sleeps, [1000, 1000]); } // Retry-After honoured, then give up
   });
 }
+
+const net = (fetch) => ({ fetch, endpoint: 'x', stats: { queries: 0, bytes: 0 }, sleep: async () => {} });
+const delta = (fetch) => fetchDelta({ classes: bundle.classes, sinceYear: 2025, known: new Set(catalog.works.map((w) => w.id)),
+  ambiguous: () => false, words, ...net(fetch) });
+
+test('update: works that are not told as a story are left out', async () => {
+  assert.deepEqual(await delta(mockFetch('ok', { kinds: { [NEW.id]: ['Q7889', 'Q93204'] } })), []); // a documentary
+  assert.equal((await delta(mockFetch('ok', { kinds: { [NEW.id]: ['Q7889', 'Q93204', 'Q130232'] } }))).length, 1); // ...but a drama
+});
+
+test('update: names that mostly mean something else are flagged like in the catalog build', async () => {
+  const senses = {
+    'Moonfall Protocol': [{ e: 'Q123', sl: 90, cs: ['Q11424'] }], // a film: the same sense, not "other"
+    MFP: [{ e: 'Q456', sl: 80, cs: ['Q4830453'], alias: true }], // a company known as MFP
+  };
+  const [w] = await delta(mockFetch('ok', { senses }));
+  assert.deepEqual(w.other, ['MFP']);
+});
+
+test('update: when the sense lookup fails, short names count as "other" and the update still succeeds', async () => {
+  const [w] = await delta(mockFetch('ok', { senseMode: '429' }));
+  assert.deepEqual(w.other, ['Moonfall Protocol', 'MFP']);
+  const storage = memStorage();
+  const meta = await runUpdate({ storage, loadBundle: async () => bundle, fetch: mockFetch('ok', { senseMode: '429' }), endpoint: 'x', now: 1, sleep: async () => {} });
+  assert.equal(meta.lastError, null);
+  assert.deepEqual(storage.data.catalogAdded[0].other, ['Moonfall Protocol', 'MFP']);
+});
+
+test('update: the sense lookup sends at most MAX_SENSE_QUERIES queries', async () => {
+  const many = Array.from({ length: 4000 }, (_, i) => `Q${990000000 + i}`);
+  const fetch = async (url, init) => {
+    const q = new URLSearchParams(init.body).get('query');
+    if (q.includes('hint:rangeSafe')) return json(q.includes('P577') ? many.map((id) => ({ item: wd(id), cls: wd('Q7889'), sl: { value: '20' } })) : []);
+    if (q.includes('rdfs:label ?en')) return json([...q.matchAll(/wd:(Q\d+)/g)].map((m) => ({ w: wd(m[1]), en: { value: `Title ${m[1]}` } })));
+    return json([]);
+  };
+  const n = net(fetch), senseCalls = [];
+  const spy = async (url, init) => { if (new URLSearchParams(init.body).get('query').includes('VALUES ?l')) senseCalls.push(1); return fetch(url, init); };
+  const works = await fetchDelta({ classes: bundle.classes, sinceYear: 2025, known: new Set(), ambiguous: () => false, words, ...n, fetch: spy });
+  assert.equal(works.length, 4000);
+  assert.equal(senseCalls.length, MAX_SENSE_QUERIES);
+  // 10 batches of 150 names were looked up (no other sense); the rest, unconfirmed two-word titles, fail safe
+  assert.equal(works.filter((w) => w.other).length, 4000 - (MAX_SENSE_QUERIES / 2) * 150);
+});
+
+test('hand-entered works are never flagged', () => {
+  assert.ok(customWorks([{ id: 'custom:1', title: 'Palestine', type: 'book' }], words).every((w) => !w.other));
+});

@@ -27,7 +27,18 @@ export const WORLD = [
       ['Crown Saga', 'en'], ['The Saga of the Hollow Crown', 'en'], ['Hollow Saga', 'mul'], ['THCS', 'en'], ['Krone', 'mul'], ['La Corona Hueca', 'mul'], ['Saga', 'en']],
     chars: [['Queen Mara Vell', 40], ['Sir Odric Fane', 90], ['Ash', 99], ['Lady Corin Wex', 40], ['Tomas Brightwater', 3], ['Old Gant', 12],
       ['Prince Elio Vane', 55], ['Captain Rusk', 7], ['Wren of Haldor', 21], ['Sister Imma Kell', 30], ['Sir Odric Fane', 90]] },
+  // a documentary (genre P136): not told as a story, dropped
+  { id: 'Q900000010', en: 'Tides of Glass', cls: ['Q11424'], kinds: ['Q93204'], sl: 30, dates: { P577: [D(2026, '04')] } },
 ];
+// Other items carrying the new works' names (label, or alias when alias: true): a city and a person are "other" senses,
+// a fictional character is the same sense, a disambiguation page is no sense, a less popular item does not outweigh.
+export const SENSES = {
+  Zorblax: [{ e: 'Q900100001', sl: 300, cs: ['Q515'] }],
+  'Hollow Crown': [{ e: 'Q900100002', sl: 99, cs: ['Q5'], alias: true }],
+  'Moonlit Kitsune Academy': [{ e: 'Q900100003', sl: 90, cs: ['Q95074'] }],
+  It: [{ e: 'Q900100004', sl: 80, cs: ['Q4167410'] }],
+  'Captain Vexa Morn': [{ e: 'Q900100005', sl: 10, cs: ['Q5'] }],
+};
 
 const uri = (id) => `http://www.wikidata.org/entity/${id}`;
 const lit = (v, extra = {}) => ({ type: 'literal', value: String(v), ...extra });
@@ -42,6 +53,13 @@ export function rows(q) {
     return WORLD.filter((w) => (w.dates[delta[1]] ?? []).some((d) => Number(d.slice(0, 4)) >= since))
       .flatMap((w) => w.cls.map((c) => ({ item: { type: 'uri', value: uri(w.id) }, cls: { type: 'uri', value: uri(c) }, sl: lit(w.sl) })));
   }
+  if (q.includes('VALUES ?l')) { // senseQuery: label or alias lookups of names
+    const alias = q.includes('skos:altLabel');
+    return [...q.matchAll(/("(?:[^"\\]|\\.)*")@en/g)].map((m) => JSON.parse(m[1])).flatMap((l) => (SENSES[l] ?? [])
+      .filter((s) => !!s.alias === alias)
+      .map((s) => ({ l: lit(l, { 'xml:lang': 'en' }), e: { type: 'uri', value: uri(s.e) }, sl: lit(s.sl), cs: lit(s.cs.map(uri).join(' ')) })));
+  }
+  if (q.includes('wdt:P7937')) return pick().flatMap((w) => [...w.cls, ...(w.kinds ?? [])].map((c) => ({ w: { type: 'uri', value: uri(w.id) }, v: { type: 'uri', value: uri(c) } })));
   if (q.includes('rdfs:label ?en')) return pick().map((w) => ({ w: { type: 'uri', value: uri(w.id) },
     ...(w.en ? { en: lit(w.en, { 'xml:lang': 'en' }) } : {}), ...(w.mul ? { mul: lit(w.mul, { 'xml:lang': 'mul' }) } : {}) }));
   if (q.includes('UNION')) return pick().flatMap((w) => Object.values(w.dates).flat().map((d) => ({ w: { type: 'uri', value: uri(w.id) }, d: lit(d) })));

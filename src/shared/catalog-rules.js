@@ -29,7 +29,7 @@ export const aliasQuery = (b) => `SELECT ?w ?a WHERE { VALUES ?w { ${values(b)} 
 export const charQuery = (b) => `SELECT ?w ?cl ?cs WHERE { VALUES ?w { ${values(b)} } ?w wdt:P674 ?c . FILTER NOT EXISTS { ?c wdt:P31 wd:Q5 } ?c rdfs:label ?cl . FILTER(LANG(?cl) IN ("en", "mul")) OPTIONAL { ?c wikibase:sitelinks ?cs } }`;
 export const charFallbackQuery = (b) => `SELECT ?w ?cl ?cs WHERE { VALUES ?w { ${values(b)} } ?c wdt:P1441 ?w ; wdt:P31 wd:Q95074 ; rdfs:label ?cl . FILTER(LANG(?cl) IN ("en", "mul")) OPTIONAL { ?c wikibase:sitelinks ?cs } }`;
 
-// ---- what a work is: narrative or not (catalog build only) ----
+// ---- what a work is: narrative or not (catalog build and update) ----
 // Instance of (P31), genre (P136) and form (P7937) of works.
 export const kindQuery = (b) => `SELECT ?w ?p ?v WHERE { VALUES ?w { ${values(b)} } VALUES ?p { wdt:P31 wdt:P136 wdt:P7937 } ?w ?p ?v }`;
 // Works where a spoiler makes no sense: scripture, reference works, most non-fiction, documentaries, news and talk
@@ -55,15 +55,35 @@ const NARRATIVE = new Set(('Q8261 Q149537 Q49084 Q25379 Q1279564 Q104213567 Q166
   'Q130232 Q157443 Q859369 Q959790 Q2484376 Q188473 Q1054574 Q200092 Q471839').split(' '));
 export const isNarrative = (vals) => !vals.some((v) => NOT_NARRATIVE.has(v)) || vals.some((v) => NARRATIVE.has(v));
 
-// ---- names that mostly mean something else (catalog build only) ----
+// ---- names that mostly mean something else (catalog build and update) ----
 // Items with the exact English or "mul" label (prop rdfs:label) or alias (skos:altLabel: "Oppenheimer", "Elvis",
 // "PSG"), their sitelinks and classes.
 export const senseQuery = (names, prop = 'rdfs:label') => `SELECT ?l ?e ?sl (GROUP_CONCAT(DISTINCT ?c) AS ?cs) WHERE { VALUES ?l { ${
   names.flatMap((n) => [JSON.stringify(n) + '@en', JSON.stringify(n) + '@mul']).join(' ')} } ?e ${prop} ?l ; wikibase:sitelinks ?sl . FILTER(?sl >= ${MIN_SITELINKS}) OPTIONAL { ?e wdt:P31 ?c } } GROUP BY ?l ?e ?sl`;
 // Classes that are not a meaning of their own: disambiguation pages, lists, categories, templates, name lists
 export const NOT_A_SENSE = new Set('Q4167410 Q13406463 Q4167836 Q11266439 Q15407973 Q22808320 Q17362920'.split(' '));
-// Classes of works and fictional things: the same sense as a work (a franchise, a character, a series).
+// Classes of works and fictional things: the same sense as a work (a franchise, a character, a series). With their
+// subclasses they ship as catalog-classes.json "sameSense" for the update.
 export const SAME_SENSE_ROOTS = ['Q14897293', 'Q196600', 'Q7058673', 'Q24856', 'Q15416'];
+export const SENSE_BATCH = 150; // names per query
+// aliases are looked up only for names of one or two words (a surname, "PSG"): longer ones make slow queries
+export const shortName = (n) => n.trim().split(/\s+/).length <= 2;
+// prefix: seriesPrefix of src/shared/build-index.js
+export const senseNames = (w, prefix) => [w.title, ...(w.aliases ?? []), ...(w.characters ?? []), prefix(w.title)].filter(Boolean);
+// rows: senseQuery answers -> otherPop (name -> sitelinks of its strongest sense that is not a work of the catalog
+// (inCatalog), a disambiguation page or a work/fictional class (sameSense))
+export function addSenses(otherPop, rows, inCatalog, sameSense) {
+  for (const r of rows) {
+    const cs = r.cs?.value ? r.cs.value.split(' ').map(qid) : [];
+    if (inCatalog.has(qid(r.e.value)) || cs.some((c) => NOT_A_SENSE.has(c) || sameSense.has(c))) continue;
+    otherPop.set(r.l.value, Math.max(otherPop.get(r.l.value) ?? 0, Number(r.sl.value)));
+  }
+}
+// The names of w that mostly mean something else. A name that could not be looked up (looked(n) false) counts as one
+// when it has one or two words: fail safe, a wrongly weak title costs less than a Palestine-style false block.
+export function otherNames(w, names, otherPop, looked = () => true) {
+  return [...new Set(names.filter((n) => (looked(n) ? (otherPop.get(n) ?? 0) > w.pop : shortName(n))))];
+}
 export const CHAR_MIN_POP = 40; // characters are only fetched for works this popular
 
 // text: contents of tools/catalog/20k.txt

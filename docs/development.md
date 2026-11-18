@@ -1,23 +1,42 @@
 # Development
 
-Version 0.1.0. Run every command from the repository root unless stated.
+Version 0.2.0. Run every command from the repository root unless stated.
 
 ## Prerequisites
 
 | For | You need |
 |---|---|
-| Everything | Node.js and npm. `npm install` installs the dev dependencies (`@huggingface/transformers`, `onnxruntime-web`, `tesseract.js`, `@tesseract.js-data/eng`, `web-ext`, `puppeteer-core`). |
-| First build | Network access to download the CLIP model into `build/.cache`. Network access to Wikidata too, unless `tools/catalog/cache/` already holds the class queries (see below). |
+| Everything | Node.js and npm. `npm install` installs the dev dependencies (`@huggingface/transformers`, `onnxruntime-web`, `tesseract.js`, `@tesseract.js-data/eng`, `web-ext`, `puppeteer-core`). The Android bundle still reads `@tesseract.js-data/eng`; nothing in the extension uses `tesseract.js`. |
+| First build | Network access. It downloads, into `build/.cache`, the SigLIP 2 vision model (fp32, about 378 MB), the SigLIP 2 text model (fp16, about 565 MB, build time only), the tokenizer (about 34 MB) and the two OCR models (about 5 and 8 MB). The vision and OCR files are checked against pinned sha256 values. Network access to Wikidata too, unless `tools/catalog/cache/` already holds the class queries (see below). |
 | End-to-end test, Firefox | Zen at `/usr/bin/zen-browser`. The path is written into `package.json` and `test/e2e/run.mjs`. |
 | End-to-end test, Chrome | Chrome for Testing in `build/browsers`. Install it with `npx @puppeteer/browsers install chrome@stable --path build/browsers`. |
-| Retraining the classifier | Python 3 with `numpy`, `torch`, `transformers`, `onnx` and `onnxruntime`. See below. |
+| Retraining the classifier | Python 3 with `numpy`, `torch`, `transformers`, `onnx` and `onnxruntime`. See below. Network access for the Reddit and Wikipedia data. |
 | Android | A JDK 21+, the Android SDK, and the other items in [android.md](android.md). |
+
+## Machine locks
+
+Several agents may work on this machine at once, and it has 16 GB. Two lock files serialise the heavy jobs. Run the command through `flock`; it waits until the lock is free.
+
+| Lock | Hold it for |
+|---|---|
+| `flock ~/.cache/sb-heavy.lock <command>` | Training, Gradle, the emulator, the Morphe bootstrap and patching, benchmarks and evaluation scripts (`tools/eval-spoiler.mjs`, `tools/fp-posts.mjs`, `tools/fp-text.mjs`, `tools/calibrate-clip.mjs`, `tools/bench-ort-web.mjs`). |
+| `flock ~/.cache/sb-browser.lock <command>` | Builds (`npm run build`, `npm run build:fixture`) and every browser run (`npm run e2e`, `npm start`, `tools/bench-engine.mjs`). |
+
+Examples:
+
+```sh
+flock ~/.cache/sb-browser.lock npm run build:fixture
+flock ~/.cache/sb-browser.lock npm run e2e -- chrome
+flock ~/.cache/sb-heavy.lock node tools/eval-spoiler.mjs
+```
+
+`tools/bench-engine.mjs` runs a browser and measures time, so take the browser lock and make sure nobody holds the heavy lock: its timings are meaningless next to a Gradle build or training. If in doubt, take both (`flock ~/.cache/sb-heavy.lock flock ~/.cache/sb-browser.lock <command>`).
 
 ## npm scripts
 
 | Script | Command | What it does |
 |---|---|---|
-| `npm test` | `node --test test/*.test.js` | Unit tests: `catalog.test.js`, `catalog-update.test.js`, `matcher.test.js`. |
+| `npm test` | `node --test test/*.test.js` | Unit tests: `catalog.test.js`, `catalog-update.test.js`, `config.test.js`, `matcher.test.js`, `ocr.test.js`. |
 | `npm run build` | `node tools/build.mjs` | Builds `dist/firefox` and `dist/chrome` from `data/catalog.json`. |
 | `npm run build:fixture` | `node tools/build.mjs test/fixtures/catalog.small.json` | The same build from the small test catalog. Needed by the end-to-end test. It overwrites `dist/` and `build/data/`. Run `npm run build` afterwards to get the real catalog back. |
 | `npm run e2e` | `node test/e2e/run.mjs` | End-to-end test. Takes `firefox` (default) or `chrome`: `npm run e2e -- chrome`. |
@@ -30,10 +49,10 @@ Version 0.1.0. Run every command from the repository root unless stated.
 
 1. Reads the catalog (default `data/catalog.json`). Stops with a message if it is missing.
 2. Builds the matcher index (`index.bin`, `index.json`) with `src/shared/build-index.js`.
-3. Embeds the title prompts with the CLIP text model (cached in `build/clip-text-<hash>.json`) and packs the first `--clip-n` rows (default 2000) with the image cut-offs into `clip-text.bin` and `clip-meta.json`.
-4. Copies `catalog.json`, `common-words.txt` (from `tools/catalog/20k.txt`), `catalog-classes.json` and `catalog-info.json` for the catalog update. `catalog-classes.json` is computed from the subclass queries. They are read from `tools/catalog/cache/` when present and fetched from Wikidata otherwise.
-5. Makes sure the CLIP vision model is in `build/.cache`.
-6. Assembles `dist/firefox` and `dist/chrome`: `src/`, the data, vendor files (onnxruntime-web, transformers.js, tesseract.js, its core and `eng` data), the CLIP model, `models/spoiler`, and a `manifest.json`. The Chrome manifest differs as described in [how-it-works.md](how-it-works.md#background-firefox-and-chrome).
+3. Embeds the title prompts with the SigLIP 2 text tower (cached in `build/clip-text-<hash>.json`) and packs the first `--clip-n` rows (default 2000) with the image cut-offs and the preprocessing constants into `clip-text.bin` and `clip-meta.json`.
+4. Copies `catalog.json`, `common-words.txt` (from `tools/catalog/20k.txt`), `catalog-classes.json` and `catalog-info.json` for the catalog update. `catalog-classes.json` is computed from the subclass queries (the seven work types, and a `sameSense` list for the `other` lookup). They are read from `tools/catalog/cache/` when present and fetched from Wikidata otherwise. `catalog-info.json` records the catalog file's modification time as `builtAt`.
+5. Downloads the pinned fp32 SigLIP 2 vision model into `build/.cache`, converts its weights to int8 with `tools/quantize-vision.mjs` (no Python; the result is cached next to the download and redone when the script changes), and downloads the two OCR models.
+6. Assembles `dist/firefox` and `dist/chrome`: `src/`, the data, vendor files (onnxruntime-web and a copy of transformers.js whose onnxruntime import is rewritten to the same module), the vision and OCR models, `models/ocr/dict.txt`, `models/spoiler`, and a `manifest.json`. The Chrome manifest differs as described in [how-it-works.md](how-it-works.md#background-firefox-and-chrome).
 
 The classifier in `models/spoiler` is shipped as is. The build never retrains it.
 
@@ -45,9 +64,11 @@ The classifier in `models/spoiler` is shipped as is. The build never retrains it
 npm test
 ```
 
-- `test/matcher.test.js`: matcher rules on `test/fixtures/catalog.small.json`.
-- `test/catalog-update.test.js`: the catalog update with a fake fetch, merging and rebuilding, and the alarm plan.
+- `test/matcher.test.js`: matcher rules on `test/fixtures/catalog.small.json`, including names that mean something else, type-fitting media words, same-sentence context, apostrophes and other languages.
+- `test/catalog-update.test.js`: the catalog update with a fake fetch, merging and rebuilding, the alarm plan, the narrative filter, the `other` lookup and its query limit.
 - `test/catalog.test.js`: groups and derived series on the real catalog. Skipped until `data/catalog.json` exists.
+- `test/config.test.js`: the config (`src/options/config.js`): migration from 0.1, import and export, merge and replace, custom works in the index, and a catalog update keeping the custom works.
+- `test/ocr.test.js`: the PP-OCR module with a fake onnxruntime (boxes, reading order, decoding, the confidence cut).
 
 A sanity check of the catalog file itself (types, field shapes, ordering, a few known titles):
 
@@ -65,22 +86,27 @@ npm run e2e -- chrome
 
 - It copies `dist/<target>` to `build/e2e-ext/<target>`, adds `data/update-config.json` pointing the catalog update at a local mock SPARQL server, and starts a temporary-profile browser. Firefox runs Zen headless through `web-ext` and WebDriver BiDi. Chrome runs Chrome for Testing with the extension enabled.
 - All traffic that is not loopback goes through a proxy that refuses it, and the report lists every attempt. The test fails if the mock SPARQL server sees a request before the update is switched on or pressed. Other refused requests are only listed.
-- It checks first paint, the two modes, the popup's search and "Add", the overlay's "I've seen" and "Show once", the catalog update (including 429 and malformed answers), pausing a site, OCR-only text, and prints memory figures.
+- Pages: `test/e2e/fixture.html` (the original flow: first paint, styles, popup search and "Add", the cover's buttons, the catalog update including 429 and malformed answers, pausing a site, OCR-only text), `feed.html` (a virtualised feed that recycles its nodes), `coverage.html` (direct messages, search suggestions, notifications, quote posts, a CSS background photo, short and dark blocks, open, closed and late shadow roots, an `about:srcdoc` frame, a cross-origin frame, the tab title) and `frame.html` (the embedded frame).
+- 27 cases check the [contract](agents/contract.md): the labels, the buttons, `unknownImages`, `blockUnlisted`, both styles and per-work style, "I've seen it" writing `works`, the settings button, and the layout rule (no overlap, no height change, covers belong to their post). A fourth group measures the scan cost on a long page and prints memory figures.
 - Output goes to `test/e2e/out/` (not in git): a report per target and screenshots.
-- The two targets use different ports, so they can run together. On a memory-constrained machine run one at a time (see below).
+- The two targets use different ports, so they can run together. Do not do that on this machine (see the locks above).
+- Switches: `ONLY=1` skips the original flow and runs only the contract cases. `ONLY=states,feed,coverage,perf` (any subset) runs those groups. `SB_CONTENT=<dir with content.js and content.css>` runs another content script, for example the 0.1 one, against the same pages.
 - Debug aid: `node test/e2e/run.mjs firefox --eval 'async () => ...'` runs a function in an extension page.
 
 ### Evaluation scripts
 
 | Command | What it measures |
 |---|---|
-| `node tools/eval-spoiler.mjs [modelDir=models/spoiler] [eval.jsonl]` | The classifier on `test/fixtures/spoiler-eval.jsonl` the way the extension runs it: precision, recall, rates per post kind, AUC. |
+| `node tools/eval-spoiler.mjs [modelDir=models/spoiler] [eval.jsonl]` | The classifier the way the extension runs it, on `test/fixtures/spoiler-eval.jsonl` (default) or `spoiler-eval2.jsonl`: precision, recall, rates per post kind, AUC. |
+| `node tools/fp-posts.mjs [catalog] [-v]` | The text matcher on `test/fixtures/fp-posts.jsonl`: false positives on 630 everyday posts and recall on 290 posts about media. `-v` lists every miss and false positive. |
 | `node tools/fp-text.mjs [catalog]` | False positives of the text matcher on everyday prose. Downloads a corpus once into `build/corpus/`. |
-| `node tools/calibrate-clip.mjs [catalog]` | The image verdict against `test/fixtures/images/labels.json`: tables over row counts and cut-offs. Uses `sharp`, which comes with `@huggingface/transformers`. `SHOW=N,minScore,margin,gate` prints the detail of one setting. |
-| `node test/rdr2-probe.mjs` | A probe, not a test: Red Dead Redemption 2 posts in both modes. Needs `dist/firefox`. |
-| `node tools/catalog-update-live.mjs [--simulate-old-bundle]` | One real catalog update against live Wikidata with the extension's own code. Nothing is written. |
-| `node tools/bench-clip.mjs <hf-model-id> [catalog]` | Compares a candidate CLIP model on the image fixtures. |
+| `[SB_RESEARCH=research] node tools/calibrate-clip.mjs [catalog] [--clip-n=N]` | The image verdict: fits the title cut-offs on a calibration split and reports them on the held-out split. Uses the images in `test/fixtures/images/labels.json`, plus, when `SB_RESEARCH` points at a `research/` directory, the research image sets. The held-out figures in the README need those sets. Uses `sharp` and `onnxruntime-node`, which come with `@huggingface/transformers`. |
+| `node tools/bench-engine.mjs chrome\|firefox [regex]` | Per-image latency of the real engine inside the built extension (check and OCR, first call, median, 90th percentile, and a feed-like burst). Runs through `test/e2e/run.mjs --eval`, so it needs `dist/<target>`. |
 | `node tools/bench-ort-web.mjs <model.onnx> [size] [threads]` | Latency and memory of an ONNX model on onnxruntime-web. |
+| `node test/rdr2-probe.mjs` | A probe, not a test: Red Dead Redemption 2 posts in both styles. Needs `dist/firefox`. |
+| `node tools/catalog-update-live.mjs [--simulate-old-bundle]` | One real catalog update against live Wikidata with the extension's own code. Nothing is written. |
+
+`tools/bench-clip.mjs` no longer exists. `tools/build-clip-text.mjs` (the title rows and the pinned model) and `tools/quantize-vision.mjs` are modules used by the build and `calibrate-clip.mjs`, not commands.
 
 ### Android unit tests
 
@@ -94,6 +120,8 @@ node android/tools/clip-vectors.mjs
 cd android && ./gradlew :extensions:blocker:testDebugUnitTest
 ```
 
+`clip-vectors.mjs` and `ClipTest` still expect the 0.1 image model; see the TODO in android.md.
+
 ## Rebuilding the data
 
 ### The catalog
@@ -103,19 +131,19 @@ node tools/catalog/build.mjs [minSitelinks=15]
 node tools/catalog/check.mjs
 ```
 
-- Queries Wikidata for seven work types, then years, aliases and characters, and writes `data/catalog.json`. Set `CATALOG_OUT` to write elsewhere.
-- It is slow and polite: it waits between queries and backs off on 429 and 5xx. Results are cached by query text in `tools/catalog/cache/` (not in git), so a rerun is fast. Changing a query string in `src/shared/catalog-rules.js` invalidates that cache.
+- Queries Wikidata for seven work types, then what each work is (to keep only works told as a story), years, aliases and characters, then the "names that mean something else" lookup, and writes `data/catalog.json`. Set `CATALOG_OUT` to write elsewhere.
+- It is slow and polite: it waits between queries and backs off on 429 and 5xx. Results are cached by query text in `tools/catalog/cache/` (not in git), so a rerun is fast. The query text is the cache key: changing a query string in `src/shared/catalog-rules.js` invalidates that cache. The name lookup sends its names to 400 fixed buckets, so a changed name only invalidates its own bucket.
 - Then run `npm test` and `npm run build`.
 
 ### The index
 
-The matcher index is a build product. `npm run build` regenerates it from the catalog with `src/shared/build-index.js`. The extension's catalog update runs the same code, so both give identical bytes for the same catalog. `tools/fp-text.mjs` measures the effect of rule changes on false positives. `SB_NO_COMMON_RULE=1` switches the "common word" rules off for a "before" figure.
+The matcher index is a build product. `npm run build` regenerates it from the catalog with `src/shared/build-index.js`. The extension's catalog update runs the same code, so both give identical bytes for the same catalog. `tools/fp-text.mjs` and `tools/fp-posts.mjs` measure the effect of rule changes. `SB_NO_COMMON_RULE=1` switches the "common word" rules off for a "before" figure. The rules were tuned while looking at `fp-posts.jsonl`, so improving that number further is not evidence of a better matcher.
 
-### The CLIP text matrix and calibration
+### The title rows and the cut-offs
 
-Also part of `npm run build`. The prompts are in `tools/clip-prompts.mjs`: one set per work type, 33 generic "ordinary photo" prompts and 20 "media" prompts. Embeddings are cached by a hash of the prompt list, the model id and the generic prompts.
+Also part of `npm run build`. The prompts are in `tools/clip-prompts.mjs`: three prompts per work type plus up to two character prompts, 33 generic "ordinary photo" prompts and 20 "media" prompts. Embeddings are cached by a hash of the prompt list and the model id.
 
-The cut-offs `CLIP_MIN_SCORE`, `CLIP_MARGIN`, `CLIP_MEDIA_GATE` and `CLIP_TITLE_GAP` are constants in `tools/build.mjs`. The row count is `--clip-n` (`npm run build -- --clip-n=N`). Change a cut-off only after running `tools/calibrate-clip.mjs` with the real catalog. Its figures are on the same fixtures the cut-offs were set on, so they are not held-out.
+The cut-offs `minScore`, `margin`, `titleGap` and `mediaGate` are the `CUT` constant in `tools/build.mjs`. The row count is `--clip-n` (`npm run build -- --clip-n=N`). Change a cut-off only after running `tools/calibrate-clip.mjs` with the real catalog and the research image sets (`SB_RESEARCH=research`), and read the held-out line, not the fixture line: the shipped values are fitted on all images.
 
 ### Retraining the spoiler classifier
 
@@ -123,21 +151,22 @@ The cut-offs `CLIP_MIN_SCORE`, `CLIP_MARGIN`, `CLIP_MEDIA_GATE` and `CLIP_TITLE_
 PYTHON=<python with the packages below> node tools/train-spoiler.mjs [outDir=models/spoiler]
 ```
 
-Then `node tools/eval-spoiler.mjs` and `npm run build`.
+Then `node tools/eval-spoiler.mjs` on both evaluation files, and `npm run build`.
 
 - `tools/train-spoiler.mjs` assembles training items and calls `tools/spoiler-train/finetune.py`.
-- Data: `test/fixtures/spoiler-train.json` (hand-written), patterns from `tools/spoiler-train/patterns.mjs` filled with titles and characters from the first 600 catalog works that have characters, and the hand-labelled split of the `bobotran/spoiler-matching` dataset (CC BY-SA 3.0), downloaded into `build/spoiler-data/`. Nothing comes from `test/fixtures/spoiler-eval.jsonl` or `test/rdr2-probe.mjs`.
-- Patterns are split into train and validation by pattern, so a validation pattern's fills are never seen in training. The threshold is chosen on validation only.
-- `SB_NO_REDDIT=1` leaves the Reddit data out (an ablation switch).
-- `finetune.py` fine-tunes `sentence-transformers/all-MiniLM-L6-v2` end to end for 3 epochs (mean pooling, one linear output), quantises it to int8 with onnxruntime, and writes `model_int8.onnx`, the tokenizer files and `meta.json` (`{ "threshold": ... }`). It downloads the base model from Hugging Face. It sets 6 torch threads.
+- Data: `test/fixtures/spoiler-train.json` (hand-written); patterns from `tools/spoiler-train/patterns.mjs` filled with titles and characters from the first 600 catalog works that have characters; `tools/spoiler-train/extra.mjs` (more hand-written implied spoilers, media talk and look-alike non-spoilers); English Wikipedia articles of the 300 most popular films, series, games and anime (CC BY-SA 4.0), downloaded into `build/spoiler-data/wiki/`; and the hand-labelled split of the `bobotran/spoiler-matching` dataset (CC BY-SA 3.0), downloaded into `build/spoiler-data/`. Nothing comes from `test/fixtures/spoiler-eval.jsonl`, `test/fixtures/spoiler-eval2.jsonl` or `test/rdr2-probe.mjs`.
+- Patterns are split into train and validation by pattern, so a validation pattern's fills are never seen in training. Wikipedia items are split by work. The threshold is chosen on validation only, by balanced accuracy on the deduplicated validation items.
+- Switches: `SB_NO_REDDIT=1` leaves the Reddit data out, `SB_NO_WIKI=1` leaves the Wikipedia data out, and `SB_BASE=<model id>` fine-tunes another encoder (all-MiniLM-L12-v2 was tried and was no better on validation). They are ablation switches.
+- `finetune.py` fine-tunes the base model end to end for 3 epochs (mean pooling, one linear output), quantises it to int8 with onnxruntime, and writes `model_int8.onnx`, the tokenizer files and `meta.json` (`{ "threshold": ... }`). It downloads the base model from Hugging Face. It sets 6 torch threads.
 - Python packages used by the script: `numpy`, `torch`, `transformers`, `onnx` (for `torch.onnx.export`) and `onnxruntime` (for `onnxruntime.quantization`). The script header says the shipped model was trained with torch 2.15 (CPU), transformers 5.23, onnx 1.23 and onnxruntime 1.32, in about 9 minutes on 6 CPU cores.
 - It overwrites `models/spoiler` by default. Pass another `outDir` to compare first.
+- The evaluation files are for reading results only. Never train on them or choose a threshold with them.
 
 ## Memory guidance for a 16 GB machine
 
 The work in this repository is heavy, and builds, models, browsers and an emulator compete for memory.
 
-- Run one heavy job at a time: a Gradle build, the Morphe bootstrap, patching, an emulator, an end-to-end run, training, or the catalog build. Do not start a browser test while Gradle runs.
+- Run one heavy job at a time: a Gradle build, the Morphe bootstrap, patching, an emulator, an end-to-end run, training, or the catalog build. Do not start a browser test while Gradle runs. The two locks above enforce this between agents.
 - The flags the scripts already set:
 
   | Where | Setting |
@@ -164,6 +193,6 @@ The work in this repository is heavy, and builds, models, browsers and an emulat
 | `test/e2e/out/` | End-to-end reports and screenshots. |
 | `tools/catalog/cache/`, `*.log` | Wikidata query cache and logs. |
 | `research/*` except `REPORT.md`, `scripts/` and `package.json` | Downloaded data, models and results from the research work (about 14 GB according to the report). |
-| `.impeccable/` | Local tool directory. |
+| `.impeccable/`, `.claude/` | Local tool directories (`.claude/` holds agent worktrees). |
 
-Not ignored, so meant to be committed: `data/catalog.json`, `models/spoiler/`, the test fixtures, `src/`, `tools/` and the Android sources.
+Not ignored, so meant to be committed: `data/catalog.json`, `models/spoiler/`, `models/ocr/dict.txt`, the test fixtures, `src/`, `tools/` and the Android sources.

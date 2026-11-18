@@ -4,8 +4,9 @@
 // The result is stored in storage.local as one key (catalogIndex) so the swap is atomic; on any failure nothing
 // but catalogMeta.lastError is written, so the working index is never damaged.
 import { PRIORITY, MIN_SITELINKS, qid, yearOf, cleanTitle, batches, yearsQuery, aliasQuery, charQuery, charFallbackQuery,
-  CHAR_MIN_POP, makeAmbiguous, finalizeWork, compareWorks } from '../shared/catalog-rules.js';
-import { buildIndex, setCommonWords } from '../shared/build-index.js';
+  CHAR_MIN_POP, makeAmbiguous, finalizeWork, compareWorks, kindQuery, isNarrative, NOT_NARRATIVE, senseQuery, SENSE_BATCH,
+  shortName, senseNames, addSenses, otherNames } from '../shared/catalog-rules.js';
+import { buildIndex, setCommonWords, seriesPrefix } from '../shared/build-index.js';
 
 export const ENDPOINT = 'https://query.wikidata.org/sparql';
 export const INTERVALS = { daily: 1440, weekly: 10080, monthly: 43200 }; // minutes
@@ -65,8 +66,14 @@ export async function sparql(query, { fetch, endpoint, stats, sleep = wait }) {
   throw new Error('Wikidata is busy right now; will try again at the next update');
 }
 
-// -> new works (catalog schema) not in `known`
-export async function fetchDelta({ classes, sinceYear, known, ambiguous, ...net }) {
+// The "name mostly means something else" lookup sends at most this many queries per update (label and alias queries
+// of SENSE_BATCH names each); names beyond it, or all of them when Wikidata fails, get the fail-safe rule of otherNames.
+export const MAX_SENSE_QUERIES = 20;
+
+// -> new works (catalog schema) not in `known`, told as a story (isNarrative), with their "other" names.
+// words: the common-word list (series prefixes, as in the index builder).
+export async function fetchDelta({ classes, sinceYear, known, ambiguous, words, ...net }) {
+  setCommonWords(words);
   const typeOf = new Map(); // class -> highest-priority type containing it
   for (const type of [...PRIORITY].reverse()) for (const c of classes[type] ?? []) typeOf.set(c, type);
   const rank = (t) => PRIORITY.indexOf(t);
@@ -86,16 +93,45 @@ export async function fetchDelta({ classes, sinceYear, known, ambiguous, ...net 
       if (title && cleanTitle(title) && !found.has(id)) found.set(id, { id, title, type: cand.get(id).type, years: [], pop: cand.get(id).pop });
     }
   }
+  // scripture, reference works, documentaries... are left out, as in the catalog build (one query per 200 works)
+  const kinds = new Map();
+  const addTo = (m, k, v) => { (m.get(k) ?? m.set(k, []).get(k)).push(v); };
+  for (const b of batches([...found.keys()])) for (const r of await sparql(kindQuery(b), net)) addTo(kinds, qid(r.w.value), qid(r.v.value));
+  for (const id of [...found.keys()]) if (!isNarrative(kinds.get(id) ?? [])) found.delete(id);
   const list = [...found.values()], ids = list.map((w) => w.id);
   for (const b of batches(ids)) for (const r of await sparql(yearsQuery(b), net)) { const y = yearOf(r.d.value); if (y) found.get(qid(r.w.value)).years.push(y); }
   const aliases = new Map(), chars = new Map();
-  const addTo = (m, k, v) => { (m.get(k) ?? m.set(k, []).get(k)).push(v); };
   for (const b of batches(ids)) for (const r of await sparql(aliasQuery(b), net)) addTo(aliases, qid(r.w.value), [r.a.value, r.a['xml:lang'] === 'en' ? 0 : 1]);
   const popular = list.filter((w) => w.pop >= CHAR_MIN_POP).map((w) => w.id);
   for (const b of batches(popular)) for (const r of await sparql(charQuery(b), net)) addTo(chars, qid(r.w.value), [r.cl.value, Number(r.cs?.value ?? 0)]);
   const missing = popular.filter((id) => !chars.has(id));
   for (const b of batches(missing)) for (const r of await sparql(charFallbackQuery(b), net)) addTo(chars, qid(r.w.value), [r.cl.value, Number(r.cs?.value ?? 0)]);
-  return list.map((w) => finalizeWork(w, aliases.get(w.id), chars.get(w.id), ambiguous));
+  const fresh = list.map((w) => finalizeWork(w, aliases.get(w.id), chars.get(w.id), ambiguous));
+  await markOther(fresh, new Set([...known, ...ids]), classes, net);
+  return fresh;
+}
+
+// Sets work.other like the catalog build does (tools/catalog/build.mjs step 5), within MAX_SENSE_QUERIES.
+async function markOther(works, inCatalog, classes, net) {
+  const sameSense = new Set([...PRIORITY.flatMap((t) => classes[t] ?? []), ...(classes.sameSense ?? [])]);
+  for (const c of NOT_NARRATIVE) sameSense.delete(c);
+  const names = [...new Set(works.flatMap((w) => senseNames(w, seriesPrefix)))].sort();
+  const otherPop = new Map(), looked = new Set();
+  let queries = 0;
+  try {
+    for (const b of batches(names, SENSE_BATCH)) {
+      const short = b.filter(shortName);
+      if (queries + (short.length ? 2 : 1) > MAX_SENSE_QUERIES) break;
+      queries += short.length ? 2 : 1;
+      const rows = [...await sparql(senseQuery(b), net), ...(short.length ? await sparql(senseQuery(short, 'skos:altLabel'), net) : [])];
+      addSenses(otherPop, rows, inCatalog, sameSense);
+      for (const n of b) looked.add(n);
+    }
+  } catch { /* busy, refused or an odd answer: the names not looked up get the fail-safe rule */ }
+  for (const w of works) {
+    const other = otherNames(w, senseNames(w, seriesPrefix), otherPop, (n) => looked.has(n));
+    if (other.length) w.other = other;
+  }
 }
 
 // Bundled catalog + added works (deduped by QID, bundled wins), in the catalog's own order.
@@ -149,7 +185,7 @@ export async function runUpdate({ storage, loadBundle, now = Date.now(), ...net 
     const bundle = await loadBundle();
     const sinceYear = new Date(bundle.info.builtAt).getUTCFullYear() - 1;
     const known = new Set([...bundle.catalog.works.map((w) => w.id), ...prev.map((w) => w.id)]);
-    const fresh = await fetchDelta({ classes: bundle.classes, sinceYear, known, ambiguous: makeAmbiguous(bundle.words), stats, ...net });
+    const fresh = await fetchDelta({ classes: bundle.classes, sinceYear, known, ambiguous: makeAmbiguous(bundle.words), words: bundle.words, stats, ...net });
     if (fresh.length) {
       const added = [...prev, ...fresh];
       const { bin, meta: indexMeta } = rebuild(bundle, added, custom);

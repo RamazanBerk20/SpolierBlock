@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { TYPES, EXCLUDE, PRIORITY, qid, yearOf, cleanTitle, batches, subclassQuery, yearsQuery, aliasQuery, charQuery,
   charFallbackQuery, CHAR_MIN_POP, makeAmbiguous, finalizeWork, compareWorks, kindQuery, isNarrative, NOT_NARRATIVE, senseQuery,
-  NOT_A_SENSE, SAME_SENSE_ROOTS } from '../../src/shared/catalog-rules.js';
+  SAME_SENSE_ROOTS, shortName, senseNames, addSenses, otherNames } from '../../src/shared/catalog-rules.js';
 import { seriesPrefix } from '../build-index.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -156,26 +156,20 @@ for (const root of [...Object.values(TYPES).flatMap((t) => t.deep), ...SAME_SENS
 }
 for (const c of NOT_NARRATIVE) sameSense.delete(c);
 const inCatalog = new Set(result.map((w) => w.id));
-const namesOf = (w) => [w.title, ...w.aliases, ...w.characters, seriesPrefix(w.title)].filter(Boolean);
+const namesOf = (w) => senseNames(w, seriesPrefix);
 const otherPop = new Map(); // name -> sitelinks of its strongest other sense
 // names go to fixed hash buckets, so a changed name only invalidates its own bucket in the query cache
 const BUCKETS = 400, bucket = (n) => [...n].reduce((h, c) => Math.imul(h ^ c.codePointAt(0), 16777619) >>> 0, 2166136261) % BUCKETS;
 const byBucket = Array.from({ length: BUCKETS }, () => []);
 for (const n of [...new Set(result.flatMap(namesOf))].sort()) byBucket[bucket(n)].push(n);
 for (const b of byBucket.filter((x) => x.length)) {
-  // aliases only for names of one or two words (a surname, "PSG"): longer ones make slow queries and rarely collide
-  const short = b.filter((n) => n.trim().split(/\s+/).length <= 2);
-  const t0 = Date.now();
-  for (const r of [...await sparql(senseQuery(b)), ...(short.length ? await sparql(senseQuery(short, 'skos:altLabel')) : [])]) {
-    const cs = r.cs.value ? r.cs.value.split(' ').map(qid) : [];
-    if (inCatalog.has(qid(r.e.value)) || cs.some((c) => NOT_A_SENSE.has(c) || sameSense.has(c))) continue;
-    otherPop.set(r.l.value, Math.max(otherPop.get(r.l.value) ?? 0, Number(r.sl.value)));
-  }
+  const short = b.filter(shortName), t0 = Date.now();
+  addSenses(otherPop, [...await sparql(senseQuery(b)), ...(short.length ? await sparql(senseQuery(short, 'skos:altLabel')) : [])], inCatalog, sameSense);
   if (Date.now() - t0 > 1000) console.log('senses bucket', byBucket.indexOf(b), Date.now() - t0, 'ms');
 }
 for (const w of result) {
-  const other = namesOf(w).filter((n) => (otherPop.get(n) ?? 0) > w.pop);
-  if (other.length) w.other = [...new Set(other)];
+  const other = otherNames(w, namesOf(w), otherPop);
+  if (other.length) w.other = other;
 }
 console.log('works with names that mostly mean something else', result.filter((w) => w.other).length);
 
