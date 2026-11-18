@@ -58,3 +58,12 @@ These comments in the code no longer match it. Do not trust them, and fix them w
 - `Ocr.java`, `Clip.java`, `Images.java`: they describe the extension's 0.1 pipeline (Tesseract, ViT-B/32), which is what Android still runs.
 - `base.css`: "the near-black of the in-page cover". The real cover is a light or dark grey panel.
 - `research/REPORT.md` describes 0.1-era models and figures.
+
+## Symlinks to ignored folders get committed, and merging them deletes the real folder
+
+An ignore rule with a trailing slash (`keystore/`) matches a directory, not a symlink of the same name. An agent that
+symlinks `android/keystore` or `android/apks` into its worktree and then runs `git add -A` commits the symlink. Merging
+that branch into a checkout where the name is a real, ignored directory makes git delete the directory's contents to put
+the symlink there. This destroyed the local signing key and the supplied APKs once (2026-11-18). The ignore rules now
+have no trailing slash. Before merging an agent branch, run `git ls-tree -r <branch> | grep ^120000` and refuse symlinks.
+Copy small local files into a worktree instead of symlinking them, and stage files by name.
