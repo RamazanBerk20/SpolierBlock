@@ -27,13 +27,33 @@ private const val INIT = "Ldev/spoilerblock/SpoilerBlock;->init(Landroid/app/App
 private val ORT_ABIS = listOf("arm64-v8a", "x86_64")
 private val ORT_LIBS = listOf("libonnxruntime.so", "libonnxruntime4j_jni.so")
 
-/** invoke-virtual NotificationManager.notify(int, Notification) or notify(String, int, Notification). */
-private fun isNotify(i: Instruction): Boolean {
-    if (i.opcode != Opcode.INVOKE_VIRTUAL && i.opcode != Opcode.INVOKE_VIRTUAL_RANGE) return false
-    val r = (i as ReferenceInstruction).reference as? MethodReference ?: return false
-    return r.definingClass == "Landroid/app/NotificationManager;" && r.name == "notify" && r.returnType == "V" &&
-        (r.parameterTypes.map { it.toString() } == listOf("I", "Landroid/app/Notification;") ||
-            r.parameterTypes.map { it.toString() } == listOf("Ljava/lang/String;", "I", "Landroid/app/Notification;"))
+/**
+ * Framework calls of the app's own code that are sent through the extension instead: invoke-virtual owner.name(params)
+ * becomes invoke-static extensionClass.name(owner, params) with the same registers. Notifications hide spoilers in
+ * their text; the players are silenced while a cover hides what plays (ExoPlayer/Media3 play through AudioTrack).
+ */
+private class Reroute(val owner: String, val name: String, val params: String, val ret: String, val to: String) {
+    fun matches(r: MethodReference) = r.definingClass == owner && r.name == name && r.returnType == ret && r.parameterTypes.joinToString("") == params
+    val target get() = "$to->$name($owner$params)$ret"
+}
+
+private const val NM = "Landroid/app/NotificationManager;"
+private const val AT = "Landroid/media/AudioTrack;"
+private const val MP = "Landroid/media/MediaPlayer;"
+private val REROUTES = listOf(
+    Reroute(NM, "notify", "ILandroid/app/Notification;", "V", "Ldev/spoilerblock/Notifications;"),
+    Reroute(NM, "notify", "Ljava/lang/String;ILandroid/app/Notification;", "V", "Ldev/spoilerblock/Notifications;"),
+    Reroute(AT, "play", "", "V", "Ldev/spoilerblock/Media;"),
+    Reroute(AT, "setVolume", "F", "I", "Ldev/spoilerblock/Media;"),
+    Reroute(AT, "setStereoVolume", "FF", "I", "Ldev/spoilerblock/Media;"),
+    Reroute(MP, "start", "", "V", "Ldev/spoilerblock/Media;"),
+    Reroute(MP, "setVolume", "FF", "V", "Ldev/spoilerblock/Media;"),
+)
+
+private fun reroute(i: Instruction): Reroute? {
+    if (i.opcode != Opcode.INVOKE_VIRTUAL && i.opcode != Opcode.INVOKE_VIRTUAL_RANGE) return null
+    val r = (i as ReferenceInstruction).reference as? MethodReference ?: return null
+    return REROUTES.firstOrNull { it.matches(r) }
 }
 
 private const val TEXT ="Ldev/spoilerblock/SpoilerBlock;->text(Landroid/view/View;Ljava/lang/Object;)V"
@@ -153,33 +173,33 @@ private fun spoilerBlockPatch(
             else m.addInstruction(0, "invoke-static/range { p0 .. p1 }, $TEXT")
         }
 
-        // Push notifications: every NotificationManager.notify call in the app's own code (androidx's
-        // NotificationManagerCompat and Firebase's display code included) goes through Notifications.notify, which
-        // hides a spoiler in the text. The call sites name the framework method, which obfuscation never renames.
+        // Push notifications and sound: the app's own NotificationManager.notify, AudioTrack.play/setVolume/setStereoVolume
+        // and MediaPlayer.start/setVolume calls (androidx's NotificationManagerCompat, Firebase's display code and the
+        // embedded ExoPlayer included) go through the extension (REROUTES). The call sites name framework methods,
+        // which obfuscation never renames.
         val extensionClass = Regex("Ldev/spoilerblock/[^/]+;")
         val callers = mutableListOf<String>()
         classDefForEach { c ->
-            if (!extensionClass.matches(c.type) && c.methods.any { m -> m.implementation?.instructions?.any(::isNotify) == true }) callers += c.type
+            if (!extensionClass.matches(c.type) && c.methods.any { m -> m.implementation?.instructions?.any { reroute(it) != null } == true }) callers += c.type
         }
-        var calls = 0
+        val calls = sortedMapOf<String, Int>()
         for (type in callers) for (m in mutableClassDefBy(type).methods) {
             val ins = m.implementation?.instructions ?: continue
             for (i in ins.indices) {
                 val call = ins[i]
-                if (!isNotify(call)) continue
-                val target = "Ldev/spoilerblock/Notifications;->notify(Landroid/app/NotificationManager;" +
-                    ((call as ReferenceInstruction).reference as MethodReference).parameterTypes.joinToString("") + ")V"
+                val to = reroute(call) ?: continue
                 val regs = when (call) {
                     is Instruction35c -> "{" + listOf(call.registerC, call.registerD, call.registerE, call.registerF, call.registerG)
                         .take(call.registerCount).joinToString(", ") { "v$it" } + "}"
                     is Instruction3rc -> "{v${call.startRegister} .. v${call.startRegister + call.registerCount - 1}}"
                     else -> continue
                 }
-                m.replaceInstruction(i, "invoke-static${if (call is Instruction3rc) "/range" else ""} $regs, $target")
-                calls++
+                m.replaceInstruction(i, "invoke-static${if (call is Instruction3rc) "/range" else ""} $regs, ${to.target}")
+                val k = to.owner.substringAfterLast('/').trimEnd(';') + "." + to.name
+                calls[k] = (calls[k] ?: 0) + 1
             }
         }
-        Logger.getLogger("SpoilerBlock").info("notification calls routed through the blocker: $calls in ${callers.size} classes")
+        Logger.getLogger("SpoilerBlock").info("calls routed through the blocker: $calls in ${callers.size} classes")
 
         // test builds only (the demo): the catalog update talks to a local mock instead of query.wikidata.org
         if (testEndpoint != null) resourceFile("assets/spoilerblock/test-endpoint.txt", false).writeText(testEndpoint)

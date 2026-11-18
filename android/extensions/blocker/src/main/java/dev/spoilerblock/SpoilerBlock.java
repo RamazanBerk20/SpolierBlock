@@ -94,6 +94,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     /** Disables the blocker for this session, removing every cover so the app stays usable. */
     static void fail(String where, Throwable t) {
         dead = true;
+        try { Media.setMuted(false); } catch (Throwable ignored) { } // fail open: never leave the app silent
         Log.e(TAG, "disabled for this session after an error in " + where, t);
         SpoilerBlock b = I;
         if (b == null) return;
@@ -584,6 +585,14 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         return scanImages && (blockUnlisted || unknownImages || (v != null && v.anyBlocked));
     }
 
+    private final Map<Scanner, Boolean> silencing = new WeakHashMap<>();
+
+    /** Main thread: a window's verdict on sound; the app's players are silent while any window hides a playing item. */
+    void silence(Scanner s, boolean on) {
+        if (on) silencing.put(s, true); else silencing.remove(s);
+        Media.setMuted(!silencing.isEmpty() && !dead);
+    }
+
     void invalidateAll() {
         for (View root : scanners.keySet()) root.invalidate();
     }
@@ -699,7 +708,13 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         return c instanceof Activity ? (Activity) c : null;
     }
 
-    @Override public void onActivityPaused(Activity a) { if (resumed == a) resumed = null; }
+    @Override public void onActivityPaused(Activity a) {
+        if (resumed == a) resumed = null;
+        try { // a window in the background hides nothing that plays; its next frame decides again
+            Scanner s = scanners.get(a.getWindow().getDecorView());
+            if (s != null) silence(s, false);
+        } catch (Throwable t) { fail("onActivityPaused", t); }
+    }
     @Override public void onActivityStarted(Activity a) { }
     @Override public void onActivityStopped(Activity a) { }
     @Override public void onActivitySaveInstanceState(Activity a, Bundle b) { }

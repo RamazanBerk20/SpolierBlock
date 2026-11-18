@@ -111,12 +111,15 @@ public class MainActivity extends Activity {
             setContentView(More.build(this));
             return;
         }
+        if ("reels".equals(getIntent().getStringExtra("screen"))) { setContentView(Reels.build(this)); return; }
         if ("settings".equals(getIntent().getStringExtra("screen"))) { startActivity(new android.content.Intent(this, DemoSettings.class)); finish(); return; }
         list = new FeedList(this);
         list.setLayoutManager(new LinearLayoutManager(this));
         list.setAdapter(new Feed());
         setContentView(list);
         list.getViewTreeObserver().addOnDrawListener(this::check);
+        int at = getIntent().getIntExtra("pos", -1); // the test starts at a given row (players: 12 covered, 37 clean)
+        if (at >= 0) ((LinearLayoutManager) list.getLayoutManager()).scrollToPositionWithOffset(at, 300);
         if (getIntent().getBooleanExtra("spoilerEval", false)) SpoilerEval.run(this);
         if (getIntent().getBooleanExtra("imageEval", false)) ImageEval.run(this);
     }
@@ -124,13 +127,14 @@ public class MainActivity extends Activity {
     @Override protected void onPause() {
         super.onPause();
         Log.i(TAG, "frame check summary: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches, " +
-            blockerLayouts + " blocker layouts, " + blockerDraws + " blocker draws");
+            blockerLayouts + " blocker layouts, " + blockerDraws + " blocker draws; audio: " + Sound.checks + " checks, " + Sound.mismatches + " mismatches");
     }
 
     /** Every drawn frame: each visible post is covered iff expected (the blocker hides covered items from a11y). */
     void check() {
         frames++;
         if (list != null) checkChildren(list);
+        if (list != null) Sound.check(list, "feed");
         if (frames % 600 == 0) Log.i(TAG, "frame check: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches");
     }
 
@@ -236,7 +240,12 @@ public class MainActivity extends Activity {
         }
 
         @Override public void onBindViewHolder(RecyclerView.ViewHolder h, int pos) {
-            if (type(pos) == VIDEO) { h.itemView.setTag(VIDEO_POST); ((TextView) ((LinearLayout) h.itemView).getChildAt(0)).setText(body(VIDEO_POST)); return; }
+            if (type(pos) == VIDEO) { // every other player has a clean caption: its sound must be heard
+                int post = (pos / 25) % 2 == 0 ? VIDEO_POST : 1;
+                h.itemView.setTag(post);
+                ((TextView) ((LinearLayout) h.itemView).getChildAt(0)).setText(body(post));
+                return;
+            }
             if (type(pos) == IMAGE) { bindImage((LinearLayout) h.itemView, (pos % 25 - 2) % IMAGES.length); return; }
             if (type(pos) == SHELF) { ((RecyclerView) h.itemView.getTag()).scrollToPosition(0); ((Shelf) ((RecyclerView) h.itemView.getTag()).getAdapter()).at(pos); return; }
             int post = pos % POSTS.length;
@@ -250,12 +259,26 @@ public class MainActivity extends Activity {
 
     static final int VIDEO_POST = 16; // "Elden Ring boss fights are brutal": covered by its caption
 
-    /** Frames drawn into a TextureView's surface while attached: video content no ImageView capture can reach. */
+    /**
+     * Frames drawn into a TextureView's surface while attached: video content no ImageView capture can reach. With
+     * sound (a looping AudioTrack, the API ExoPlayer plays through) when attached to the feed.
+     */
     static class Video extends android.view.TextureView implements Runnable {
         int n;
-        Video(Context c) { super(c); }
-        @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); post(this); }
-        @Override protected void onDetachedFromWindow() { removeCallbacks(this); super.onDetachedFromWindow(); }
+        final boolean sound;
+        android.media.AudioTrack track;
+        Video(Context c) { this(c, true); }
+        Video(Context c, boolean sound) { super(c); this.sound = sound; }
+        @Override protected void onAttachedToWindow() {
+            super.onAttachedToWindow();
+            post(this);
+            if (sound) { track = Sound.tone(); track.play(); }
+        }
+        @Override protected void onDetachedFromWindow() {
+            removeCallbacks(this);
+            if (track != null) { track.release(); track = null; }
+            super.onDetachedFromWindow();
+        }
         @Override public void run() {
             android.graphics.Canvas c = isAvailable() ? lockCanvas() : null;
             if (c != null) {
