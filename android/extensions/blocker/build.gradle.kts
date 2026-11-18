@@ -12,12 +12,9 @@ configure<ApplicationExtension> {
 
 dependencies {
     // Plain JUnit on the JVM for the matcher; org.json is part of Android but only a stub in android.jar.
-    // "Only block actual spoilers": the extension's sentence model runs on ONNX Runtime (1.22.0, the version of the
-    // extension's onnxruntime-web). Only its Java classes reach the .mpe dex; the patch ships the AAR's native libs.
+    // The models (spoiler classifier, SigLIP 2 vision tower, PP-OCR) run on ONNX Runtime 1.22.0, the version of the
+    // extension's onnxruntime-web. Only its Java classes reach the .mpe dex; the patch ships the AAR's native libs.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
-    // OCR for "Scan images and video": native Tesseract 5 (the engine the extension runs as tesseract.js). Not transitive:
-    // its androidx.annotation dependency is compile-time only and must not be merged into the host app.
-    implementation("cz.adaptech.tesseract4android:tesseract4android:4.9.0") { isTransitive = false }
     // the same Java API with desktop natives, for the JVM parity test (the AAR has no JVM natives)
     testImplementation("com.microsoft.onnxruntime:onnxruntime:1.22.0")
     testImplementation("junit:junit:4.13.2")
@@ -36,9 +33,27 @@ tasks.withType<Test>().configureEach {
     testLogging { showStandardStreams = true }
 }
 
+// OcrTest runs on desktop ONNX Runtime 1.32.0: the desktop (Linux x86-64) builds 1.22 to 1.31 give the PP-OCR v5
+// detector a blank probability map at every optimisation level, so the JVM finds no text. The Android 1.22 build
+// reads all 21 fixtures like the extension (the demo's on-device ImageEval), so the app keeps 1.22.
+val ortDesktopNew: Configuration by configurations.creating { isTransitive = false }
+dependencies { ortDesktopNew("com.microsoft.onnxruntime:onnxruntime:1.32.0") }
+afterEvaluate {
+    val unit = tasks.named<Test>("testDebugUnitTest")
+    val ocr = tasks.register<Test>("ocrTestDebugUnitTest") {
+        description = "OcrTest on desktop ONNX Runtime 1.32.0"
+        testClassesDirs = unit.get().testClassesDirs
+        classpath = unit.get().classpath.filter { !it.name.startsWith("onnxruntime-1.22") } + ortDesktopNew
+        filter { includeTestsMatching("dev.spoilerblock.OcrTest") }
+    }
+    unit.configure {
+        filter { excludeTestsMatching("dev.spoilerblock.OcrTest") }
+        finalizedBy(ocr)
+    }
+}
+
 // The extension is plain Java: keep AGP's default Kotlin stdlib out of the dex merged into the host app.
 configurations.configureEach {
     if (name.contains("RuntimeClasspath") && !name.contains("UnitTest")) exclude(group = "org.jetbrains.kotlin")
     if (name.contains("UnitTest")) exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
-    if (name.contains("UnitTest")) exclude(group = "cz.adaptech.tesseract4android")
 }

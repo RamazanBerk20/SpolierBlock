@@ -8,55 +8,68 @@ import org.json.JSONObject;
 import org.junit.Test;
 
 import java.io.File;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Collections;
 import java.util.List;
 
+import ai.onnxruntime.OrtEnvironment;
+import ai.onnxruntime.OrtSession;
+
 /**
- * Java image verdict == the extension's (engine.js clipCheck, onnxruntime-web) on the pixels android/tools/clip-vectors.mjs
- * wrote for test/fixtures/images, on the shared pixels: model run + verdict rule. Decoding and Images.clipPixels are
- * compared on the device by the demo app's ImageEval (javax.imageio mangles grayscale and ICC-tagged JPEGs, so not here).
+ * Java title check == the extension's (engine.js, onnxruntime-web) on test/fixtures/images, from the vectors of
+ * android/tools/clip-vectors.mjs: (1) on the extension's own 256x256 pixels (model run + verdict rule), (2) from the
+ * picture at <= 512 px through Java's own resize (Images.visionPixels), against the extension's pixels' verdict.
  */
 public class ClipTest {
     private static final File V = new File(System.getProperty("sb.vectors"), "clip");
-    private static final File DIST = new File(System.getProperty("sb.dist"));
-    private static final File MODEL = new File(System.getProperty("sb.dist"), "../models/clip/onnx/vision_model_quantized.onnx");
+    private static final File DIST = new File(System.getProperty("sb.dist")); // dist/firefox/data
 
-    static String kind(List<double[]> hits) { return hits.isEmpty() ? "none" : hits.get(0)[0] == Clip.UNKNOWN ? "generic" : "title " + (int) hits.get(0)[0]; }
+    static String kind(List<double[]> hits) { return Images.kind(hits); }
 
     @Test public void verdictsMatchExtension() throws Exception {
-        byte[] model = Files.readAllBytes(MODEL.toPath());
-        ByteBuffer buf = ByteBuffer.allocateDirect(model.length).put(model);
-        buf.flip();
         JSONArray cases = new JSONArray(new String(Files.readAllBytes(new File(V, "clip-cases.json").toPath()), StandardCharsets.UTF_8));
-        assertEquals(75, cases.length());
-        try (Clip clip = new Clip(buf, Files.readAllBytes(new File(DIST, "clip-text.bin").toPath()),
-            new String(Files.readAllBytes(new File(DIST, "clip-meta.json").toPath()), StandardCharsets.UTF_8))) {
-            int differ = 0;
-            double maxCos = 0;
+        assertTrue(cases.length() >= 70);
+        Clip clip = new Clip(Files.readAllBytes(new File(DIST, "clip-text.bin").toPath()),
+            new String(Files.readAllBytes(new File(DIST, "clip-meta.json").toPath()), StandardCharsets.UTF_8));
+        try (OrtSession.SessionOptions o = Images.cpuOptions();
+             OrtSession s = OrtEnvironment.getEnvironment().createSession(new File(DIST, "../models/vision/model.onnx").getPath(), o)) {
+            int differ = 0, differResize = 0;
+            double worst = 0, worstResize = 0, worstScore = 0;
             long t0 = System.nanoTime();
             for (int i = 0; i < cases.length(); i++) {
                 JSONObject c = cases.getJSONObject(i);
-                float[] v = clip.embed(Files.readAllBytes(new File(V, c.getString("file") + ".rgb").toPath()));
-                double n = 0, dotJs = 0;
-                for (float a : v) n += (double) a * a;
-                JSONArray e = c.getJSONArray("embed");
-                for (int j = 0; j < v.length; j++) dotJs += v[j] / Math.sqrt(n) * e.getDouble(j);
-                maxCos = Math.max(maxCos, 1 - dotJs);
+                String js = Images.kindJs(c.getJSONArray("hits"));
+                float[] v = clip.embed(s, Collections.singletonList(Files.readAllBytes(new File(V, c.getString("file") + ".rgb").toPath())))[0];
+                worst = Math.max(worst, 1 - cos(v, c.getJSONArray("embed")));
                 List<double[]> hits = clip.verdict(v);
-                JSONArray want = c.getJSONArray("hits");
-                String js = want.length() == 0 ? "none" : want.getJSONArray(0).getInt(0) == -1 ? "generic" : "title " + want.getJSONArray(0).getInt(0);
-                if (!js.equals(kind(hits))) {
-                    differ++;
-                    System.err.println("VERDICT DIFFERS " + c.getString("file") + " js=" + js + " java=" + kind(hits));
-                }
-            }
-            System.out.printf("clip: %d images in %d ms, %d verdicts differ, embedding 1-cos max %.2e%n", cases.length(),
-                (System.nanoTime() - t0) / 1_000_000, differ, maxCos);
-            // ORT's x86-64 AVX2 int8 kernels round slightly differently from WASM (see ClassifierTest)
-            assertTrue("too many verdicts differ: " + differ, differ <= 2);
+                if (!js.equals(kind(hits))) { differ++; System.err.println("VERDICT DIFFERS " + c.getString("file") + " js=" + js + " java=" + kind(hits)); }
+                else if (!hits.isEmpty()) worstScore = Math.max(worstScore, Math.abs(hits.get(0)[1] - c.getJSONArray("hits").getJSONArray(0).getDouble(1)));
 
+                // Java's resize, from the picture at <= 512 px
+                byte[] src = Files.readAllBytes(new File(V, c.getString("file") + ".src.rgba").toPath());
+                int w = c.getInt("srcW"), h = c.getInt("srcH");
+                int[] argb = new int[w * h];
+                for (int p = 0; p < argb.length; p++) argb[p] = 0xFF000000 | (src[p * 4] & 0xFF) << 16 | (src[p * 4 + 1] & 0xFF) << 8 | src[p * 4 + 2] & 0xFF;
+                float[] vr = clip.embed(s, Collections.singletonList(Images.visionPixels(argb, w, h, clip.size)))[0];
+                worstResize = Math.max(worstResize, 1 - cos(vr, c.getJSONArray("embed")));
+                String jr = kind(clip.verdict(vr));
+                if (!js.equals(jr)) { differResize++; System.err.println("RESIZED VERDICT DIFFERS " + c.getString("file") + " js=" + js + " java=" + jr); }
+            }
+            System.out.printf("image titles: %d images in %d ms; extension's pixels: %d verdicts differ, embedding 1-cos max %.1e, top score max diff %.3f; " +
+                "Java resize: %d differ, 1-cos max %.1e%n", cases.length(), (System.nanoTime() - t0) / 1_000_000, differ, worst, worstScore, differResize, worstResize);
+            // the same model and ORT version (1.22) natively on x86-64 against the extension's WASM: measured 1-cos 1.3e-8
+            assertEquals("verdicts differ on the extension's own pixels", 0, differ);
+            assertTrue("embedding drifted: 1-cos " + worst, worst < 1e-4);
+            // another resize (triangle filter vs sharp's lanczos3): a borderline image may flip
+            assertTrue("too many verdicts differ after Java's resize: " + differResize, differResize <= 3);
         }
+    }
+
+    static double cos(float[] v, JSONArray unit) throws Exception {
+        double n = 0, d = 0;
+        for (float a : v) n += (double) a * a;
+        for (int j = 0; j < v.length; j++) d += v[j] * unit.getDouble(j);
+        return d / Math.sqrt(n);
     }
 }

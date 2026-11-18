@@ -72,7 +72,9 @@ Identical strings on both platforms. `{t}` is the group label; with several grou
 | image identified as the work | `Image from {t}` |
 | unidentified media image | `Possible film, show or game image` |
 
-Android only: while an item's pictures are still being judged it shows `Checking image…` (the extension dims pending pictures instead).
+Pictures still being judged: both platforms shade the picture itself (the extension dims it, Android paints an opaque
+shade over it, with no text and no buttons) and leave the post's text readable; only a verdict covers the post. A picture
+whose check fails stays shaded.
 
 Buttons: `Show once`, `I've seen it` (absent for the unidentified image) and a settings button (`⋮`, accessible name
 `SpolierBlock settings`).

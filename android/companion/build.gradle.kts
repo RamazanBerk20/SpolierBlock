@@ -47,7 +47,6 @@ android {
 dependencies {
     // only to compile the shared sources; the companion never loads a model
     compileOnly("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
-    compileOnly("cz.adaptech.tesseract4android:tesseract4android:4.9.0") { isTransitive = false }
 }
 
 // The title index the extension builds (npm run build -> dist/firefox/data), for the library's search.

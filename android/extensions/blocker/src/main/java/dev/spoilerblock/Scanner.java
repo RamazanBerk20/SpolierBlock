@@ -75,7 +75,40 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         covers.clear();
         for (Map.Entry<View, Shade> e : shades.entrySet()) e.getKey().getOverlay().remove(e.getValue());
         shades.clear();
+        for (Map.Entry<View, android.graphics.drawable.ColorDrawable> e : pictureShades.entrySet()) e.getKey().getOverlay().remove(e.getValue());
+        pictureShades.clear();
         items.clear();
+    }
+
+    // ---------- pictures still being judged (as the extension dims unjudged media) ----------
+
+    private final Map<View, android.graphics.drawable.ColorDrawable> pictureShades = new WeakHashMap<>();
+
+    /**
+     * A picture whose verdict is not in yet (or could not be had: fail closed) is painted over with an opaque shade in
+     * its own overlay: no text, no buttons, no size change, and the post's text stays readable. Only a verdict covers
+     * the post. The item's pictures that need no shade any more lose theirs.
+     */
+    private void shadePictures(View item, List<View> now) {
+        for (View v : new ArrayList<>(pictureShades.keySet())) if (!now.contains(v) && inside(v, item)) unshade(v);
+        for (View v : now) {
+            android.graphics.drawable.ColorDrawable d = pictureShades.get(v);
+            if (d == null) {
+                pictureShades.put(v, d = new android.graphics.drawable.ColorDrawable(Ui.palette(v.getContext()).cover));
+                v.getOverlay().add(d);
+            }
+            d.setBounds(0, 0, v.getWidth(), v.getHeight());
+        }
+    }
+
+    private static boolean inside(View v, View item) {
+        for (Object p = v; p instanceof View; p = ((View) p).getParent()) if (p == item) return true;
+        return false;
+    }
+
+    private void unshade(View v) {
+        android.graphics.drawable.ColorDrawable d = pictureShades.remove(v);
+        if (d != null) v.getOverlay().remove(d);
     }
 
     @Override public void onGlobalLayout() { layoutDirty = true; }
@@ -243,11 +276,12 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         boolean pending = false, unknown = false;
         List<Integer> imgGroups = new ArrayList<>();
         StringBuilder ocr = new StringBuilder(), key = new StringBuilder(text);
+        List<View> toShade = new ArrayList<>();
         for (View mv : media) {
             Images.State s = sb.images.state(mv);
             key.append('\u0000').append(s.key);
-            if (!s.done) { pending = true; continue; }
-            if (s.failed) { unknown = true; continue; } // fail closed (as far as unknown images are covered at all)
+            if (!s.done) { pending = true; toShade.add(mv); continue; }
+            if (s.failed) { toShade.add(mv); continue; } // fail closed: the picture stays shaded
             for (double[] h : s.hits) { // the first hit not seen, as the extension takes it
                 int g = (int) h[0];
                 if (g == Clip.UNKNOWN) { unknown = true; break; }
@@ -291,9 +325,8 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             msg = msg.equals("Checking ") ? "Checking " + label + " for spoilers…" : msg + label;
         } else if (unknown && Config.coverUnknownImage(sb.unknownImages, namesSeen(m, full, v), !all.isEmpty() || !spoilers.isEmpty())) {
             msg = "Possible film, show or game image";
-        } else if (pending) {
-            msg = "Checking image…"; // covered until its verdicts are in
         }
+        shadePictures(it, msg == null ? toShade : new ArrayList<>()); // pending pictures are shaded, not the whole post
         String reveal = key.toString(); // "Show once" is for this text with these images
         Cover cv = coverOf(it);
         boolean block = msg != null && !sb.revealed.contains(reveal);

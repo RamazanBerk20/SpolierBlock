@@ -5,39 +5,42 @@ import org.json.JSONObject;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtSession;
 
 /**
- * Image verdict of the browser extension (src/background/engine.js clipCheck): the CLIP ViT-B/32 int8 vision model and
- * the shipped int8 text matrix of the 2,000 most popular names (dist data/clip-text.bin + clip-meta.json), with the same
- * media gate, min score, margin and title gap. Not thread-safe; SpoilerBlock runs it on its one worker thread.
+ * The image title check of src/background/engine.js (titleChecks + verdict): the SigLIP 2 vision tower's embedding of
+ * the whole image squashed to size x size, scored against the shipped int8 title rows (dist data/clip-text.bin) with
+ * the cut-offs and prompts of data/clip-meta.json. The session is passed in (CPU or accelerated, see Accel).
  */
-final class Clip implements AutoCloseable {
-    static final int S = 224;
-    static final int UNKNOWN = -1; // a media image whose title is not certain: "May contain a spoiler", never "I've seen"
-    private static final float[] MEAN = {0.48145466f, 0.4578275f, 0.40821073f}, STD = {0.26862954f, 0.26130258f, 0.27577711f};
+final class Clip {
+    static final int UNKNOWN = -1; // media with no certain title: "Possible film, show or game image", never "I've seen it"
 
-    private final OrtEnvironment env;
-    private final OrtSession session;
+    final int size, dim, n;
+    private final double[] mean, std; // as JS numbers: the tensor gets the float32 of the double result
+    final String output;
     private final byte[] mat;
     private final double[][] neg, media;
     final int[] rowGroup;
     private final int[] rowFamily;
-    private final int n, dim;
     private final double minScore, margin, mediaGate, titleGap;
 
-    Clip(ByteBuffer model, byte[] textBin, String metaJson) throws Exception {
+    Clip(byte[] textBin, String metaJson) throws Exception {
         JSONObject m = new JSONObject(metaJson);
-        n = m.getInt("n");
+        size = m.getInt("size");
         dim = m.getInt("dim");
+        n = m.getInt("n");
+        output = m.getString("output");
+        mean = doubles(new JSONArray().put(m.getJSONArray("mean")))[0];
+        std = doubles(new JSONArray().put(m.getJSONArray("std")))[0];
         neg = doubles(m.getJSONArray("neg"));
         media = doubles(m.getJSONArray("media"));
         rowGroup = ints(m.getJSONArray("rowGroup"));
@@ -48,68 +51,73 @@ final class Clip implements AutoCloseable {
         titleGap = m.getDouble("titleGap");
         if (textBin.length != n * dim) throw new IllegalArgumentException("clip-text.bin: " + textBin.length + " bytes, want " + n * dim);
         mat = textBin;
-        env = OrtEnvironment.getEnvironment();
-        try (OrtSession.SessionOptions o = new OrtSession.SessionOptions()) {
-            o.setIntraOpNumThreads(2); // ViT-B/32 is ~4 GFLOP: 2 threads halve the wait for a covered thumbnail
-            session = env.createSession(model, o);
+    }
+
+    /** Raw embeddings (not normalised) of images of size*size RGB pixels (row-major, 3 bytes each), one run for all. */
+    float[][] embed(OrtSession s, List<byte[]> rgbs) throws Exception {
+        int P = size * size, B = rgbs.size();
+        float[] x = new float[B * 3 * P];
+        for (int b = 0; b < B; b++) {
+            byte[] px = rgbs.get(b);
+            for (int i = 0; i < P; i++) for (int c = 0; c < 3; c++) x[(b * 3 + c) * P + i] = (float) (((px[i * 3 + c] & 0xFF) / 255.0 - mean[c]) / std[c]);
+        }
+        OrtEnvironment env = OrtEnvironment.getEnvironment();
+        String in = s.getInputNames().iterator().next();
+        try (OnnxTensor t = OnnxTensor.createTensor(env, FloatBuffer.wrap(x), new long[]{B, 3, size, size});
+             OrtSession.Result r = s.run(Collections.singletonMap(in, t))) {
+            FloatBuffer o = ((OnnxTensor) r.get(output).orElseThrow(IllegalStateException::new)).getFloatBuffer();
+            float[][] out = new float[B][dim];
+            for (int b = 0; b < B; b++) o.get(out[b]);
+            return out;
         }
     }
 
-    /** Unit image embedding of S*S RGB pixels (row-major, 3 bytes each), preprocessed like engine.js. */
-    float[] embed(byte[] rgb) throws Exception {
-        float[] x = new float[3 * S * S];
-        for (int i = 0; i < S * S; i++) for (int c = 0; c < 3; c++) x[c * S * S + i] = ((rgb[i * 3 + c] & 0xFF) / 255f - MEAN[c]) / STD[c];
-        try (OnnxTensor t = OnnxTensor.createTensor(env, FloatBuffer.wrap(x), new long[]{1, 3, S, S});
-             OrtSession.Result r = session.run(Collections.singletonMap("pixel_values", t))) {
-            OnnxTensor e = (OnnxTensor) r.get("image_embeds").orElseThrow(IllegalStateException::new);
-            FloatBuffer b = e.getFloatBuffer();
-            float[] v = new float[b.remaining()];
-            b.get(v);
-            return v;
-        }
-    }
-
-    /** Hits as {group, score} (best first), or {UNKNOWN, score} for an uncertain title; empty for an ordinary image. */
-    List<double[]> check(byte[] rgb) throws Exception { return verdict(embed(rgb)); }
-
-    /** engine.js clipCheck() on a raw (not normalised) embedding; same order of float operations. */
+    /**
+     * engine.js verdict(): hits as {group, score} (best first, up to 3 groups of one title family), {UNKNOWN, score}
+     * for media with no certain title, empty for an ordinary image. Scores are float32 like the JS Float32Array.
+     */
     List<double[]> verdict(float[] v) {
         double n2 = 0;
         for (float a : v) n2 += (double) a * a;
         double inv = 1 / Math.sqrt(n2);
-        double ng = -1, md = -1;
-        for (double[] t : neg) ng = Math.max(ng, dot(t, v) * inv);
-        for (double[] t : media) md = Math.max(md, dot(t, v) * inv);
-        List<double[]> scores = new ArrayList<>(); // {row, score rounded like toFixed(3)}
-        for (int r = 0; r < n && md - ng >= mediaGate; r++) {
-            double s = row(r, v) * (inv / 127);
-            if (s >= minScore && s - ng >= margin) scores.add(new double[]{r, new BigDecimal(s).setScale(3, RoundingMode.HALF_UP).doubleValue()});
+        double ng = best(neg, v, inv), md = best(media, v, inv) - ng;
+        float[] sc = new float[n];
+        int top = 0;
+        for (int r = 0; r < n; r++) {
+            double s = 0;
+            int o = r * dim;
+            for (int j = 0; j < dim; j++) s += mat[o + j] * (double) v[j];
+            sc[r] = (float) ((s * inv) / 127);
+            if (sc[r] > sc[top]) top = r;
         }
+        double second = -1;
+        for (int r = 0; r < n; r++) if (rowFamily[r] != rowFamily[top] && sc[r] > second) second = sc[r];
+        double mg = sc[top] - ng, gap = sc[top] - second;
         List<double[]> hits = new ArrayList<>();
-        if (scores.isEmpty()) return hits;
-        scores.sort((a, b) -> Double.compare(b[1], a[1])); // stable, like Array.prototype.sort
-        int top = (int) scores.get(0)[0];
-        double best = scores.get(0)[1], second = -1;
-        for (int r = 0; r < n; r++) if (rowFamily[r] != rowFamily[top]) second = Math.max(second, row(r, v) * inv / 127);
-        if (best - second >= titleGap) {
-            for (int i = 0; i < Math.min(3, scores.size()); i++) hits.add(new double[]{rowGroup[(int) scores.get(i)[0]], scores.get(i)[1]});
-        } else {
-            hits.add(new double[]{UNKNOWN, best});
+        if (sc[top] >= minScore && mg >= margin && gap >= titleGap) {
+            List<Integer> rows = new ArrayList<>();
+            for (int r = 0; r < n; r++) if (sc[r] - ng >= margin && sc[top] - sc[r] < gap) rows.add(r);
+            rows.sort((a, b) -> Float.compare(sc[b], sc[a])); // stable, like Array.prototype.sort
+            Map<Integer, Double> groups = new LinkedHashMap<>(); // new Map(...): first position, last value per group
+            for (int r : rows) groups.put(rowGroup[r], fixed3(sc[r]));
+            for (Map.Entry<Integer, Double> e : groups.entrySet()) if (hits.size() < 3) hits.add(new double[]{e.getKey(), e.getValue()});
+        } else if (md >= mediaGate) {
+            hits.add(new double[]{UNKNOWN, fixed3(sc[top])});
         }
         return hits;
     }
 
-    private double row(int r, float[] v) {
-        double s = 0;
-        int o = r * dim;
-        for (int j = 0; j < dim; j++) s += mat[o + j] * (double) v[j];
-        return s;
-    }
+    /** Number.prototype.toFixed(3), back to a number. */
+    static double fixed3(double d) { return new BigDecimal(d).setScale(3, RoundingMode.HALF_UP).doubleValue(); }
 
-    private double dot(double[] t, float[] v) {
-        double s = 0;
-        for (int j = 0; j < dim; j++) s += t[j] * v[j];
-        return s;
+    private double best(double[][] vs, float[] v, double inv) {
+        double m = -1;
+        for (double[] t : vs) {
+            double s = 0;
+            for (int j = 0; j < dim; j++) s += t[j] * v[j];
+            m = Math.max(m, s * inv);
+        }
+        return m;
     }
 
     private static double[][] doubles(JSONArray a) throws Exception {
@@ -127,6 +135,4 @@ final class Clip implements AutoCloseable {
         for (int i = 0; i < out.length; i++) out[i] = a.getInt(i);
         return out;
     }
-
-    @Override public void close() throws Exception { session.close(); }
 }

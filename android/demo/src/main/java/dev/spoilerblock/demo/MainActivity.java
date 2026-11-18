@@ -139,6 +139,12 @@ public class MainActivity extends Activity {
             View v = rv.getChildAt(i);
             Object tag = v.getTag();
             if (tag instanceof RecyclerView) { checkChildren((RecyclerView) tag); continue; }
+            // a clean picture post is never covered, not even while its picture is being judged (only the picture is shaded)
+            if (("image clean_dog.jpg".equals(tag) || "image ocr_clean_coffee.png".equals(tag)) && v.getBottom() > 0 && v.getTop() < rv.getHeight()) {
+                checks++;
+                if (covered(v)) { mismatches++; Log.e(TAG, "MISMATCH frame " + frames + " " + tag + " covered"); }
+                continue;
+            }
             if (!(tag instanceof Integer) || v.getBottom() <= 0 || v.getTop() >= rv.getHeight()) continue;
             int post = (Integer) tag;
             boolean covered = covered(v);

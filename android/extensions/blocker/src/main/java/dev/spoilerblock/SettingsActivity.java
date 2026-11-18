@@ -830,6 +830,9 @@ public final class SettingsActivity extends Activity {
         binders.add(() -> where.setText(store.owner ? "Here, in the SpolierBlock app. YouTube, X and Instagram with SpolierBlock use this library, so a work marked as seen in one is seen in all."
             : store.remote ? "In the SpolierBlock app, shared with every app that has SpolierBlock. A change here applies everywhere."
             : "In this app only. Install the SpolierBlock app to share one library between YouTube, X and Instagram."));
+        heading(l, "Image checks");
+        body(l, SpoilerBlock.I != null ? SpoilerBlock.I.images.accel.status()
+            : "Each app with SpolierBlock checks images itself, on its own device processor; its settings show how.");
         heading(l, "On a cover");
         body(l, "Show once: shows the post until the app restarts.\nI've seen it: adds the work to your library as seen, so nothing about it is covered again.\n⋮: opens these settings.");
         heading(l, "Licence");
