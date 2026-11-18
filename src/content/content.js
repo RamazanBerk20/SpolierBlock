@@ -210,7 +210,7 @@
     if (waiting.has(text)) return void waiting.get(text).add(cb);
     waiting.set(text, new Set([cb]));
     setBusy(1);
-    send({ type: 'text.classify', text: text.slice(0, 4000) })
+    ask({ type: 'text.classify', text: text.slice(0, 4000) })
       // fail closed: an engine error keeps the cover
       .then((r) => verdicts.set(text, !r || r.error ? true : !!r.spoiler), () => verdicts.set(text, true))
       .finally(() => {
@@ -372,7 +372,7 @@
     for (const b of blocks) scanBlock(b, force);
   }
 
-  const OBSERVE = { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['src', 'srcset', 'poster', 'alt', 'style'] };
+  const OBSERVE = { childList: true, subtree: true, characterData: true, attributes: true, attributeOldValue: true, attributeFilter: ['src', 'srcset', 'poster', 'alt', 'style'] };
   const mo = new MutationObserver((recs) => {
     for (const r of recs) {
       const t = r.target;
@@ -384,7 +384,8 @@
         if (t.parentNode?.nodeName === 'TITLE') titleDirty = true;
       } else if (r.attributeName === 'alt') pending.add(t);
       else if (r.attributeName === 'style') { if (t.hasAttribute('data-sb-bg') || (!t.firstElementChild && t.getAttribute('style')?.includes('url('))) resetMedia(t); }
-      else if (t.tagName === 'IMG' || t.tagName === 'VIDEO') resetMedia(t);
+      // decided on the attribute: Firefox updates currentSrc only once the new picture starts loading
+      else if ((t.tagName === 'IMG' || t.tagName === 'VIDEO') && r.oldValue !== t.getAttribute(r.attributeName)) resetMedia(t, true);
     }
     if (matcher) flush();
   });
@@ -414,10 +415,8 @@
     media.set(el, { src: null });
     io.observe(el);
   }
-  function resetMedia(el) {
-    if (!mediaOn()) return;
-    const src = mediaSrc(el);
-    if (media.get(el)?.src === src) return;
+  function resetMedia(el, changed) {
+    if (!mediaOn() || (!changed && media.get(el)?.src === mediaSrc(el))) return;
     el.removeAttribute('data-sb-ok');
     media.delete(el);
     registerMedia(el);
@@ -477,8 +476,8 @@
   const ocrCache = new Map(); // key -> Promise<text>
   function clipFor(key, url, prio) {
     if (!clipCache.has(key)) {
-      clipCache.set(key, send({ type: 'img.check', key, url, prio }).then((r) => {
-        if (r?.error || !r) stats.clipError++;
+      clipCache.set(key, ask({ type: 'img.check', key, url, prio }).then((r) => {
+        if (r?.error || !r) { stats.clipError++; stats.lastError = String(r?.error ?? 'no answer').slice(0, 120); }
         return r?.hits ?? [];
       }, () => { stats.clipError++; return []; }));
     }
@@ -488,9 +487,9 @@
     if (!ocrCache.has(key)) {
       let timer;
       ocrCache.set(key, Promise.race([
-        send({ type: 'img.ocr', key, url, prio }).then((r) => {
+        ask({ type: 'img.ocr', key, url, prio }).then((r) => {
           if (r?.error === 'ocr timeout') { stats.ocrTimeout++; return ''; }
-          if (r?.error || !r) { stats.ocrError++; return ''; }
+          if (r?.error || !r) { stats.ocrError++; stats.lastError = String(r?.error ?? 'no answer').slice(0, 120); return ''; }
           return r.text ?? '';
         }, () => { stats.ocrError++; return ''; }),
         new Promise((res) => { timer = setTimeout(() => { stats.ocrTimeout++; res(''); }, OCR_TIMEOUT_MS); }),
@@ -541,6 +540,17 @@
 
   // ---------- messaging / settings ----------
   function send(msg) { return api.runtime.sendMessage(msg); }
+  // Engine requests: a background that is (re)starting has no listener yet ("Receiving end does not exist"); try again
+  // a few times before counting an error, which reveals the image.
+  async function ask(msg) {
+    for (let i = 0; ; i++) {
+      try { return await send(msg); } catch (e) {
+        stats.lastError = String(e?.message ?? e).slice(0, 120);
+        if (i >= 3 || !/receiving end|establish connection/i.test(stats.lastError)) throw e;
+        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+      }
+    }
+  }
 
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type === 'sb.stats' && window === top) sendResponse({ blocked: coverCount() });

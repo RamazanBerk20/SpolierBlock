@@ -474,7 +474,8 @@ await page.screenshot({ path: path.join(OUT, `${target}-feed.png`) });
 const kinds = {};
 for (const p of problems) (kinds[['overlap', 'height changed', 'before its verdict', 'clean post covered', 'label'].find((k) => p.includes(k))] ??= []).push(p);
 check('recycled feed: no overlap, no height change, covers belong to their post, labels right', !problems.size,
-  Object.values(kinds).map((ps) => `${ps.length}x, e.g. ${ps.slice(0, 3).join(' | ')}`).join('; '));
+  Object.values(kinds).map((ps) => `${ps.length}x, e.g. ${ps.slice(0, 3).join(' | ')}`).join('; ') +
+  ` (stats ${await page.evaluate(() => document.documentElement.getAttribute('data-sb-stats'))})`);
 }
 
 if (want('coverage')) {
