@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.graphics.drawable.GradientDrawable;
+import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -12,71 +13,76 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 /**
- * Opaque black cover drawn in the item's own ViewGroupOverlay, so it moves, scrolls and animates with the item
- * with no per-frame positioning. Overlay views get no touches: Scanner.onTouch hit-tests the buttons.
+ * Opaque cover drawn in the item's own ViewGroupOverlay, so it moves, scrolls and animates with the item with no
+ * per-frame positioning. Overlay views get no touches: Scanner.onTouch hit-tests the buttons. Nothing here touches
+ * the item's layout: the overlay is outside the host's measure/layout pass, so the item keeps its size and the list
+ * never re-lays out because of a cover.
  */
 final class Cover {
     final Scanner scanner;
     final View item;
     private final ViewGroup host; // item itself, or its list when the item is a plain View (no ViewGroupOverlay)
-    private final LinearLayout root;
+    private final LinearLayout root, row;
     private final TextView msg, once, seen, manage;
-    private int[] groups;
+    private String message;
+    private int group = -1; // the work group "I've seen it" marks; -1: none (unidentified or pending image)
     String text;
-    private int savedA11y;
+    private final int savedA11y;
 
     Cover(Scanner scanner, View item, ViewGroup parent) {
         this.scanner = scanner;
         this.item = item;
         host = item instanceof ViewGroup ? (ViewGroup) item : parent;
         Context ctx = item.getContext();
+        Ui.Palette p = Ui.palette(ctx);
         root = new LinearLayout(ctx);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
-        root.setBackgroundColor(0xFF111111);
-        int p = dp(8);
-        root.setPadding(p, p, p, p);
-        msg = label(ctx, 15);
+        root.setBackgroundColor(p.cover);
+        int pad = dp(12);
+        root.setPadding(pad, pad, pad, pad);
+        msg = new TextView(ctx);
+        msg.setTextColor(p.text);
+        msg.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         msg.setGravity(Gravity.CENTER);
+        msg.setMaxLines(3);
+        msg.setEllipsize(TextUtils.TruncateAt.END);
         root.addView(msg);
-        LinearLayout row = new LinearLayout(ctx);
+        row = new LinearLayout(ctx);
         row.setGravity(Gravity.CENTER);
-        row.setPadding(0, dp(6), 0, 0);
-        once = button(ctx, "Show once");
-        seen = button(ctx, "");
-        seen.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        manage = button(ctx, "\u22EE"); // vertical ellipsis: spoiler settings
-        manage.setContentDescription("Spoiler settings");
+        row.setPadding(0, dp(8), 0, 0);
+        once = button(ctx, p, "Show once");
+        seen = button(ctx, p, "I've seen it");
+        manage = button(ctx, p, "⋮"); // vertical ellipsis
+        manage.setContentDescription("SpolierBlock settings");
+        manage.setPadding(dp(12), 0, dp(12), 0);
         row.addView(once);
         row.addView(seen);
         row.addView(manage);
-        root.addView(row);
+        // dialogs and popups have no touch gate of ours: no buttons that would not work
+        if (scanner.activityWindow) root.addView(row, Ui.wrap());
         host.getOverlay().add(root);
         // TalkBack must not read what the cover hides
         savedA11y = item.getImportantForAccessibility();
         item.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
     }
 
-    private int dp(int v) { return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, item.getResources().getDisplayMetrics()); }
+    private int dp(int v) { return Ui.dp(item.getContext(), v); }
 
-    private TextView label(Context ctx, int sp) {
-        TextView t = new TextView(ctx);
-        t.setTextColor(0xFFF2F2F2);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
-        return t;
-    }
-
-    private TextView button(Context ctx, String s) {
-        TextView b = label(ctx, 14);
+    private TextView button(Context ctx, Ui.Palette p, String s) {
+        TextView b = new TextView(ctx);
+        b.setTextColor(p.text);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         b.setText(s);
         b.setMaxLines(1);
-        b.setMinHeight(dp(40));
+        b.setEllipsize(TextUtils.TruncateAt.END);
+        b.setMinHeight(dp(44));
         b.setGravity(Gravity.CENTER);
-        b.setPadding(dp(14), 0, dp(14), 0);
+        b.setPadding(dp(16), 0, dp(16), 0);
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xFF262626);
-        bg.setStroke(dp(1), 0xFF555555);
-        bg.setCornerRadius(dp(20));
+        bg.setColor(p.surface);
+        bg.setStroke(dp(1), p.outline);
+        bg.setCornerRadius(dp(22));
         b.setBackground(bg);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.setMargins(dp(4), 0, dp(4), 0);
@@ -84,19 +90,35 @@ final class Cover {
         return b;
     }
 
-    /** Returns true when what the cover says changed. */
-    boolean show(Matcher m, int[] groups, String text) {
-        if (java.util.Arrays.equals(groups, this.groups)) { this.text = text; return false; }
-        this.groups = groups;
+    /** Returns true when what the cover says changed. group: the work group "I've seen it" marks, or -1. */
+    boolean show(String message, int group, String text) {
         this.text = text;
-        boolean known = groups.length > 0 && groups[0] != Clip.UNKNOWN;
-        if (groups.length == 0) msg.setText("Checking image\u2026"); // pending: covered until its verdicts are in
-        else if (!known) msg.setText("May contain a spoiler (unrecognised film, show or game image)");
-        else msg.setText("Contains spoiler about " + m.labels[groups[0]] + (groups.length > 1 ? " (+" + (groups.length - 1) + " more)" : ""));
-        seen.setText(known ? "I've seen " + m.labels[groups[0]] : "");
-        seen.setVisibility(known ? View.VISIBLE : View.GONE); // nothing to mark as seen when the work is not known
+        if (message.equals(this.message) && group == this.group) return false;
+        this.message = message;
+        this.group = group;
+        msg.setText(message);
+        seen.setVisibility(group >= 0 ? View.VISIBLE : View.GONE);
         layout(true);
         return true;
+    }
+
+    private Boolean compact;
+
+    /**
+     * A short item (one line of a message, a list row) has no room for the message above the buttons: then they sit
+     * side by side, the buttons as tall as the item allows, so the buttons are never cut off.
+     */
+    private void compact(boolean on) {
+        int h = item.getHeight();
+        for (TextView b : new TextView[]{once, seen, manage}) b.setMinHeight(on ? Math.max(dp(24), Math.min(dp(44), h - dp(4))) : dp(44));
+        if (compact != null && compact == on) return;
+        compact = on;
+        root.setOrientation(on ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+        root.setPadding(dp(12), on ? 0 : dp(12), on ? dp(4) : dp(12), on ? 0 : dp(12));
+        msg.setGravity(on ? Gravity.START | Gravity.CENTER_VERTICAL : Gravity.CENTER);
+        msg.setMaxLines(on ? 2 : 3);
+        msg.setLayoutParams(on ? new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1) : Ui.wrap());
+        row.setPadding(0, on ? 0 : dp(8), 0, 0);
     }
 
     /** Keeps the cover the size (and, for a plain-View item, the position) of its item. */
@@ -109,7 +131,7 @@ final class Cover {
             if (host != item) { root.setTranslationX(item.getTranslationX()); root.setTranslationY(item.getTranslationY()); }
             return;
         }
-        seen.setMaxWidth(w / 2); // long titles must not push the other buttons out
+        compact(h < dp(120));
         root.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY));
         root.layout(x, y, x + w, y + h);
         if (host != item) { root.setTranslationX(item.getTranslationX()); root.setTranslationY(item.getTranslationY()); }
@@ -125,15 +147,15 @@ final class Cover {
     /** x, y in screen coordinates; the gesture was already taken away from the app. */
     void tap(float x, float y) {
         if (hit(once, x, y)) scanner.revealOnce(this);
-        else if (hit(seen, x, y) && groups.length > 0 && groups[0] != Clip.UNKNOWN) SpoilerBlock.I.markSeen(groups[0]);
+        else if (group >= 0 && hit(seen, x, y)) SpoilerBlock.I.markSeen(group);
         else if (hit(manage, x, y)) {
             Activity a = activity(item.getContext());
-            if (a != null) ManageDialog.show(a, SpoilerBlock.I);
+            if (a != null) SpoilerBlock.I.openSettings(a);
         }
     }
 
     private boolean hit(View b, float x, float y) {
-        if (b.getWidth() == 0) return false;
+        if (!scanner.activityWindow || b.getWidth() == 0 || b.getVisibility() != View.VISIBLE) return false;
         int[] l = new int[2];
         item.getLocationOnScreen(l);
         float bx = l[0], by = l[1]; // the cover sits exactly on the item

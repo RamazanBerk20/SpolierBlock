@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
         {"Zorblax Chronicles finale was wild", null},                     // invented work: covered only after a catalog update
     };
     static final String[] AUTHORS = {"@anna_k", "@deniz", "@moviebuff", "@gamer42", "@reader"};
-    static final int N = 240, TEXT = 0, CANVAS_DESC = 1, CANVAS_A11Y = 2, CANVAS_HOOK = 3, SHELF = 4, IMAGE = 5;
+    static final int N = 240, TEXT = 0, CANVAS_DESC = 1, CANVAS_A11Y = 2, CANVAS_HOOK = 3, SHELF = 4, IMAGE = 5, VIDEO = 6;
     // image posts (test/fixtures/images): file, caption. Expected: titled Night of the Living Dead, shown, Harry Potter
     // (OCR of the caption in the picture), shown, "unrecognised" media. Not frame-checked (pending until verdicts are in).
     static final String[][] IMAGES = {
@@ -59,10 +59,45 @@ public class MainActivity extends Activity {
         {"ocr_clean_coffee.png", "Monday mood"},
         {"pos_nosferatu.jpg", "Throwback Thursday"},
     };
-    static long frames, checks, mismatches;
+    static long frames, checks, mismatches, blockerLayouts, blockerDraws;
+
+    /**
+     * True when the blocker (dev.spoilerblock.*, not this demo) made this call: the first caller below the overriding
+     * method that is not framework code. The blocker must never lay out or draw host views. (It is further down the
+     * stack of every touch, since its TouchGate hands touches to the app: that is the app's own work.)
+     */
+    static boolean fromBlocker(String what, View v) {
+        StackTraceElement[] st = new Throwable().getStackTrace();
+        for (int i = 2; i < st.length; i++) { // 0: this method, 1: the override
+            String c = st[i].getClassName();
+            if (c.startsWith("android.") || c.startsWith("java.") || c.startsWith("com.android.") || c.startsWith("dalvik.")) continue;
+            if (!c.startsWith("dev.spoilerblock.") || c.startsWith("dev.spoilerblock.demo.")) return false;
+            Log.e(TAG, "BLOCKER " + what + " on " + v.getClass().getName() + " via " + c + "." + st[i].getMethodName(), new Throwable());
+            return true;
+        }
+        return false;
+    }
+
+    /** A feed row that reports any layout request coming from the blocker (a cover must never change an item's size). */
+    static class Row extends LinearLayout {
+        Row(Context c) { super(c); }
+        @Override public void requestLayout() { if (fromBlocker("requestLayout", this)) blockerLayouts++; super.requestLayout(); }
+    }
+
+    /** Media view: the blocker may read its drawable but must never draw the view itself (its RenderNodes are the app's). */
+    static class Media extends android.widget.ImageView {
+        Media(Context c) { super(c); }
+        @Override public void draw(android.graphics.Canvas c) { if (fromBlocker("draw", this)) blockerDraws++; super.draw(c); }
+        @Override public void requestLayout() { if (fromBlocker("requestLayout", this)) blockerLayouts++; super.requestLayout(); }
+    }
+
+    static class FeedList extends RecyclerView {
+        FeedList(Context c) { super(c); }
+        @Override public void requestLayout() { if (fromBlocker("requestLayout", this)) blockerLayouts++; super.requestLayout(); }
+    }
     static final java.util.Set<Integer> revealed = new java.util.HashSet<>(); // posts the tester revealed / marked seen
 
-    static int type(int pos) { return pos % 25 == 24 ? SHELF : pos % 25 >= 2 && pos % 25 <= 6 ? IMAGE : pos % 4; }
+    static int type(int pos) { return pos % 25 == 24 ? SHELF : pos % 25 == 12 ? VIDEO : pos % 25 >= 2 && pos % 25 <= 6 ? IMAGE : pos % 4; }
     static String body(int post) { return (String) POSTS[post][0]; }
     static Boolean expected(int post) { return POSTS[post][1] == null ? null : (Boolean) POSTS[post][1] && !revealed.contains(post); }
 
@@ -72,7 +107,12 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         String reveal = getIntent().getStringExtra("revealed"); // posts the test marked seen / showed: "8,12"
         if (reveal != null) for (String s : reveal.split(",")) if (!s.isEmpty()) revealed.add(Integer.parseInt(s));
-        list = new RecyclerView(this);
+        if ("more".equals(getIntent().getStringExtra("screen"))) { // messages, a bottom sheet, suggestions: More.java
+            setContentView(More.build(this));
+            return;
+        }
+        if ("settings".equals(getIntent().getStringExtra("screen"))) { startActivity(new android.content.Intent(this, DemoSettings.class)); finish(); return; }
+        list = new FeedList(this);
         list.setLayoutManager(new LinearLayoutManager(this));
         list.setAdapter(new Feed());
         setContentView(list);
@@ -83,13 +123,14 @@ public class MainActivity extends Activity {
 
     @Override protected void onPause() {
         super.onPause();
-        Log.i(TAG, "frame check summary: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches");
+        Log.i(TAG, "frame check summary: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches, " +
+            blockerLayouts + " blocker layouts, " + blockerDraws + " blocker draws");
     }
 
     /** Every drawn frame: each visible post is covered iff expected (the blocker hides covered items from a11y). */
     void check() {
         frames++;
-        checkChildren(list);
+        if (list != null) checkChildren(list);
         if (frames % 600 == 0) Log.i(TAG, "frame check: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches");
     }
 
@@ -110,10 +151,22 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** One post shown outside a list (a dialog's text, a suggestion row): covered iff expected, checked on every frame drawn. */
+    static void checkOne(View v, int post, String where) {
+        boolean covered = false;
+        for (View x = v; x != null; x = x.getParent() instanceof View ? (View) x.getParent() : null)
+            covered |= x.getImportantForAccessibility() == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS;
+        checks++;
+        if (expected(post) != null && covered != expected(post)) {
+            mismatches++;
+            Log.e(TAG, "MISMATCH " + where + " frame " + frames + " post " + post + " covered=" + covered + " \"" + body(post) + "\"");
+        }
+    }
+
     int dp(int v) { return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()); }
 
     LinearLayout card(Context c) {
-        LinearLayout l = new LinearLayout(c);
+        LinearLayout l = new Row(c);
         l.setOrientation(LinearLayout.VERTICAL);
         l.setPadding(dp(16), dp(12), dp(16), dp(12));
         l.setBackgroundColor(0xFFFFFFFF);
@@ -136,12 +189,22 @@ public class MainActivity extends Activity {
                 shelf.setAdapter(new Shelf());
                 l.addView(shelf);
                 l.setTag(shelf);
+            } else if (type == VIDEO) { // an inline player: a TextureView fed every frame, like X's autoplay
+                TextView caption = new TextView(parent.getContext());
+                caption.setTextSize(17);
+                l.addView(caption);
+                l.addView(new Video(parent.getContext()), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(200)));
             } else if (type == IMAGE) {
                 TextView caption = new TextView(parent.getContext());
                 caption.setTextSize(17);
                 l.addView(caption);
-                android.widget.ImageView img = new android.widget.ImageView(parent.getContext());
+                android.widget.ImageView img = new Media(parent.getContext());
                 img.setAdjustViewBounds(true); // the view is the picture, as in most feeds
+                // a rounded background, like real feeds' media frames: drawing the view would share its RenderNode
+                android.graphics.drawable.GradientDrawable frame = new android.graphics.drawable.GradientDrawable();
+                frame.setColor(0xFFCCCCCC);
+                frame.setCornerRadius(dp(12));
+                img.setBackground(frame);
                 img.setMaxHeight(dp(360));
                 l.addView(img, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             } else {
@@ -157,6 +220,7 @@ public class MainActivity extends Activity {
         }
 
         @Override public void onBindViewHolder(RecyclerView.ViewHolder h, int pos) {
+            if (type(pos) == VIDEO) { h.itemView.setTag(VIDEO_POST); ((TextView) ((LinearLayout) h.itemView).getChildAt(0)).setText(body(VIDEO_POST)); return; }
             if (type(pos) == IMAGE) { bindImage((LinearLayout) h.itemView, (pos % 25 - 2) % IMAGES.length); return; }
             if (type(pos) == SHELF) { ((RecyclerView) h.itemView.getTag()).scrollToPosition(0); ((Shelf) ((RecyclerView) h.itemView.getTag()).getAdapter()).at(pos); return; }
             int post = pos % POSTS.length;
@@ -165,6 +229,24 @@ public class MainActivity extends Activity {
             ((TextView) l.getChildAt(0)).setText(AUTHORS[pos % AUTHORS.length]);
             View t = l.getChildAt(1);
             if (t instanceof TextView) ((TextView) t).setText(body(post)); else ((DrawnText) t).setText(body(post));
+        }
+    }
+
+    static final int VIDEO_POST = 16; // "Elden Ring boss fights are brutal": covered by its caption
+
+    /** Frames drawn into a TextureView's surface while attached: video content no ImageView capture can reach. */
+    static class Video extends android.view.TextureView implements Runnable {
+        int n;
+        Video(Context c) { super(c); }
+        @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); post(this); }
+        @Override protected void onDetachedFromWindow() { removeCallbacks(this); super.onDetachedFromWindow(); }
+        @Override public void run() {
+            android.graphics.Canvas c = isAvailable() ? lockCanvas() : null;
+            if (c != null) {
+                c.drawColor(android.graphics.Color.HSVToColor(new float[]{(n++ * 3) % 360, 0.6f, 0.7f}));
+                unlockCanvasAndPost(c);
+            }
+            postDelayed(this, 33);
         }
     }
 

@@ -132,7 +132,7 @@ final class Images {
         if (s != null && s.key == k) return s;
         State st = new State(k);
         if (capturedThisFrame) { // one capture per frame (a second one would be dropped by the renderer): the rest next frame
-            if (!retryPosted) { retryPosted = true; sb.main.postDelayed(() -> { retryPosted = false; sb.verdictsChanged(); }, 16); }
+            if (!retryPosted) { retryPosted = true; sb.main.postDelayed(this::retry, 16); }
             return st; // pending, not stored: requested again on the next judge
         }
         capturedThisFrame = true;
@@ -142,7 +142,7 @@ final class Images {
             capture(v, b -> enqueue(new Job(v, st, b)));
         } catch (FrameDropped e) {
             states.remove(v);
-            if (!retryPosted) { retryPosted = true; sb.main.postDelayed(() -> { retryPosted = false; sb.verdictsChanged(); }, 16); }
+            if (!retryPosted) { retryPosted = true; sb.main.postDelayed(this::retry, 16); }
         } catch (Throwable t) {
             Log.w(TAG, "capture of " + v.getClass().getName() + " failed, item stays covered", t);
             st.done = st.failed = true;
@@ -151,6 +151,8 @@ final class Images {
         stCapture += dt; stCaptureN++; stCaptureMax = Math.max(stCaptureMax, dt);
         return st;
     }
+
+    private void retry() { retryPosted = false; sb.invalidateAll(); } // a new frame: only items with pending images are judged again
 
     private void enqueue(Job j) { // any thread
         synchronized (jobs) {
@@ -182,11 +184,14 @@ final class Images {
         int w = v.getWidth(), h = v.getHeight();
         float s = Math.min(1f, MAX_SIDE / (float) Math.max(w, h));
         int bw = Math.max(1, Math.round(w * s)), bh = Math.max(1, Math.round(h * s));
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) { // shortcut: Android 9 draws in software, hardware bitmaps then fail closed
+        Drawable d = ((ImageView) v).getDrawable();
+        // Android 9 draws in software (hardware bitmaps then fail closed); so does an animated image, whose native frame
+        // clock lives on the render thread of whichever renderer draws it
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || d.getCurrent() instanceof android.graphics.drawable.AnimatedImageDrawable) {
             Bitmap b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
             Canvas c = new Canvas(b);
             c.scale(s, s);
-            v.draw(c);
+            drawContent((ImageView) v, c);
             done.accept(b);
             return;
         }
@@ -219,7 +224,7 @@ final class Images {
         RecordingCanvas c = node.beginRecording(MAX_SIDE, MAX_SIDE);
         c.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
         c.scale(s, s);
-        v.draw(c);
+        drawContent((ImageView) v, c);
         node.endRecording();
         synchronized (pending) { pending.addLast(new Object[]{bw, bh, done}); }
         int r = renderer.createRenderRequest().syncAndDraw(); // drawn on the render thread; the main thread does not wait for it
@@ -227,6 +232,23 @@ final class Images {
             synchronized (pending) { pending.pollLast(); }
             throw new FrameDropped();
         }
+    }
+
+    /**
+     * What ImageView.onDraw draws, without View.draw: View.draw on a hardware canvas would put the host's own RenderNodes
+     * (the background's, overlay children's) into this renderer's tree, and whichever renderer syncs a shared node first
+     * takes its damage. On devices with partial screen updates (buffer age) the app's next frame then leaves those regions
+     * unpainted: stale covers and posts, "jumping" feeds. A drawable is not a RenderNode, so the host's tree is never touched.
+     */
+    static void drawContent(ImageView v, Canvas c) {
+        Drawable d = v.getDrawable();
+        if (d == null) return;
+        int save = c.save();
+        if (v.getCropToPadding()) c.clipRect(v.getPaddingLeft(), v.getPaddingTop(), v.getWidth() - v.getPaddingRight(), v.getHeight() - v.getPaddingBottom());
+        c.translate(v.getPaddingLeft(), v.getPaddingTop());
+        c.concat(v.getImageMatrix());
+        d.draw(c);
+        c.restoreToCount(save);
     }
 
     private static final class FrameDropped extends RuntimeException { }

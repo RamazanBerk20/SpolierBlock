@@ -52,8 +52,8 @@ The patched app is installed as app.morphe.android.youtube next to the store app
 (ad blocking, ...) can be added with: MORPHE_ALL=1 ./apply.sh ..." ;;
   com.twitter.android) abis=${ABIS:-arm64-v8a}; note="No official Morphe patches are needed for X." ;;
   com.instagram.android) abis=${ABIS:-arm64-v8a}; note="No official Morphe patches are needed for Instagram." ;;
-  dev.spoilerblock.demo) abis=${ABIS:-arm64-v8a,armeabi-v7a,x86,x86_64}; note="Demo app." ;;
-  *) echo "error: unsupported package '${pkg:-unknown}' in $in (supported: com.twitter.android, com.google.android.youtube, com.instagram.android, dev.spoilerblock.demo)" >&2; exit 2 ;;
+  dev.spoilerblock.demo|dev.spoilerblock.demo2) abis=${ABIS:-arm64-v8a,armeabi-v7a,x86,x86_64}; note="Demo app." ;;
+  *) echo "error: unsupported package '${pkg:-unknown}' in $in (supported: com.twitter.android, com.google.android.youtube, com.instagram.android, dev.spoilerblock.demo, dev.spoilerblock.demo2)" >&2; exit 2 ;;
 esac
 
 out=${2:-$here/out/$pkg-spoilerblock.apk}

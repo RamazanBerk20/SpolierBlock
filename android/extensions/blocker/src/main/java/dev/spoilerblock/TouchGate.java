@@ -26,6 +26,7 @@ final class TouchGate implements Window.Callback {
     @Override public boolean dispatchTouchEvent(MotionEvent ev) {
         if (!SpoilerBlock.dead) {
             try {
+                if (ev.getActionMasked() == MotionEvent.ACTION_UP) scanner.sb.watchWindows(); // a tap may open a dialog or popup
                 if (scanner.onTouch(this, ev)) return true;
             } catch (Throwable t) {
                 SpoilerBlock.fail("touch", t);
@@ -34,7 +35,10 @@ final class TouchGate implements Window.Callback {
         return app.dispatchTouchEvent(ev);
     }
 
-    @Override public boolean dispatchKeyEvent(KeyEvent e) { return app.dispatchKeyEvent(e); }
+    @Override public boolean dispatchKeyEvent(KeyEvent e) {
+        if (!SpoilerBlock.dead) try { scanner.sb.watchWindows(); } catch (Throwable t) { SpoilerBlock.fail("key", t); } // typing opens suggestions
+        return app.dispatchKeyEvent(e);
+    }
     @Override public boolean dispatchKeyShortcutEvent(KeyEvent e) { return app.dispatchKeyShortcutEvent(e); }
     @Override public boolean dispatchTrackballEvent(MotionEvent e) { return app.dispatchTrackballEvent(e); }
     @Override public boolean dispatchGenericMotionEvent(MotionEvent e) { return app.dispatchGenericMotionEvent(e); }

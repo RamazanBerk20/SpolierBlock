@@ -2,9 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- the real target apps have INTERNET; the demo needs it (and cleartext) only for the local mock SPARQL server -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- the demo's own test notifications (More.notifyFromBackground); the real apps already post notifications -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:name=".DemoApp"
-        android:label="SB Demo"
+        android:label="${appLabel}"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.DarkActionBar">
         <activity android:name=".MainActivity" android:exported="true">
@@ -13,5 +15,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".DemoSettings" android:exported="false" android:label="Settings" />
     </application>
 </manifest>
