@@ -24,15 +24,18 @@
 <div id="tl"></div>
 <script>
   const IMG = '{{IMG}}';
+  // pictures the shipped engine titles (a) or calls generic media (b), chosen by test/e2e/run.mjs; clean when it has none
+  const PICS = {{PICS}};
+  const pic = (p) => [p?.file ?? 'clean_lake.jpg', p?.expect ?? null];
   // kind -> [text, image, expected cover label or null]
   const KINDS = [
     ['lol', null, null],
-    ['Weekend vibes.', 'spoiler_starwars_trooper.jpg', 'Image from Star Wars'],
+    ['Weekend vibes.', ...pic(PICS.a)],
     ['same', null, null],
     ["Can't believe Walter White ends up like that in the last episode.", null, 'Mentions Breaking Bad'],
     ['My buddy.', 'clean_dog.jpg', null],
     ['ok', null, null],
-    ['Comic con!', 'spoiler_got_throne.jpg', 'Possible film, show or game image'],
+    ['Comic con!', ...pic(PICS.b)],
     ['Lovely weather in the park today, the ducks were out and so was everyone else in town.', null, null],
   ];
   const N = 64;
