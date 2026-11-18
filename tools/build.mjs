@@ -2,21 +2,26 @@
 // usage: node tools/build.mjs [catalog.json=data/catalog.json] [--clip-n=2000]
 import fs from 'node:fs';
 import path from 'node:path';
-import { env, CLIPVisionModelWithProjection } from '@huggingface/transformers';
 import { buildIndex } from './build-index.mjs';
 import { createHash } from 'node:crypto';
 import { TYPES, EXCLUDE, qid, subclassQuery } from '../src/shared/catalog-rules.js';
-import { buildClipText, packClipText, clipRows, rowFamilies, CLIP_MODEL } from './build-clip-text.mjs';
+import { buildClipText, packClipText, clipRows, rowFamilies, pinned, visionModel, VISION } from './build-clip-text.mjs';
 
 const args = process.argv.slice(2);
 const catalogPath = args.find((a) => !a.startsWith('--')) ?? 'data/catalog.json';
 const clipN = +(args.find((a) => a.startsWith('--clip-n='))?.split('=')[1] ?? 2000); // chosen with tools/calibrate-clip.mjs
-// Image verdict thresholds, measured with tools/calibrate-clip.mjs on test/fixtures/images against the real catalog.
-const CLIP_MIN_SCORE = 0.22, CLIP_MARGIN = 0.02, CLIP_MEDIA_GATE = 0.015;
-// A visual-only match names a title only if it beats the best unrelated title by this much; otherwise the block is
-// labelled as an unrecognised image (tools/calibrate-clip.mjs: wrong titles 12 -> 0, right titles 4 -> 1 on the 31 media fixtures).
-const CLIP_TITLE_GAP = 0.02;
-env.cacheDir = 'build/.cache';
+// Image verdict cut-offs from tools/calibrate-clip.mjs (SB_RESEARCH=research, real catalog): an image is named after its
+// best title row when that row scores at least `minScore`, beats the best generic "ordinary photo" prompt by `margin`
+// and the best row of an unrelated title family by `titleGap`; otherwise it is "unidentified media" when the media
+// prompts beat the generic ones by `mediaGate`.
+// Held out (two-fold, 397 media / 466 ordinary images, N=2000): 28 right, 4 wrong titles, 0 ordinary photos named.
+const CUT = { minScore: 0.1161, margin: 0.061, titleGap: 0.0275, mediaGate: 0.0514 };
+// PP-OCR v5 mobile (Apache-2.0, PaddleOCR) as converted to ONNX by RapidOCR, pinned by release and sha256.
+const OCR_BASE = 'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5';
+const OCR_MODELS = {
+  'det.onnx': [`${OCR_BASE}/det/ch_PP-OCRv5_det_mobile.onnx`, '4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae'],
+  'rec.onnx': [`${OCR_BASE}/rec/en_PP-OCRv5_rec_mobile.onnx`, 'c3461add59bb4323ecba96a492ab75e06dda42467c9e3d0c18db5d1d21924be8'],
+};
 
 if (!fs.existsSync(catalogPath)) {
   console.error(`catalog not found: ${catalogPath} (use \`npm run build:fixture\` for the test catalog)`);
@@ -35,14 +40,13 @@ fs.writeFileSync(`${data}/index.bin`, Buffer.from(bin));
 fs.writeFileSync(`${data}/index.json`, JSON.stringify(meta));
 console.log(`index: ${keys} keys, ${meta.groups.length} groups, ${(bin.byteLength / 1e6).toFixed(1)} MB bin`);
 
-// all title rows are embedded once (cached, shared with tools/calibrate-clip.mjs); the N most popular are shipped
-const { items, rowGroup } = clipRows(built, Infinity);
-const emb = await buildClipText(items);
-const rg = rowGroup.slice(0, clipN);
-const clip = packClipText({ ...emb, rows: emb.rows.slice(0, clipN) }, rg, rowFamilies(meta.groups, rg), CLIP_MIN_SCORE, CLIP_MARGIN, CLIP_MEDIA_GATE, CLIP_TITLE_GAP);
+// the N most popular title rows (embedded once, cached in build/, shared with tools/calibrate-clip.mjs)
+const { items, rowGroup } = clipRows(built, clipN);
+const clip = packClipText(await buildClipText(items), rowGroup, rowFamilies(meta.groups, rowGroup),
+  { ...CUT, size: VISION.size, mean: VISION.mean, std: VISION.std, output: VISION.output });
 fs.writeFileSync(`${data}/clip-text.bin`, Buffer.from(clip.bin.buffer));
 fs.writeFileSync(`${data}/clip-meta.json`, JSON.stringify(clip.meta));
-console.log(`clip text matrix: ${clip.meta.n} names`);
+console.log(`image title matrix: ${clip.meta.n} names`);
 
 // Inputs of the opt-in catalog update (src/background/catalog-update.js): the bundled catalog it merges into, the
 // common-word list of the ambiguity rules, the class list of the seven work types (same roots/subclasses as
@@ -52,8 +56,9 @@ fs.copyFileSync('tools/catalog/20k.txt', `${data}/common-words.txt`);
 fs.writeFileSync(`${data}/catalog-classes.json`, JSON.stringify(await catalogClasses()));
 fs.writeFileSync(`${data}/catalog-info.json`, JSON.stringify({ builtAt: fs.statSync(catalogPath).mtime.toISOString(), works: catalog.works.length }));
 
-// make sure the runtime model file is in the cache (the spoiler classifier ships from models/spoiler, see tools/train-spoiler.mjs)
-await CLIPVisionModelWithProjection.from_pretrained(CLIP_MODEL, { dtype: 'q8' });
+// runtime model files, pinned (the spoiler classifier ships from models/spoiler, see tools/train-spoiler.mjs)
+const visionFile = await visionModel();
+for (const [name, [src, sha]] of Object.entries(OCR_MODELS)) await pinned(src, `build/.cache/ocr/${sha.slice(0, 16)}-${name}`, sha);
 
 // ---- assemble ----
 const cp = (from, to) => { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.cpSync(from, to, { recursive: true }); };
@@ -70,13 +75,9 @@ for (const target of ['firefox', 'chrome']) {
   cp(`${nm}/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm`, `${out}/vendor/ort-wasm-simd-threaded.wasm`);
   cp(`${nm}/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs`, `${out}/vendor/ort-wasm-simd-threaded.mjs`);
   fs.writeFileSync(`${out}/vendor/transformers.js`, transformers);
-  cp(`${nm}/tesseract.js/dist/tesseract.esm.min.js`, `${out}/vendor/tesseract/tesseract.esm.min.js`);
-  cp(`${nm}/tesseract.js/dist/worker.min.js`, `${out}/vendor/tesseract/worker.min.js`);
-  cp(`${nm}/tesseract.js-core/tesseract-core-simd-lstm.wasm.js`, `${out}/vendor/tesseract/tesseract-core-simd-lstm.wasm.js`);
-  cp(`${nm}/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz`, `${out}/vendor/tesseract/eng.traineddata.gz`);
-  const c = `build/.cache/${CLIP_MODEL}`;
-  cp(`${c}/config.json`, `${out}/models/clip/config.json`);
-  cp(`${c}/onnx/vision_model_quantized.onnx`, `${out}/models/clip/onnx/vision_model_quantized.onnx`);
+  cp(visionFile, `${out}/models/vision/model.onnx`);
+  for (const [name, [, sha]] of Object.entries(OCR_MODELS)) cp(`build/.cache/ocr/${sha.slice(0, 16)}-${name}`, `${out}/models/ocr/${name}`);
+  cp('models/ocr/dict.txt', `${out}/models/ocr/dict.txt`);
   cp('models/spoiler', `${out}/models/spoiler`);
 
   const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
