@@ -1,83 +1,26 @@
-:root {
-  --bg: #fbfbfa; --card: #ffffff; --text: #2f3437; --muted: #787774;
-  --line: #eaeaea; --accent: #111111; --on-accent: #ffffff; --tag: #f1f0ed;
-  --sans: "SF Pro Display", "Helvetica Neue", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #191919; --card: #202020; --text: #e6e5e3; --muted: #9b9a97;
-    --line: #2f2f2f; --accent: #e6e5e3; --on-accent: #191919; --tag: #2a2a29;
-  }
-}
-* { box-sizing: border-box; }
-[hidden] { display: none !important; }
-html { background: var(--bg); }
-body {
-  margin: 0; font: 14px/1.6 var(--sans); color: var(--text); background: var(--bg);
-  width: 100%; min-width: 360px; max-width: 560px; margin-inline: auto;
-}
-/* min-width gives the toolbar popup its 360px; the full page stays fluid up to 560px. */
-main { padding: 20px; display: flex; flex-direction: column; gap: 24px; }
-header, .h-row, .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-h1 { font: 500 24px/1.1 var(--serif); letter-spacing: -0.03em; margin: 0; }
-h2 { margin: 0; }
-section { display: flex; flex-direction: column; gap: 8px; }
-.h { font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
-.muted { color: var(--muted); font-size: 13px; margin: 0; }
-.status p { margin: 0; }
-footer { padding-top: 12px; border-top: 1px solid var(--line); }
+body { width: 360px; max-width: 100%; margin: 0 auto; } /* centred when opened as a tab (Firefox for Android) */
+main { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+header { display: flex; align-items: center; justify-content: space-between; padding: 2px 2px 2px 4px; }
+.word { font-size: 18px; font-weight: 650; letter-spacing: -0.02em; }
 
-input[type="search"] {
-  width: 100%; min-height: 44px; padding: 0 12px; font: inherit; color: var(--text);
-  background: var(--card); border: 1px solid var(--line); border-radius: 6px;
-}
-.h-row input[type="search"] { width: 50%; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.page { background: var(--panel); border-radius: 18px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.count { display: flex; align-items: baseline; gap: 8px; color: var(--soft); }
+.count b { font-size: 40px; line-height: 1; font-weight: 650; letter-spacing: -0.03em; color: var(--ink); font-variant-numeric: tabular-nums; }
+body.off .count b { color: var(--soft); }
+.pause { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; font-size: 14px; }
+#pause-label { overflow-wrap: anywhere; }
 
-.list { list-style: none; margin: 0; padding: 0; }
-.list li { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); min-height: 44px; }
-.list li > .grow, .list li > button.grow { flex: 1; min-width: 0; }
-.add {
-  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 4px 0;
-  font: inherit; color: inherit; text-align: left; background: none; border: 0; cursor: pointer;
-}
-.add:hover .title, .add:focus-visible .title { text-decoration: underline; }
-.title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.tag {
-  font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; padding: 0 8px;
-  border-radius: 9999px; background: var(--tag); color: var(--muted); white-space: nowrap;
-}
-.tag.done { background: #edf3ec; color: #346538; }
-@media (prefers-color-scheme: dark) { .tag.done { background: #243024; color: #9fc89f; } }
-.rm {
-  flex: none; width: 44px; height: 44px; font: 20px/1 var(--sans); color: var(--muted);
-  background: none; border: 0; border-radius: 6px; cursor: pointer;
-}
-.rm:hover { color: var(--text); background: var(--tag); }
-#seen { max-height: 40vh; overflow-y: auto; }
+.finder { display: flex; flex-direction: column; gap: 6px; }
+#search { width: 100%; min-height: 44px; background: var(--panel); }
+#search-msg { padding: 0 14px; font-size: 14px; }
+.results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; border-radius: 14px; }
+.results:empty { display: none; }
+.results li { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 14px; background: var(--panel); }
+.what { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.title { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.results button { min-height: 34px; padding: 0 12px; font-size: 13px; }
+.results button.on { background: var(--accent-tint); }
+.results .mark { flex: none; }
 
-/* Switch: a real checkbox, visually replaced by a track. */
-.row { min-height: 44px; cursor: pointer; }
-.switch { position: relative; display: inline-flex; flex: none; width: 44px; height: 44px; align-items: center; justify-content: center; cursor: pointer; }
-.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
-.track { position: relative; width: 36px; height: 20px; border-radius: 10px; background: var(--line); transition: background 150ms; pointer-events: none; }
-.track::after {
-  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
-  background: var(--card); transition: transform 150ms;
-}
-input:checked + .track { background: var(--accent); }
-input:checked + .track::after { transform: translateX(16px); background: var(--on-accent); }
-input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { .track, .track::after { transition: none; } }
-
-/* Catalog update: a native select and a plain button, same field look as the search box. */
-select, .btn {
-  min-height: 44px; padding: 0 12px; font: inherit; color: var(--text);
-  background: var(--card); border: 1px solid var(--line); border-radius: 6px;
-}
-.btn { flex: none; cursor: pointer; }
-.btn:hover:not(:disabled) { background: var(--tag); }
-.btn:disabled { color: var(--muted); cursor: progress; }
-#catalogStatus { flex: 1; min-width: 0; }
+.wide { width: 100%; }
+.toast { bottom: 12px; }
