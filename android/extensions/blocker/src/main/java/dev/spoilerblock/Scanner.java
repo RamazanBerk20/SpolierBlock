@@ -66,6 +66,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
 
     void detach() {
         clear();
+        sb.silence(this, false);
         decor.getViewTreeObserver().removeOnPreDrawListener(this);
         decor.getViewTreeObserver().removeOnGlobalLayoutListener(this);
     }
@@ -138,7 +139,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     private void scan() {
         // a popup opened by what changed in this frame (typing -> suggestions) is found before its own first traversal
         if (activityWindow) sb.checkWindows();
-        if (!sb.enabled) { if (!covers.isEmpty()) clear(); return; }
+        if (!sb.enabled) { if (!covers.isEmpty()) clear(); sb.silence(this, false); return; }
         long now = SystemClock.uptimeMillis();
         if (layoutDirty || now - lastDiscover > REDISCOVER_MS) {
             layoutDirty = false; lastDiscover = now;
@@ -171,6 +172,32 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             else cv.sync();
         }
         shadeFloaters();
+        sb.silence(this, hidesSound());
+    }
+
+    /**
+     * Whether something covered here can be playing: a cover over most of the window (a full-screen pager page:
+     * Reels, Shorts, stories) or over a video surface (a feed's inline player, inside the item or floating over it).
+     */
+    private boolean hidesSound() {
+        long window = (long) decor.getWidth() * decor.getHeight();
+        for (Cover c : covers) {
+            if (!c.item.isShown()) continue;
+            if ((long) c.item.getWidth() * c.item.getHeight() * 10 >= window * 6) return true;
+            if (hasVideo(c.item)) return true;
+        }
+        for (View v : shades.keySet()) if (v.isShown() && hasVideo(v)) return true;
+        return false;
+    }
+
+    private static boolean hasVideo(View v) {
+        if (v.getVisibility() != View.VISIBLE || v.getWidth() == 0) return false;
+        if (v instanceof android.view.TextureView || v instanceof android.view.SurfaceView) return true;
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) if (hasVideo(g.getChildAt(i))) return true;
+        }
+        return false;
     }
 
     // ---------- views floating over covered items (e.g. YouTube's inline player and its controls) ----------
