@@ -5,7 +5,8 @@ const [file, size = 224, threads = 1] = process.argv.slice(2);
 ort.env.wasm.numThreads = +threads;
 const rss0 = process.memoryUsage().rss;
 let t = performance.now();
-const s = await ort.InferenceSession.create(fs.readFileSync(file), { executionProviders: ['wasm'] });
+// ORT_EXTRA: JSON session config entries, e.g. {"session":{"disable_quant_qdq":"1"}}
+const s = await ort.InferenceSession.create(fs.readFileSync(file), { executionProviders: ['wasm'], ...(process.env.ORT_EXTRA ? { extra: JSON.parse(process.env.ORT_EXTRA) } : {}) });
 console.log('load ms', (performance.now() - t).toFixed(0), 'inputs', s.inputNames, 'outputs', s.outputNames);
 const x = new ort.Tensor('float32', new Float32Array(3 * size * size).fill(0.1), [1, 3, +size, +size]);
 const times = [];
