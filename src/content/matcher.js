@@ -200,8 +200,12 @@
         const fits = (j) => sent[j] === si && (j < c.h.i || j >= c.h.i + c.h.n) && (contextMask(tk.toks[j]) & mask) !== 0;
         let near = false;
         for (let j = Math.max(0, c.h.i - 3), hi = Math.min(tk.toks.length, c.h.i + c.h.n + 3); j < hi && !near; j++) near = fits(j);
-        // a name that mostly means something else (Palestine, Napoleon) only takes a media word next to it
-        if (c.other) { if (near) out.add(c.g); continue; }
+        // only a media word right next to it ("Lost season 6", "Lost 2. sezon")
+        const after = c.h.i + c.h.n + (/^\d+$/.test(tk.toks[c.h.i + c.h.n] ?? '') ? 1 : 0);
+        const adjacent = fits(c.h.i - 1) || fits(after);
+        // a name that mostly means something else (Palestine, Napoleon) only takes a media word near it; as an everyday
+        // word at the start of a sentence ("Go to channel TV") only one right next to it
+        if (c.other) { if (c.common && sentenceStart(text, c.s) ? adjacent : near) out.add(c.g); continue; }
         let ok = false; // a release year of one of its works in the same sentence
         for (let j = 0; j < tk.toks.length && !ok; j++) {
           ok = sent[j] === si && groups[c.g].some((w, i) => i > 0 && years[w] && tk.toks[j] === String(years[w]));
@@ -210,9 +214,7 @@
         // 3+ letters ("The Bear", not "Marley and Me")
         let capped = !c.common || !sentenceStart(text, c.s);
         for (let j = c.h.i + 1; j < c.h.i + c.h.n && !capped; j++) capped = tk.toks[j].length >= 3 && /^\p{Lu}/u.test(text.slice(tk.starts[j]));
-        // only a media word right next to it ("Lost season 6", "Lost 2. sezon")
-        const after = c.h.i + c.h.n + (/^\d+$/.test(tk.toks[c.h.i + c.h.n] ?? '') ? 1 : 0);
-        if (!ok && !capped) ok = fits(c.h.i - 1) || fits(after);
+        if (!ok && !capped) ok = adjacent;
         else if (!ok && c.common && c.h.n === 1) ok = near; // a single everyday word: within 3 words
         else for (let j = 0; j < tk.toks.length && !ok; j++) ok = fits(j); // other weak names: anywhere in their sentence
         if (ok) out.add(c.g);
