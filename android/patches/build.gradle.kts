@@ -13,12 +13,10 @@ patches {
     }
 }
 
-// "Only block actual spoilers" / "Scan images and video": ONNX Runtime's and Tesseract's native libs (the extension carries
-// only their Java classes) and the models.
+// The spoiler classifier and "Scan images": ONNX Runtime's native libs (the extension carries only its Java classes) and the models.
 val ortNative: Configuration by configurations.creating { isTransitive = false }
 dependencies {
-    ortNative("com.microsoft.onnxruntime:onnxruntime-android:1.22.0@aar")
-    ortNative("cz.adaptech.tesseract4android:tesseract4android:4.9.0@aar") // OCR: libtesseract, libleptonica, libjpeg, libpngx
+    ortNative("com.microsoft.onnxruntime:onnxruntime-android:1.32.0@aar")
 }
 val modelDir = rootDir.resolve("../models/spoiler")
 
@@ -39,14 +37,19 @@ tasks.processResources {
         include("model_int8.onnx", "tokenizer.json", "meta.json")
         into("spoilerblock/spoiler")
     }
-    // "Scan images and video": the extension's CLIP vision model and text matrix (npm run build), and its OCR model
-    from(rootDir.resolve("../dist/firefox")) {
-        include("models/clip/onnx/vision_model_quantized.onnx", "data/clip-text.bin", "data/clip-meta.json")
-        eachFile { path = "spoilerblock/clip/$name" }
+    // "Scan images": the extension's SigLIP 2 vision tower, title rows and cut-offs, and its PP-OCR models (npm run build)
+    val dist = rootDir.resolve("../dist/firefox")
+    doFirst {
+        check(listOf("models/vision/model.onnx", "data/clip-text.bin", "data/clip-meta.json", "models/ocr/det.onnx", "models/ocr/rec.onnx",
+            "models/ocr/dict.txt").all { dist.resolve(it).exists() }) { "$dist/ lacks the image models: run `npm run build` in the repo root first" }
+    }
+    from(dist) {
+        include("models/vision/model.onnx", "data/clip-text.bin", "data/clip-meta.json")
+        eachFile { path = "spoilerblock/vision/$name" }
         includeEmptyDirs = false
     }
-    from(rootDir.resolve("../node_modules/@tesseract.js-data/eng/4.0.0_best_int")) {
-        include("eng.traineddata.gz")
+    from(dist.resolve("models/ocr")) {
+        include("det.onnx", "rec.onnx", "dict.txt")
         into("spoilerblock/ocr")
     }
     // arm64-v8a for phones, x86_64 for emulators; 32-bit devices fail closed (spoiler mode blocks every match)

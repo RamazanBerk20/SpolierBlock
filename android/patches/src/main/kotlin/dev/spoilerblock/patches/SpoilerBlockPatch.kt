@@ -25,27 +25,8 @@ import java.util.logging.Logger
 
 private const val INIT = "Ldev/spoilerblock/SpoilerBlock;->init(Landroid/app/Application;)V"
 private val ORT_ABIS = listOf("arm64-v8a", "x86_64")
-private val ORT_LIBS = listOf("libonnxruntime.so", "libonnxruntime4j_jni.so", "libjpeg.so", "libpngx.so", "libleptonica.so", "libtesseract.so")
+private val ORT_LIBS = listOf("libonnxruntime.so", "libonnxruntime4j_jni.so")
 
-// Tesseract4Android's libraries carry generic names; their sonames (and the references between them) get same-length
-// SpoilerBlock names so they never bind to a host library that happens to share a soname (Java still loads them
-// by file name, in dependency order, so the linker finds each renamed soname already loaded).
-private val SONAMES = listOf("libjpeg.so" to "libsbjp.so", "libpngx.so" to "libsbpn.so",
-    "libleptonica.so" to "libsbleptoni.so", "libtesseract.so" to "libsbtessera.so")
-
-private fun renameSonames(elf: ByteArray): ByteArray {
-    for ((from, to) in SONAMES) {
-        val f = (from + "\u0000").toByteArray(); val t = (to + "\u0000").toByteArray()
-        var i = 0
-        while (i <= elf.size - f.size) {
-            var hit = elf[i] == f[0] && (i == 0 || elf[i - 1] == 0.toByte()) // whole strings of the string table only
-            var k = 1
-            while (hit && k < f.size) { hit = elf[i + k] == f[k]; k++ }
-            if (hit) { t.copyInto(elf, i); i += f.size } else i++
-        }
-    }
-    return elf
-}
 /** invoke-virtual NotificationManager.notify(int, Notification) or notify(String, int, Notification). */
 private fun isNotify(i: Instruction): Boolean {
     if (i.opcode != Opcode.INVOKE_VIRTUAL && i.opcode != Opcode.INVOKE_VIRTUAL_RANGE) return false
@@ -97,11 +78,11 @@ private fun spoilerBlockPatch(
             resourceFile("assets/spoilerblock/$name", false).apply { parentFile.mkdirs(); writeBytes(bundled(name)) }
         }
 
-        // "Only block actual spoilers" and "Scan images and video": the models (each loaded only when used), ONNX Runtime and Tesseract. The libraries go only
+        // The spoiler classifier and "Scan images": the models (each loaded only when used) and ONNX Runtime. The libraries go only
         // into ABIs the app already ships (a new ABI directory would make a device of that ABI pick it and lose the app's own
         // libraries); an app without native code gets both. Unique names (libonnxruntime*.so), statically linked C++ runtime.
         for (name in listOf("spoiler/model_int8.onnx", "spoiler/tokenizer.json", "spoiler/meta.json",
-            "clip/vision_model_quantized.onnx", "clip/clip-text.bin", "clip/clip-meta.json", "ocr/eng.traineddata.gz")) {
+            "vision/model.onnx", "vision/clip-text.bin", "vision/clip-meta.json", "ocr/det.onnx", "ocr/rec.onnx", "ocr/dict.txt")) {
             resourceFile("assets/spoilerblock/$name", false).apply { parentFile.mkdirs(); writeBytes(bundled(name)) }
         }
         val appAbis = listApkEntries("lib/").mapNotNull { it.split('/').getOrNull(1) }.toSet()
@@ -109,7 +90,7 @@ private fun spoilerBlockPatch(
         for (abi in abis) for (lib in ORT_LIBS) {
             // shortcut: an app shipping its own ONNX Runtime keeps it; spoiler mode then fails closed if that one does not fit
             if (listApkEntries("lib/$abi/$lib").isNotEmpty()) { Logger.getLogger("SpoilerBlock").warning("$pkg has its own lib/$abi/$lib"); continue }
-            resourceFile("lib/$abi/$lib", false).apply { parentFile.mkdirs(); writeBytes(renameSonames(bundled("jni/$abi/$lib"))) }
+            resourceFile("lib/$abi/$lib", false).apply { parentFile.mkdirs(); writeBytes(bundled("jni/$abi/$lib")) }
         }
         // New libraries are written compressed, which only installs with extractNativeLibs=true. X declares false: its own
         // libraries stay stored in the APK and are now also extracted at install. YouTube and Instagram already extract.
