@@ -271,7 +271,10 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         }
     }
 
-    /** Hand-added works in the catalog's schema. Popularity 0: like a little-known work, a one-word title must be capitalised. */
+    /** src/background/catalog-update.js CUSTOM_POP: the user's own titles are not treated as obscure (forced into Title Case). */
+    static final int CUSTOM_POP = 1000;
+
+    /** Hand-added works in the catalog's schema, as the extension's customWorks() makes them. */
     static List<Catalog.Work> customWorks(Config c, Catalog.Ambiguity amb) {
         List<Catalog.Work> out = new ArrayList<>();
         for (int i = 0; i < c.custom.length(); i++) {
@@ -282,8 +285,9 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
             w.type = e.optString("type");
             JSONArray a = e.optJSONArray("aliases");
             List<String> al = new ArrayList<>();
-            for (int k = 0; a != null && k < a.length(); k++) if (a.optString(k).length() >= 3) al.add(a.optString(k));
+            for (int k = 0; a != null && k < a.length(); k++) al.add(a.optString(k));
             w.aliases = al.toArray(new String[0]);
+            w.pop = CUSTOM_POP;
             w.ambiguous = amb.test(w.title);
             out.add(w);
         }
@@ -585,6 +589,8 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     }
 
     // ---------- settings screen ----------
+
+    Activity resumedActivity() { return resumed; }
 
     void openSettings(Activity from) {
         from.startActivity(new Intent(from, SettingsActivity.class));

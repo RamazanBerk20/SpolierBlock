@@ -232,7 +232,9 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         if (!st.stale && !st.pending && st.gen == sb.generation && st.fp == fp && now - st.at < RECHECK_MS) return;
         long r0 = System.nanoTime();
         TextCapture.Texts texts = new TextCapture.Texts();
-        collect(it, texts, true);
+        Cover paused = coverOf(it); // the real text, not the cover's accessibility nodes
+        if (paused != null) paused.a11yPause(true);
+        try { collect(it, texts, true); } finally { if (paused != null) paused.a11yPause(false); }
         String text = texts.sb.toString();
         // media views: their verdicts (requested here when missing) and the text OCR found in them
         media.clear();
@@ -297,7 +299,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         boolean block = msg != null && !sb.revealed.contains(reveal);
         boolean log = Log.isLoggable(SpoilerBlock.TAG, Log.DEBUG);
         if (block) {
-            if (cv == null) covers.add(cv = new Cover(this, it, parent));
+            if (cv == null) { covers.add(cv = new Cover(this, it, parent)); if (!activityWindow) catcher(); }
             if (cv.show(msg, label != null ? named.get(0) : -1, reveal) && log) {
                 Log.d(SpoilerBlock.TAG, "block \"" + msg + "\" " + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)) + " text=" + full.replace('\n', '|'));
             }
@@ -315,6 +317,44 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         if (noneSeen == null || noneSeen.length != m.ids.length) noneSeen = new boolean[m.ids.length];
         for (int g : m.evaluate(text, noneSeen)) if (m.groupSeen(g, v.seen)) return true;
         return false;
+    }
+
+    private Catcher catcher;
+
+    /**
+     * Dialogs and popups have no window callback of ours (it is the Dialog's or the PopupWindow's), so their covers'
+     * buttons get their taps from a transparent view on top of the window's content, added with the first cover. It
+     * takes a touch that starts on a cover (the content under a cover is not for tapping) and lets every other through.
+     */
+    private void catcher() {
+        if (catcher != null || !(decor instanceof ViewGroup)) return;
+        catcher = new Catcher(decor.getContext());
+        ((ViewGroup) decor).addView(catcher, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private final class Catcher extends View {
+        private Cover down;
+
+        Catcher(android.content.Context c) {
+            super(c);
+            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+            setWillNotDraw(true);
+        }
+
+        @Override public boolean onTouchEvent(MotionEvent ev) {
+            if (SpoilerBlock.dead) return false;
+            try {
+                int a = ev.getActionMasked();
+                if (a == MotionEvent.ACTION_DOWN) return (down = coverAt(ev.getRawX(), ev.getRawY())) != null;
+                if (down == null) return false;
+                if (a == MotionEvent.ACTION_UP) down.tap(ev.getRawX(), ev.getRawY());
+                if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) down = null;
+                return true;
+            } catch (Throwable t) {
+                SpoilerBlock.fail("popup touch", t);
+                return false;
+            }
+        }
     }
 
     private Cover coverOf(View it) {

@@ -14,7 +14,8 @@ import android.widget.TextView;
 
 /**
  * Opaque cover drawn in the item's own ViewGroupOverlay, so it moves, scrolls and animates with the item with no
- * per-frame positioning. Overlay views get no touches: Scanner.onTouch hit-tests the buttons. Nothing here touches
+ * per-frame positioning. Overlay views get no touches: Scanner.onTouch (activity windows) and Scanner.Catcher (dialogs,
+ * popups) hit-test the buttons, and CoverA11y gives them to TalkBack. Nothing here touches
  * the item's layout: the overlay is outside the host's measure/layout pass, so the item keeps its size and the list
  * never re-lays out because of a cover.
  */
@@ -59,12 +60,48 @@ final class Cover {
         row.addView(once);
         row.addView(seen);
         row.addView(manage);
-        // dialogs and popups have no touch gate of ours: no buttons that would not work
-        if (scanner.activityWindow) root.addView(row, Ui.wrap());
+        root.addView(row, Ui.wrap());
         host.getOverlay().add(root);
-        // TalkBack must not read what the cover hides
+        // TalkBack reads the cover (its message and buttons), never what it hides
         savedA11y = item.getImportantForAccessibility();
-        item.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+        if (android.os.Build.VERSION.SDK_INT >= 29) { // the host's own delegate can be read (and restored) from API 29
+            a11y = new CoverA11y(this, item.getAccessibilityDelegate());
+            item.setAccessibilityDelegate(a11y);
+            if (item.getAccessibilityNodeProvider() == a11y.provider) item.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+            else { item.setAccessibilityDelegate(a11y.original); a11y = null; } // the view supplies its own tree (Litho, Compose)
+        }
+        if (a11y == null) item.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS); // hidden at least
+    }
+
+    private CoverA11y a11y;
+
+    /** The scanner reads the item's real text through accessibility: the cover's nodes step aside meanwhile. */
+    void a11yPause(boolean on) { if (a11y != null) a11y.paused = on; }
+
+    /** For TalkBack: the message, then the buttons on show. */
+    java.util.List<View> a11yParts() {
+        java.util.List<View> l = new java.util.ArrayList<>();
+        l.add(msg);
+        for (View b : new View[]{once, seen, manage}) if (b.getVisibility() == View.VISIBLE && b.getWidth() > 0) l.add(b);
+        return l;
+    }
+
+    /** A part's bounds relative to the item. */
+    android.graphics.Rect boundsOf(View part) {
+        int x = 0, y = 0;
+        for (View v = part; v != root; v = (View) v.getParent()) { x += v.getLeft(); y += v.getTop(); }
+        return new android.graphics.Rect(x, y, x + part.getWidth(), y + part.getHeight());
+    }
+
+    /** A button was activated (a tap, or TalkBack). */
+    void press(View b) {
+        if (b == once) scanner.revealOnce(this);
+        else if (b == seen && group >= 0) SpoilerBlock.I.markSeen(group);
+        else if (b == manage) {
+            Activity a = activity(item.getContext());
+            if (a == null) a = scanner.sb.resumedActivity(); // a dialog's or popup's context may not be the activity
+            if (a != null) SpoilerBlock.I.openSettings(a);
+        }
     }
 
     private int dp(int v) { return Ui.dp(item.getContext(), v); }
@@ -122,7 +159,11 @@ final class Cover {
     }
 
     /** Keeps the cover the size (and, for a plain-View item, the position) of its item. */
-    void sync() { layout(false); }
+    void sync() {
+        layout(false);
+        // a host that sets its item's delegate again (on rebind) must not make the hidden content readable
+        if (a11y != null && item.getAccessibilityDelegate() != a11y) { a11y.original = item.getAccessibilityDelegate(); item.setAccessibilityDelegate(a11y); }
+    }
 
     private void layout(boolean force) {
         int w = item.getWidth(), h = item.getHeight();
@@ -141,21 +182,17 @@ final class Cover {
 
     void remove() {
         host.getOverlay().remove(root);
+        if (a11y != null && item.getAccessibilityDelegate() == a11y) item.setAccessibilityDelegate(a11y.original);
         item.setImportantForAccessibility(savedA11y);
     }
 
     /** x, y in screen coordinates; the gesture was already taken away from the app. */
     void tap(float x, float y) {
-        if (hit(once, x, y)) scanner.revealOnce(this);
-        else if (group >= 0 && hit(seen, x, y)) SpoilerBlock.I.markSeen(group);
-        else if (hit(manage, x, y)) {
-            Activity a = activity(item.getContext());
-            if (a != null) SpoilerBlock.I.openSettings(a);
-        }
+        for (View b : new View[]{once, seen, manage}) if (hit(b, x, y)) { press(b); return; }
     }
 
     private boolean hit(View b, float x, float y) {
-        if (!scanner.activityWindow || b.getWidth() == 0 || b.getVisibility() != View.VISIBLE) return false;
+        if (b.getWidth() == 0 || b.getVisibility() != View.VISIBLE) return false;
         int[] l = new int[2];
         item.getLocationOnScreen(l);
         float bx = l[0], by = l[1]; // the cover sits exactly on the item

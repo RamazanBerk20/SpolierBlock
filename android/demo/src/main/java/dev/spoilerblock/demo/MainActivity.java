@@ -141,7 +141,7 @@ public class MainActivity extends Activity {
             if (tag instanceof RecyclerView) { checkChildren((RecyclerView) tag); continue; }
             if (!(tag instanceof Integer) || v.getBottom() <= 0 || v.getTop() >= rv.getHeight()) continue;
             int post = (Integer) tag;
-            boolean covered = v.getImportantForAccessibility() == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS;
+            boolean covered = covered(v);
             checks++;
             if (expected(post) == null) continue; // depends on the catalog update, checked by screenshots instead
             if (covered != expected(post)) {
@@ -151,11 +151,21 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Covered, as accessibility sees it: the blocker gives a covered item its own node provider (the cover's message
+     * and buttons instead of the content), or, where it cannot, hides the item's subtree.
+     */
+    static boolean covered(View v) {
+        if (v.getImportantForAccessibility() == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) return true;
+        android.view.accessibility.AccessibilityNodeProvider p = v.getAccessibilityNodeProvider();
+        return p != null && p.getClass().getName().startsWith("dev.spoilerblock.") && !p.getClass().getName().startsWith("dev.spoilerblock.demo.");
+    }
+
     /** One post shown outside a list (a dialog's text, a suggestion row): covered iff expected, checked on every frame drawn. */
     static void checkOne(View v, int post, String where) {
         boolean covered = false;
         for (View x = v; x != null; x = x.getParent() instanceof View ? (View) x.getParent() : null)
-            covered |= x.getImportantForAccessibility() == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS;
+            covered |= covered(x);
         checks++;
         if (expected(post) != null && covered != expected(post)) {
             mismatches++;
