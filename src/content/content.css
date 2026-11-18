@@ -1,0 +1,14 @@
+/* Injected at document_start, before any page content is painted. */
+
+/* Gate: page stays invisible until the matcher is loaded and the first scan ran (content.js has a fail-safe timeout). */
+html:not([data-sb-ready]):not([data-sb-off]) body { visibility: hidden !important; }
+
+/* Media is "pending" (dark neutral placeholder) until it has a verdict. */
+html:not([data-sb-off]):not([data-sb-noimg]) :is(img, video):not([data-sb-ok]) {
+  filter: brightness(0) invert(0.15) !important;
+}
+
+/* Blocked block: content hidden (also from screen readers), overlay on top. */
+[data-sb-blocked] { min-height: 64px !important; }
+[data-sb-blocked][data-sb-pos] { position: relative !important; }
+[data-sb-blocked] > :not(sb-overlay) { visibility: hidden !important; }

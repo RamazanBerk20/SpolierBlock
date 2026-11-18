@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpolierBlocker</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>SpolierBlocker</h1>
+      <label class="switch" title="Enable SpolierBlocker">
+        <input type="checkbox" id="enabled" role="switch" aria-label="Enable SpolierBlocker">
+        <span class="track" aria-hidden="true"></span>
+      </label>
+    </header>
+
+    <section class="status">
+      <p id="status" aria-live="polite">0 blocked on this page</p>
+      <label class="row" id="pause-row" hidden>
+        <span id="pause-label">Pause on this site</span>
+        <span class="switch">
+          <input type="checkbox" id="pause" role="switch">
+          <span class="track" aria-hidden="true"></span>
+        </span>
+      </label>
+    </section>
+
+    <section>
+      <label for="search" class="h">I've seen&hellip;</label>
+      <input type="search" id="search" autocomplete="off" spellcheck="false" placeholder="Search movies, shows, games, books">
+      <p id="search-msg" class="muted" aria-live="polite" hidden></p>
+      <ul id="results" class="list"></ul>
+    </section>
+
+    <section>
+      <div class="h-row">
+        <h2 class="h">Seen <span id="count" class="muted"></span></h2>
+        <input type="search" id="filter" placeholder="Filter" aria-label="Filter seen list" hidden>
+      </div>
+      <ul id="seen" class="list"></ul>
+      <p id="empty" class="muted">Nothing marked as seen. Everything is treated as a spoiler.</p>
+    </section>
+
+    <section>
+      <label class="row">
+        <span>Scan images and video</span>
+        <span class="switch">
+          <input type="checkbox" id="scanImages" role="switch">
+          <span class="track" aria-hidden="true"></span>
+        </span>
+      </label>
+      <label class="row">
+        <span>Only block actual spoilers<br><small class="muted">Off: block anything about unseen titles</small></span>
+        <span class="switch">
+          <input type="checkbox" id="spoilerMode" role="switch">
+          <span class="track" aria-hidden="true"></span>
+        </span>
+      </label>
+      <label class="row" for="catalogUpdate">
+        <span>Update catalog</span>
+        <select id="catalogUpdate">
+          <option value="off">Off</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </label>
+      <div class="h-row">
+        <p id="catalogStatus" class="muted" role="status" aria-live="polite"></p>
+        <button type="button" id="updateNow" class="btn">Update now</button>
+      </div>
+      <p class="muted">Downloads new titles from Wikidata. Nothing about you or your browsing is sent.</p>
+    </section>
+
+    <footer class="muted">Runs entirely on this device.</footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

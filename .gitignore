@@ -1,0 +1,16 @@
+node_modules/
+build/
+dist/
+test/e2e/out/
+# research sandbox: keep the report and scripts, not downloaded data or results
+research/*
+!research/REPORT.md
+!research/scripts/
+!research/package.json
+# emulator screenshots and logs (contain third-party content)
+android/evidence/
+# Wikidata query cache and logs
+tools/catalog/cache/
+*.log
+.impeccable/
+research/scripts/node_modules

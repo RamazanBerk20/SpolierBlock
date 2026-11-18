@@ -1,0 +1,214 @@
+package dev.spoilerblocker.demo;
+
+import android.app.Activity;
+import android.content.Context;
+import android.os.Bundle;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
+/**
+ * Feed of 240 items mixing plain TextViews, canvas-drawn text exposed only through contentDescription, canvas-drawn
+ * text exposed only through an AccessibilityNodeProvider (like Litho / Compose), canvas-drawn text exposed nowhere
+ * (like X's TextContentView: only the patch's setter hook sees it), clean posts, ambiguous titles with
+ * and without context, and a nested horizontal shelf. Knows which posts the blocker must cover and checks it on
+ * every drawn frame (OnDrawListener runs after the blocker's OnPreDrawListener, right before the frame is drawn).
+ */
+public class MainActivity extends Activity {
+    static final String TAG = "SBDemo";
+    // body, must be covered (expected values from the browser extension's JS matcher on the shipped index)
+    static final Object[][] POSTS = {
+        {"Breaking Bad season 5 finale was insane", true},
+        {"Had a lovely walk in the park with my dog today.", false},
+        {"Snape kills Dumbledore at the end of the sixth book.", true},
+        {"I lost my keys again", false},                                  // ambiguous "Lost", no context
+        {"Lost season 6 was a mess", true},                               // ambiguous "Lost" + context
+        {"Coffee and rain, perfect morning", false},
+        {"The Last of Us finale was brutal", true},
+        {"Pick me up at 5", false},                                       // ambiguous "Up", no context
+        {"Darth Vader is Luke's father, what a twist", true},
+        {"It was a great movie", false},                                  // ambiguous "It", sentence start
+        {"I watched It last night and the movie was terrifying", true},   // ambiguous "It" + context
+        {"New phone arrived, battery life is great", false},
+        {"Have you seen \"Up\"? Best opening ever", true},                // ambiguous "Up", quoted
+        {"Lunch: lentil soup again", false},
+        {"Who else is rewatching Stranger Things before season 5?", true},
+        {"Morning run done, 10k", false},
+        {"Elden Ring boss fights are brutal", true},
+        {"Marley and Me went for a walk", false},                         // everyday-word title, no corroboration
+        {"Just finished Dune, the ending wow", true},
+        {"The Witcher 3 is still the best game", true},
+        {"GTA 6 leak shows the ending", true},                            // sequel number + short form -> Grand Theft Auto VI
+        {"Zorblax Chronicles finale was wild", null},                     // invented work: covered only after a catalog update
+    };
+    static final String[] AUTHORS = {"@anna_k", "@deniz", "@moviebuff", "@gamer42", "@reader"};
+    static final int N = 240, TEXT = 0, CANVAS_DESC = 1, CANVAS_A11Y = 2, CANVAS_HOOK = 3, SHELF = 4, IMAGE = 5;
+    // image posts (test/fixtures/images): file, caption. Expected: titled Night of the Living Dead, shown, Harry Potter
+    // (OCR of the caption in the picture), shown, "unrecognised" media. Not frame-checked (pending until verdicts are in).
+    static final String[][] IMAGES = {
+        {"pos_notld_poster.jpg", "Saw this at the vintage cinema last night"},
+        {"clean_dog.jpg", "Look who's home"},
+        {"ocr_spoiler_snape.png", "lol this meme"},
+        {"ocr_clean_coffee.png", "Monday mood"},
+        {"pos_nosferatu.jpg", "Throwback Thursday"},
+    };
+    static long frames, checks, mismatches;
+    static final java.util.Set<Integer> revealed = new java.util.HashSet<>(); // posts the tester revealed / marked seen
+
+    static int type(int pos) { return pos % 25 == 24 ? SHELF : pos % 25 >= 2 && pos % 25 <= 6 ? IMAGE : pos % 4; }
+    static String body(int post) { return (String) POSTS[post][0]; }
+    static Boolean expected(int post) { return POSTS[post][1] == null ? null : (Boolean) POSTS[post][1] && !revealed.contains(post); }
+
+    RecyclerView list;
+
+    @Override protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        String reveal = getIntent().getStringExtra("revealed"); // posts the test marked seen / showed: "8,12"
+        if (reveal != null) for (String s : reveal.split(",")) if (!s.isEmpty()) revealed.add(Integer.parseInt(s));
+        list = new RecyclerView(this);
+        list.setLayoutManager(new LinearLayoutManager(this));
+        list.setAdapter(new Feed());
+        setContentView(list);
+        list.getViewTreeObserver().addOnDrawListener(this::check);
+        if (getIntent().getBooleanExtra("spoilerEval", false)) SpoilerEval.run(this);
+        if (getIntent().getBooleanExtra("imageEval", false)) ImageEval.run(this);
+    }
+
+    @Override protected void onPause() {
+        super.onPause();
+        Log.i(TAG, "frame check summary: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches");
+    }
+
+    /** Every drawn frame: each visible post is covered iff expected (the blocker hides covered items from a11y). */
+    void check() {
+        frames++;
+        checkChildren(list);
+        if (frames % 600 == 0) Log.i(TAG, "frame check: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches");
+    }
+
+    void checkChildren(RecyclerView rv) {
+        for (int i = 0; i < rv.getChildCount(); i++) {
+            View v = rv.getChildAt(i);
+            Object tag = v.getTag();
+            if (tag instanceof RecyclerView) { checkChildren((RecyclerView) tag); continue; }
+            if (!(tag instanceof Integer) || v.getBottom() <= 0 || v.getTop() >= rv.getHeight()) continue;
+            int post = (Integer) tag;
+            boolean covered = v.getImportantForAccessibility() == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS;
+            checks++;
+            if (expected(post) == null) continue; // depends on the catalog update, checked by screenshots instead
+            if (covered != expected(post)) {
+                mismatches++;
+                Log.e(TAG, "MISMATCH frame " + frames + " post " + post + " covered=" + covered + " \"" + body(post) + "\"");
+            }
+        }
+    }
+
+    int dp(int v) { return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()); }
+
+    LinearLayout card(Context c) {
+        LinearLayout l = new LinearLayout(c);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(dp(16), dp(12), dp(16), dp(12));
+        l.setBackgroundColor(0xFFFFFFFF);
+        l.setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return l;
+    }
+
+    class Feed extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+        @Override public int getItemCount() { return N; }
+        @Override public int getItemViewType(int pos) { return type(pos); }
+
+        @Override public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int type) {
+            LinearLayout l = card(parent.getContext());
+            if (type == SHELF) {
+                TextView h = new TextView(parent.getContext());
+                h.setText("Recommended for you");
+                l.addView(h);
+                RecyclerView shelf = new RecyclerView(parent.getContext());
+                shelf.setLayoutManager(new LinearLayoutManager(parent.getContext(), RecyclerView.HORIZONTAL, false));
+                shelf.setAdapter(new Shelf());
+                l.addView(shelf);
+                l.setTag(shelf);
+            } else if (type == IMAGE) {
+                TextView caption = new TextView(parent.getContext());
+                caption.setTextSize(17);
+                l.addView(caption);
+                android.widget.ImageView img = new android.widget.ImageView(parent.getContext());
+                img.setAdjustViewBounds(true); // the view is the picture, as in most feeds
+                img.setMaxHeight(dp(360));
+                l.addView(img, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            } else {
+                TextView author = new TextView(parent.getContext());
+                author.setTextColor(0xFF666666);
+                l.addView(author);
+                View text = type == TEXT ? new TextView(parent.getContext()) : new DrawnText(parent.getContext(), type);
+                if (text instanceof TextView) ((TextView) text).setTextSize(17);
+                l.addView(text);
+            }
+            l.setOnClickListener(v -> Log.i(TAG, "CLICK reached app: post " + v.getTag()));
+            return new RecyclerView.ViewHolder(l) { };
+        }
+
+        @Override public void onBindViewHolder(RecyclerView.ViewHolder h, int pos) {
+            if (type(pos) == IMAGE) { bindImage((LinearLayout) h.itemView, (pos % 25 - 2) % IMAGES.length); return; }
+            if (type(pos) == SHELF) { ((RecyclerView) h.itemView.getTag()).scrollToPosition(0); ((Shelf) ((RecyclerView) h.itemView.getTag()).getAdapter()).at(pos); return; }
+            int post = pos % POSTS.length;
+            LinearLayout l = (LinearLayout) h.itemView;
+            l.setTag(post);
+            ((TextView) l.getChildAt(0)).setText(AUTHORS[pos % AUTHORS.length]);
+            View t = l.getChildAt(1);
+            if (t instanceof TextView) ((TextView) t).setText(body(post)); else ((DrawnText) t).setText(body(post));
+        }
+    }
+
+    final java.util.Map<String, android.graphics.Bitmap> bitmaps = new java.util.HashMap<>();
+
+    /** Like a real feed: a placeholder first, the (hardware) bitmap a moment later, as an image loader sets it. */
+    void bindImage(LinearLayout l, int k) {
+        l.setTag("image " + IMAGES[k][0]);
+        ((TextView) l.getChildAt(0)).setText(IMAGES[k][1]);
+        android.widget.ImageView img = (android.widget.ImageView) l.getChildAt(1);
+        img.setImageDrawable(new android.graphics.drawable.ColorDrawable(0xFFDDDDDD));
+        img.setTag(IMAGES[k][0]);
+        img.postDelayed(() -> {
+            if (!IMAGES[k][0].equals(img.getTag())) return; // rebound meanwhile
+            android.graphics.Bitmap b = bitmaps.get(IMAGES[k][0]);
+            if (b == null) {
+                try (java.io.InputStream in = getAssets().open("images/" + IMAGES[k][0])) {
+                    android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                    o.inPreferredConfig = android.graphics.Bitmap.Config.HARDWARE;
+                    b = android.graphics.BitmapFactory.decodeStream(in, null, o);
+                    bitmaps.put(IMAGES[k][0], b);
+                } catch (java.io.IOException e) { throw new RuntimeException(e); }
+            }
+            img.setImageBitmap(b);
+        }, 300);
+    }
+
+    class Shelf extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+        int base;
+        void at(int pos) { base = pos; notifyDataSetChanged(); }
+        @Override public int getItemCount() { return 6; }
+        @Override public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int type) {
+            LinearLayout l = card(parent.getContext());
+            l.setLayoutParams(new RecyclerView.LayoutParams(dp(220), dp(110)));
+            l.setBackgroundColor(0xFFEFEFEF);
+            l.addView(new TextView(parent.getContext()));
+            l.setOnClickListener(v -> Log.i(TAG, "CLICK reached app: shelf post " + v.getTag()));
+            return new RecyclerView.ViewHolder(l) { };
+        }
+        @Override public void onBindViewHolder(RecyclerView.ViewHolder h, int i) {
+            int post = (base + i * 7) % POSTS.length;
+            h.itemView.setTag(post);
+            ((TextView) ((LinearLayout) h.itemView).getChildAt(0)).setText(body(post));
+        }
+    }
+
+}

@@ -1,0 +1,23 @@
+{
+  "name": "spolierblocker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Blocks spoilers about unseen movies, shows, games and books, fully offline.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "e2e": "node test/e2e/run.mjs",
+    "build": "node tools/build.mjs",
+    "build:fixture": "node tools/build.mjs test/fixtures/catalog.small.json",
+    "lint": "web-ext lint --source-dir dist/firefox",
+    "start": "web-ext run --source-dir dist/firefox --firefox=/usr/bin/zen-browser"
+  },
+  "devDependencies": {
+    "@huggingface/transformers": "^3.7.5",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "onnxruntime-web": "^1.22.0",
+    "puppeteer-core": "^25.18.1",
+    "tesseract.js": "^6.0.1",
+    "web-ext": "^10.8.0"
+  }
+}
