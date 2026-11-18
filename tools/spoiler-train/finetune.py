@@ -1,12 +1,12 @@
 # End-to-end fine-tune of all-MiniLM-L6-v2 (mean pooling + linear head, one logit) for "is this sentence a plot spoiler".
 # Called by tools/train-spoiler.mjs, which assembles the items. usage: python -I finetune.py <items.jsonl> <outDir> [epochs=3]
-# The threshold is chosen on validation (hand-written + held-out patterns, macro-F1), never on test/fixtures/spoiler-eval.jsonl.
+# The threshold is chosen on validation (hand-written + held-out patterns, balanced accuracy), never on the eval sets.
 # Writes <outDir>/model_int8.onnx (input_ids, attention_mask -> logit), the tokenizer files and meta.json {threshold}.
 import sys, json, random, time, os
 import numpy as np, torch
 from transformers import AutoTokenizer, AutoModel
 torch.set_num_threads(6); torch.manual_seed(0); random.seed(0)
-BASE = 'sentence-transformers/all-MiniLM-L6-v2'
+BASE = os.environ.get('SB_BASE', 'sentence-transformers/all-MiniLM-L6-v2')  # SB_BASE: compare another encoder
 src, od = sys.argv[1], sys.argv[2]
 epochs = int(sys.argv[3]) if len(sys.argv) > 3 else 3
 items = [json.loads(l) for l in open(src)]
@@ -40,13 +40,16 @@ for ep in range(epochs):
         loss = torch.nn.functional.binary_cross_entropy_with_logits(model(x['input_ids'], x['attention_mask']), y, weight=w)
         opt.zero_grad(); loss.backward(); opt.step(); sched.step()
     print(f'epoch {ep} loss {loss.item():.3f} {time.time() - t0:.0f}s', flush=True)
-def f1(ps, ys, t):
-    tp = sum(p >= t and y for p, y in zip(ps, ys)); fp = sum(p >= t and not y for p, y in zip(ps, ys)); fn = sum(p < t and y for p, y in zip(ps, ys))
-    return 2 * tp / max(1, 2 * tp + fp + fn)
-groups = {}
-for x in sel: groups.setdefault(x['src'], []).append(x)
+# balanced accuracy (mean of the rates on spoilers and on non-spoilers): a covered non-spoiler counts as much as a missed
+# spoiler, whatever the class mix of the validation set. Filled pattern copies count once.
+def bacc(ps, ys, t):
+    pos = [p for p, y in zip(ps, ys) if y]; neg = [p for p, y in zip(ps, ys) if not y]
+    return (sum(p >= t for p in pos) / max(1, len(pos)) + sum(p < t for p in neg) / max(1, len(neg))) / 2
+groups, seen = {}, set()
+for x in sel:
+    if x['text'] not in seen: seen.add(x['text']); groups.setdefault(x['src'], []).append(x)
 sc = {k: score([x['text'] for x in v]) for k, v in groups.items()}
-thr = max([t / 100 for t in range(10, 91, 5)], key=lambda t: np.mean([f1(sc[k], [x['y'] for x in groups[k]], t) for k in groups]))
+thr = max([t / 100 for t in range(10, 91, 5)], key=lambda t: np.mean([bacc(sc[k], [x['y'] for x in groups[k]], t) for k in groups]))
 print('val threshold', thr, 'train items', len(train), 'train s', round(time.time() - t0))
 # export ONNX (input_ids, attention_mask -> logit), then int8 dynamic quantization; only the int8 file is kept
 os.makedirs(od, exist_ok=True)

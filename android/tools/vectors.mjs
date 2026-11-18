@@ -53,7 +53,8 @@ const cases = [
   ['It was a great movie', []],
   ['Pick me up at 5', []],
   ['Lost and found office', []],
-  ['my favourite\nMarley and Me movie night', []], // a line break starts a new text, as the text start does
+  ['my favourite\nMarley and Me with a movie', []], // a line break starts a new text, as the text start does
+  ['my favourite\nMarley and Me movie night', ['Marley & Me']], // a media word right next to it
   ['my friends are coming over to watch the game', []],
   ['He lost the game last season', []],
   ['Lost season 6 was a mess', ['Lost']],
@@ -84,6 +85,23 @@ const cases = [
   ['Final Fantasy 7 remake looks great', ['Final Fantasy VII']],
   ['TLOU2 broke me', ['The Last of Us Part II']],
   ['I think 6 is enough', []],
+  // names that mostly mean something else, type-fitting context, sentences, apostrophes, other languages
+  ...['The Palestine debate on campus was civil.', 'Free Palestine! #Palestine', 'Watching the news, Palestine again. What a season',
+    'Napoleon lost at Waterloo in 1815 and the film of my life goes on', 'Chernobyl exclusion zone hit by a drone overnight',
+    'Palestine (2001) was on the reading list', 'The new Nintendo Switch costs too much',
+    'Severance pay is due in March. We binged a show on the weekend.', 'Bloodborne. That was the name of the band. Great game though'].map((t) => [t, []]),
+  ['I read Palestine last week', ['Palestine']],
+  ['Chernobyl on HBO was harrowing', ['Chernobyl']],
+  ['Ridley Scott made Napoleon into a film', ['Napoleon']],
+  ['"Napoleon" was too long', []],
+  ['Valery Legasov in Chernobyl', ['Chernobyl']],
+  ['The Switch movie night with the kids', ['The Switch']],
+  ['Bloodborne is the best game ever', ['Bloodborne']],
+  ["Interstellar's docking scene is peak cinema", ['Interstellar']],
+  ["Breaking Bad'i 4. kez izliyorum", ['Breaking Bad']],
+  ['Severance 2. sezon finali beynimi yaktı', ['Severance']],
+  ["J'ai fini Interstellar hier soir", ['Interstellar']],
+  ['Die letzte Staffel von Severance war genial', ['Severance']],
 ];
 for (const [text, expected] of cases) assert.deepEqual(F.run(text), expected, text);
 const movie = idx('Dune', 'movie'), book = idx('Dune', 'book');
@@ -142,8 +160,8 @@ for (const t of ['Chapter 6 of my thesis', 'Windows 11 update', 'top 5 tips', 'i
 let seed = 0x5eed;
 const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32);
 const pick = (a) => a[Math.floor(rnd() * a.length)];
-const CTX = ['season 2', 'the finale', 'episode', 'movie', 'trailer', 'the ending', 'S02E05', 'netflix', 'book', 'game'];
-const FILL = ['honestly', 'I think', 'my friend said', 'lol', 'today', 'again', 'the best', 'not sure', 'Wow.', 'ok so'];
+const CTX = ['season 2', 'the finale', 'episode', 'movie', 'trailer', 'the ending', 'S02E05', 'netflix', 'book', 'game', '2. sezon', 'fragmanı', 'bölümünü', 'oyunu', 'Staffel', 'read it'];
+const FILL = ['honestly', 'I think', 'my friend said', 'lol', 'today', 'again', 'the best', 'not sure', 'Wow.', 'ok so', 'Nintendo Switch', 'in 2019', 'yesterday.\n'];
 function corpus(R, catalog, meta, n) {
   const names = [];
   for (const w of catalog.works) { names.push(w.title, ...(w.aliases ?? []), ...(w.characters ?? [])); }

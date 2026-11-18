@@ -33,4 +33,11 @@
   {"id": "Q60739021", "title": "Grand Theft Auto VI", "type": "game", "year": 2026, "aliases": ["GTA VI"], "characters": ["Lucia Caminos", "Jason Duval"], "pop": 200, "ambiguous": false}, 
   {"id": "Q1196186", "title": "Rocky II", "type": "movie", "year": 1979, "aliases": [], "characters": [], "pop": 60, "ambiguous": false}, 
   {"id": "Q46542", "title": "Final Fantasy VII", "type": "game", "year": 1997, "aliases": [], "characters": ["Cloud Strife"], "pop": 120, "ambiguous": false}, 
-  {"id": "Q22661228", "title": "The Last of Us Part II", "type": "game", "year": 2020, "aliases": ["TLOU II"], "characters": ["Abby Anderson"], "pop": 150, "ambiguous": false}]}
+  {"id": "Q22661228", "title": "The Last of Us Part II", "type": "game", "year": 2020, "aliases": ["TLOU II"], "characters": ["Abby Anderson"], "pop": 150, "ambiguous": false}, 
+  {"id": "Q389083", "title": "Palestine", "type": "book", "year": 2001, "aliases": [], "characters": [], "pop": 16, "ambiguous": true, "other": ["Palestine"]}, 
+  {"id": "Q105806948", "title": "Napoleon", "type": "movie", "year": 2023, "aliases": [], "characters": [], "pop": 44, "ambiguous": true, "other": ["Napoleon"]}, 
+  {"id": "Q48741246", "title": "Chernobyl", "type": "tv", "year": 2019, "aliases": [], "characters": ["Valery Legasov"], "pop": 59, "ambiguous": false, "other": ["Chernobyl"]}, 
+  {"id": "Q911520", "title": "The Switch", "type": "movie", "year": 2010, "aliases": ["Switch"], "characters": [], "pop": 36, "ambiguous": false}, 
+  {"id": "Q17154554", "title": "Bloodborne", "type": "game", "year": 2015, "aliases": [], "characters": [], "pop": 35, "ambiguous": false}, 
+  {"id": "Q13417189", "title": "Interstellar", "type": "movie", "year": 2014, "aliases": [], "characters": ["Joseph Cooper"], "pop": 98, "ambiguous": false}, 
+  {"id": "Q91487012", "title": "Severance", "type": "tv", "year": 2022, "aliases": [], "characters": [], "pop": 50, "ambiguous": true}]}
