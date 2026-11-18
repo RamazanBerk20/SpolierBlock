@@ -23,3 +23,6 @@ settings {
 
 // Test app for the blocker (not part of the patch bundle).
 include(":demo")
+
+// The companion app: the shared config and the settings screen (android/companion).
+include(":companion")

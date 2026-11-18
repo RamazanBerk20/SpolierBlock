@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -14,12 +15,17 @@ import android.util.Log;
 import android.view.View;
 import android.view.Window;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
@@ -35,15 +41,16 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     static SpoilerBlock I;
 
     final Application app;
-    final SharedPreferences prefs;
+    final SharedPreferences prefs; // this app's own state: catalog update times, the index it built
+    final Store store;
     final Handler main = new Handler(Looper.getMainLooper());
     private Thread loader;
     volatile Matcher matcher;
-    volatile boolean[] seenWork;
-    boolean enabled;
-    int generation; // bumped when seen works or the switch change: every item is re-evaluated
+    volatile Config.Works works; // the config seen through the matcher's work list
+    boolean enabled, scanImages, blockUnlisted, unknownImages;
+    int generation; // bumped when the config, the index or a verdict changes: every item is re-evaluated
     final Set<String> revealed = new HashSet<>(); // "Show once": item texts shown this session
-    final Map<View, Scanner> scanners = new WeakHashMap<>(); // decor view -> scanner
+    final Map<View, Scanner> scanners = new WeakHashMap<>(); // window root view -> scanner
     private Activity resumed;
     private boolean pendingManage;
 
@@ -58,10 +65,11 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     private SpoilerBlock(Application app) {
         this.app = app;
         prefs = app.getSharedPreferences("spoilerblock", 0);
-        enabled = prefs.getBoolean("enabled", true);
-        spoilerMode = "spoiler".equals(prefs.getString("mode", "any"));
-        scanImages = prefs.getBoolean("scanImages", true);
+        store = Store.get(app);
         images = new Images(this);
+        readSettings(store.get());
+        catalogMode = store.get().catalogUpdate();
+        store.listen(this::configChanged);
         app.registerActivityLifecycleCallbacks(this);
         Log.i(TAG, "initialised in " + app.getPackageName() + " (enabled=" + enabled + ")");
     }
@@ -94,26 +102,105 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         });
     }
 
+    // ---------- config ----------
+
+    private void readSettings(Config c) {
+        enabled = c.bool("enabled");
+        scanImages = c.bool("scanImages");
+        blockUnlisted = c.bool("blockUnlisted");
+        unknownImages = c.bool("unknownImages");
+        Matcher m = matcher;
+        if (m != null) works = new Config.Works(c, m.ids);
+    }
+
+    /** Main thread: the config changed here or in another app (through the companion). */
+    private void configChanged() {
+        Config c = store.get();
+        boolean hadImages = scanImages;
+        String mode = catalogMode;
+        readSettings(c);
+        if (hadImages && !scanImages) images.release(); // no image model stays loaded
+        Config.Works v = works;
+        if (v != null && !v.anySpoilers) releaseClassifier();
+        if (!c.catalogUpdate().equals(mode)) { catalogMode = c.catalogUpdate(); maybeUpdateCatalog(false); }
+        if (matcher != null && !customSig(c).equals(indexCustom)) rebuildIndexAsync();
+        generation++;
+        invalidateAll();
+    }
+
+    /** "I've seen it": every work carrying the name, in one write. */
+    void markSeen(int group) {
+        Matcher m = matcher;
+        Config c = store.get();
+        JSONObject w = new JSONObject();
+        long now = System.currentTimeMillis();
+        try {
+            for (int i : m.groupWorks(group)) {
+                JSONObject old = c.work(m.ids[i]);
+                w.put(m.ids[i], Config.entry(Config.SEEN, old == null || old.isNull("style") ? null : old.optString("style"),
+                    m.titles[i], m.types[i], m.years[i], now));
+            }
+            store.patch(new JSONObject().put("works", w));
+        } catch (org.json.JSONException e) {
+            throw new IllegalStateException(e);
+        }
+        Log.i(TAG, "marked seen: " + m.labels[group]);
+    }
+
+    /** Fills the titles of entries that have none (migrated from 0.1, which stored only ids), once the index is known. */
+    private void fillTitles(Matcher m) {
+        Config c = store.get();
+        JSONObject w = new JSONObject();
+        try {
+            for (int i = 0; i < m.ids.length; i++) {
+                JSONObject e = c.work(m.ids[i]);
+                if (e != null && e.isNull("title")) w.put(m.ids[i], new JSONObject().put("title", m.titles[i]).put("type", m.types[i]).put("year", m.years[i]));
+            }
+            if (w.length() > 0) main.post(() -> { try { store.patch(new JSONObject().put("works", w)); } catch (org.json.JSONException ignored) { } });
+        } catch (org.json.JSONException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    // ---------- the index (bundled, or rebuilt with catalog-update and hand-added works) ----------
+
+    private volatile String indexCustom = ""; // the custom works the loaded index was built with
+
     // The index (3 MB) is read on first activity, not in Application.onCreate: background processes never pay for it.
     private synchronized void startLoading() {
         if (loader != null) return;
         loader = new Thread(() -> {
             try {
                 long t0 = SystemClock.uptimeMillis();
+                store.awaitConnected(1500); // the first frames should use the shared list
                 CatalogUpdate.Stored st = storedIndex();
+                String sig = customSig(store.get());
+                boolean fresh = st != null ? prefs.getString("indexCustom", "").equals(sig) : sig.isEmpty();
                 Matcher m = st != null ? new Matcher(st.bin, st.json)
                     : new Matcher(asset("spoilerblock/index.bin"), new String(asset("spoilerblock/index.json"), StandardCharsets.UTF_8));
-                seenWork = seenArray(m);
-                updatedIndex = st != null;
-                matcher = m;
-                Log.i(TAG, "index loaded" + (st != null ? " (updated catalog)" : "") + ": " + m.ids.length + " works, " + m.labels.length +
+                indexCustom = st != null ? prefs.getString("indexCustom", "") : "";
+                install(m, st != null);
+                Log.i(TAG, "index loaded" + (st != null ? " (rebuilt catalog)" : "") + ": " + m.ids.length + " works, " + m.labels.length +
                     " names in " + (SystemClock.uptimeMillis() - t0) + " ms");
-                main.post(this::invalidateAll);
+                fillTitles(m);
+                if (!fresh) rebuildIndex(st != null ? st.added : new ArrayList<>()); // hand-added works changed: swapped in when built
             } catch (Throwable t) {
                 fail("index load", t);
             }
         }, "SpoilerBlock-index");
         loader.start();
+    }
+
+    /** Any thread: the first pre-draw may be waiting for it on the main thread. */
+    private void install(Matcher m, boolean rebuilt) {
+        works = new Config.Works(store.get(), m.ids);
+        updatedIndex = rebuilt;
+        matcher = m;
+        main.post(() -> {
+            works = new Config.Works(store.get(), m.ids); // the config may have changed meanwhile
+            generation++;
+            invalidateAll();
+        });
     }
 
     /** Called from the first pre-draw that has items to judge: waits for the index instead of showing them unjudged. */
@@ -122,10 +209,86 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         if (m != null || loader == null) return m;
         try {
             long t0 = SystemClock.uptimeMillis();
-            loader.join(2000); // shortcut: blocks the UI thread at most once per process, move to a placeholder cover if 2 s ever shows up
+            // shortcut: blocks the UI thread at most once per process, move to a placeholder cover if 2 s ever shows up
+            for (int i = 0; i < 40 && matcher == null && loader.isAlive(); i++) Thread.sleep(50);
             Log.i(TAG, "waited " + (SystemClock.uptimeMillis() - t0) + " ms for the index before first draw");
         } catch (InterruptedException ignored) { }
         return matcher;
+    }
+
+    static String customSig(Config c) { return c.custom.length() == 0 ? "" : c.custom.toString(); }
+
+    private Thread rebuilder;
+
+    private synchronized void rebuildIndexAsync() {
+        if (rebuilder != null && rebuilder.isAlive()) return; // it re-checks the custom list when done
+        rebuilder = new Thread(() -> {
+            try {
+                CatalogUpdate.Stored st = storedIndex();
+                rebuildIndex(st != null ? st.added : new ArrayList<>());
+            } catch (Throwable t) {
+                Log.w(TAG, "index rebuild failed, hand-added works not matched yet", t);
+            }
+        }, "SpoilerBlock-rebuild");
+        rebuilder.setPriority(Thread.MIN_PRIORITY);
+        rebuilder.start();
+    }
+
+    /**
+     * Bundled catalog + catalog-update works + the config's hand-added works, built with the catalog update's own
+     * builder, stored, and swapped in. Repeats while the hand-added list changes meanwhile.
+     */
+    private void rebuildIndex(List<Catalog.Work> added) throws Exception {
+        for (int round = 0; round < 3; round++) {
+            Config c = store.get();
+            String sig = customSig(c);
+            long t0 = SystemClock.uptimeMillis();
+            CatalogUpdate.Bundle b = bundle();
+            List<Catalog.Work> extra = new ArrayList<>(added);
+            extra.addAll(customWorks(c, new Catalog.Ambiguity(b.words)));
+            Matcher m;
+            if (extra.isEmpty()) {
+                indexFile().delete();
+                m = new Matcher(asset("spoilerblock/index.bin"), new String(asset("spoilerblock/index.json"), StandardCharsets.UTF_8));
+            } else {
+                Catalog.Built built = Catalog.buildIndex(Catalog.merge(b.catalog, extra), new Catalog.Words(b.words));
+                CatalogUpdate.write(indexFile(), new CatalogUpdate.Stored(b.builtAt, built.bin, built.json, added));
+                m = new Matcher(built.bin, built.json);
+            }
+            prefs.edit().putString("indexCustom", sig).apply();
+            indexCustom = sig;
+            boolean rebuilt = !extra.isEmpty();
+            install(m, rebuilt);
+            Log.i(TAG, "index rebuilt with " + c.custom.length() + " hand-added works in " + (SystemClock.uptimeMillis() - t0) + " ms");
+            if (customSig(store.get()).equals(sig)) return;
+        }
+    }
+
+    /** Hand-added works in the catalog's schema. Popularity 0: like a little-known work, a one-word title must be capitalised. */
+    static List<Catalog.Work> customWorks(Config c, Catalog.Ambiguity amb) {
+        List<Catalog.Work> out = new ArrayList<>();
+        for (int i = 0; i < c.custom.length(); i++) {
+            JSONObject e = c.custom.optJSONObject(i);
+            Catalog.Work w = new Catalog.Work();
+            w.id = e.optString("id");
+            w.title = e.optString("title");
+            w.type = e.optString("type");
+            JSONArray a = e.optJSONArray("aliases");
+            List<String> al = new ArrayList<>();
+            for (int k = 0; a != null && k < a.length(); k++) if (a.optString(k).length() >= 3) al.add(a.optString(k));
+            w.aliases = al.toArray(new String[0]);
+            w.ambiguous = amb.test(w.title);
+            out.add(w);
+        }
+        return out;
+    }
+
+    private CatalogUpdate.Bundle bundle() throws Exception {
+        return new CatalogUpdate.Bundle(
+            Catalog.readWorks(new java.io.InputStreamReader(app.getAssets().open("spoilerblock/catalog.json"), StandardCharsets.UTF_8)),
+            new String(asset("spoilerblock/common-words.txt"), StandardCharsets.UTF_8),
+            CatalogUpdate.readClasses(new String(asset("spoilerblock/catalog-classes.json"), StandardCharsets.UTF_8)),
+            bundledBuiltAt());
     }
 
     /** An asset in a direct buffer (kept off the Java heap; ONNX Runtime copies what it needs). */
@@ -139,8 +302,10 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         }
     }
 
-    byte[] asset(String name) throws Exception {
-        try (InputStream in = app.getAssets().open(name)) {
+    byte[] asset(String name) throws Exception { return readAll(app.getAssets().open(name)); }
+
+    static byte[] readAll(InputStream stream) throws java.io.IOException {
+        try (InputStream in = stream) {
             ByteArrayOutputStream out = new ByteArrayOutputStream(1 << 20);
             byte[] buf = new byte[1 << 16];
             for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
@@ -150,14 +315,14 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
 
     // ---------- opt-in catalog update (the only network use; see CatalogUpdate) ----------
 
-    static final String[] CATALOG_MODES = {"off", "daily", "weekly", "monthly"};
     private static final long[] CATALOG_INTERVALS = {0, 86400000L, 7 * 86400000L, 30 * 86400000L};
     private volatile boolean updating;
-    Runnable catalogListener; // the open manage dialog's status line
+    private String catalogMode = "";
+    Runnable catalogListener; // the open settings screen's status line
 
     private File indexFile() { return new File(app.getFilesDir(), "spoilerblock-index.dat"); }
 
-    /** The updated index, or null when there is none or it was built from an older bundled catalog than this APK's. */
+    /** The rebuilt index, or null when there is none or it was built from an older bundled catalog than this APK's. */
     private CatalogUpdate.Stored storedIndex() {
         File f = indexFile();
         if (!f.exists()) return null;
@@ -169,7 +334,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
             Log.w(TAG, "updated index unreadable, using the bundled one: " + t);
         }
         f.delete();
-        prefs.edit().putInt("catalogAdded", 0).apply();
+        prefs.edit().putInt("catalogAdded", 0).remove("indexCustom").apply();
         return null;
     }
 
@@ -177,17 +342,9 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         return CatalogUpdate.builtAtOf(new String(asset("spoilerblock/catalog-info.json"), StandardCharsets.UTF_8));
     }
 
-    String catalogMode() { return prefs.getString("catalogMode", "off"); }
-
-    void setCatalogMode(String mode) {
-        prefs.edit().putString("catalogMode", mode).apply();
-        maybeUpdateCatalog(false);
-    }
-
     /** On app start / resume, and from "Update now" (force). Never runs while the mode is off unless forced. */
     void maybeUpdateCatalog(boolean force) {
-        long interval = 0;
-        for (int i = 0; i < CATALOG_MODES.length; i++) if (CATALOG_MODES[i].equals(catalogMode())) interval = CATALOG_INTERVALS[i];
+        long interval = CATALOG_INTERVALS[Math.max(0, Config.CATALOG_MODES.indexOf(store.get().catalogUpdate()))];
         if (!force && (interval == 0 || System.currentTimeMillis() - prefs.getLong("catalogLastCheck", 0) < interval)) return;
         if (updating) return;
         updating = true;
@@ -205,24 +362,14 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         CatalogUpdate u = null;
         String error = null;
         try {
-            CatalogUpdate.Bundle b = new CatalogUpdate.Bundle(
-                Catalog.readWorks(new java.io.InputStreamReader(app.getAssets().open("spoilerblock/catalog.json"), StandardCharsets.UTF_8)),
-                new String(asset("spoilerblock/common-words.txt"), StandardCharsets.UTF_8),
-                CatalogUpdate.readClasses(new String(asset("spoilerblock/catalog-classes.json"), StandardCharsets.UTF_8)),
-                bundledBuiltAt());
+            CatalogUpdate.Bundle b = bundle();
             CatalogUpdate.Stored prev = storedIndex();
             u = new CatalogUpdate(CatalogUpdate.httpTransport(), endpoint(), Thread::sleep);
-            CatalogUpdate.Result r = u.run(b, prev != null ? prev.added : new java.util.ArrayList<>());
+            CatalogUpdate.Result r = u.run(b, prev != null ? prev.added : new ArrayList<>());
             if (r.built != null) {
-                CatalogUpdate.write(indexFile(), new CatalogUpdate.Stored(b.builtAt, r.built.bin, r.built.json, r.added));
-                Matcher m = new Matcher(r.built.bin, r.built.json);
-                main.post(() -> { // live swap: every visible item is judged again on the next frame
-                    seenWork = seenArray(m);
-                    updatedIndex = true;
-                    matcher = m;
-                    generation++;
-                    invalidateAll();
-                });
+                r.built = null; // built without the hand-added works: rebuild with them (the same builder)
+                b = null;
+                rebuildIndex(r.added);
             }
             prefs.edit().putLong("catalogLastSuccess", now).putInt("catalogAdded", r.added.size()).putInt("catalogFound", r.fresh.size())
                 .remove("catalogLastError").apply();
@@ -261,7 +408,8 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     String catalogStatus() {
         int added = prefs.getInt("catalogAdded", 0);
         Matcher m = matcher;
-        String s = (m == null ? "" : String.format(java.util.Locale.US, "%,d titles", m.ids.length - added)) + (added > 0 ? " + " + added + " new" : "");
+        int custom = store.get().custom.length();
+        String s = (m == null ? "" : String.format(java.util.Locale.US, "%,d titles", m.ids.length - added - custom)) + (added > 0 ? " + " + added + " new" : "");
         long ok = prefs.getLong("catalogLastSuccess", 0);
         s += updating ? " · updating…" : ok == 0 ? " · never updated" : " · updated " + ago(System.currentTimeMillis() - ok);
         String err = prefs.getString("catalogLastError", null);
@@ -296,66 +444,25 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         void stop() { running = false; t.interrupt(); }
     }
 
-    // ---------- seen works (SharedPreferences: work ids, like the extension's storage) ----------
+    // ---------- style "spoilers": the classifier ----------
 
-    Set<String> seenIds() { return new HashSet<>(prefs.getStringSet("seen", Collections.emptySet())); }
-
-    private boolean[] seenArray(Matcher m) {
-        Set<String> ids = seenIds();
-        boolean[] seen = new boolean[m.ids.length];
-        for (int i = 0; i < seen.length; i++) seen[i] = ids.contains(m.ids[i]);
-        return seen;
-    }
-
-    /** "I've seen {title}": every work carrying the name, in one write. */
-    void markSeen(int group) {
-        Matcher m = matcher;
-        Set<String> ids = seenIds();
-        for (int w : m.groupWorks(group)) ids.add(m.ids[w]);
-        prefs.edit().putStringSet("seen", ids).apply();
-        Log.i(TAG, "marked seen: " + m.labels[group]);
-        changed();
-    }
-
-    void unmarkSeen(String id) {
-        Set<String> ids = seenIds();
-        ids.remove(id);
-        prefs.edit().putStringSet("seen", ids).apply();
-        changed();
-    }
-
-    void setEnabled(boolean on) {
-        enabled = on;
-        prefs.edit().putBoolean("enabled", on).apply();
-        Log.i(TAG, "enabled=" + on);
-        changed();
-    }
-
-    // ---------- "Only block actual spoilers" (prefs "mode": "any" | "spoiler", the extension's setting) ----------
-
-    boolean spoilerMode;
     private final Map<String, Boolean> verdicts = new java.util.LinkedHashMap<String, Boolean>(64, 0.75f, true) { // main thread
         @Override protected boolean removeEldestEntry(Map.Entry<String, Boolean> e) { return size() > 2000; }
     };
     private final Set<String> classifying = new HashSet<>(); // main thread
     private java.util.concurrent.ExecutorService worker;
-    private Classifier classifier; // worker thread only: loaded on the first item to judge in spoiler mode
+    private Classifier classifier; // worker thread only: loaded on the first item to judge with style "spoilers"
     private boolean classifierFailed; // worker thread only
 
-    void setSpoilerMode(boolean on) {
-        spoilerMode = on;
-        prefs.edit().putString("mode", on ? "spoiler" : "any").apply();
-        Log.i(TAG, "mode=" + (on ? "spoiler" : "any"));
-        if (!on && worker != null) worker.execute(() -> { // "any" mode holds no model
+    private void releaseClassifier() {
+        if (worker != null) worker.execute(() -> { // no work needs the classifier: no model stays loaded
             try { if (classifier != null) classifier.close(); } catch (Throwable ignored) { }
             classifier = null;
         });
-        changed();
     }
 
-    /** Whether a matched item is covered: always in "any" mode; in spoiler mode until the classifier says it is no spoiler. */
-    boolean coverMatch(String text) {
-        if (!spoilerMode) return true;
+    /** The classifier's verdict on a text: null while it runs (the item stays covered), true for a spoiler. */
+    Boolean spoilerVerdict(String text) {
         Boolean v = verdicts.get(text);
         if (v != null) return v;
         if (classifying.add(text)) {
@@ -365,7 +472,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
             }, "SpoilerBlock-classify"));
             worker.execute(() -> classify(text));
         }
-        return true; // covered until the verdict is in
+        return null;
     }
 
     private void classify(String text) {
@@ -397,9 +504,9 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
                 new String(asset("spoilerblock/spoiler/meta.json"), StandardCharsets.UTF_8));
             Log.i(TAG, "spoiler model loaded in " + (SystemClock.uptimeMillis() - t0) + " ms, native heap +" +
                 (android.os.Debug.getNativeHeapAllocatedSize() - native0) / (1 << 20) + " MB");
-        } catch (Throwable t) { // e.g. no ONNX Runtime library for this ABI: every match stays covered, as in "any" mode
+        } catch (Throwable t) { // e.g. no ONNX Runtime library for this ABI: every match stays covered, as with style "all"
             classifierFailed = true;
-            Log.e(TAG, "spoiler model unavailable, spoiler mode blocks every match", t);
+            Log.e(TAG, "spoiler model unavailable, style \"spoilers\" covers every match", t);
         }
     }
 
@@ -409,31 +516,28 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         invalidateAll();
     }
 
-    // ---------- "Scan images and video" (prefs "scanImages", the extension's setting) ----------
+    // ---------- "Scan images" ----------
 
-    boolean scanImages;
-    volatile boolean updatedIndex; // the matcher is a catalog update's, not the bundled index CLIP's groups refer to
+    volatile boolean updatedIndex; // the matcher is a rebuilt one, not the bundled index CLIP's groups refer to
     final Images images;
 
-    void setScanImages(boolean on) {
-        scanImages = on;
-        prefs.edit().putBoolean("scanImages", on).apply();
-        Log.i(TAG, "scanImages=" + on);
-        if (!on) images.release(); // no image model stays loaded
-        changed();
+    /** Whether any image could be covered at all under the current settings (else no image is captured or judged). */
+    boolean imagesMatter() {
+        Config.Works v = works;
+        return scanImages && (blockUnlisted || unknownImages || (v != null && v.anyBlocked));
     }
 
-    private void changed() {
-        if (matcher != null) seenWork = seenArray(matcher);
-        generation++;
-        invalidateAll();
+    void invalidateAll() {
+        for (View root : scanners.keySet()) root.invalidate();
     }
 
-    private void invalidateAll() {
-        for (View decor : scanners.keySet()) decor.invalidate();
+    // ---------- settings screen ----------
+
+    void openSettings(Activity from) {
+        from.startActivity(new Intent(from, SettingsActivity.class));
     }
 
-    // ---------- activities ----------
+    // ---------- activities and other windows ----------
 
     // The settings request is read before the activity's own onCreate can act on its intent (API 29+), onActivityCreated as fallback.
     @Override public void onActivityPreCreated(Activity a, Bundle b) {
@@ -442,6 +546,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
 
     @Override public void onActivityCreated(Activity a, Bundle b) {
         try {
+            if (a instanceof SettingsActivity) return;
             startLoading();
             checkManageIntent(a);
         } catch (Throwable t) { fail("onActivityCreated", t); }
@@ -451,24 +556,86 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         if (dead) return;
         try {
             resumed = a;
+            store.recheck(); // the companion may have been installed or removed meanwhile
+            if (a instanceof SettingsActivity) return; // our own screen lists titles: never covered
             checkManageIntent(a);
             Window w = a.getWindow();
             View decor = w.getDecorView();
             Scanner s = scanners.get(decor);
             if (s == null) {
-                scanners.put(decor, s = new Scanner(this, decor));
+                scanners.put(decor, s = new Scanner(this, decor, true));
                 addShortcutOnce();
             }
             if (!(w.getCallback() instanceof TouchGate)) w.setCallback(new TouchGate(w.getCallback(), s));
             maybeUpdateCatalog(false); // interval elapsed? runs on a background thread, never before or during the first frame's work
+            main.removeCallbacks(windowPoll);
+            main.post(windowPoll);
+            watchWindows();
 
             if (pendingManage) {
-                main.postDelayed(() -> { // trampoline activities finish right away: show on the one that stays
-                    if (resumed == a && pendingManage && !a.isFinishing()) { pendingManage = false; ManageDialog.show(a, this); }
+                main.postDelayed(() -> { // trampoline activities finish right away: open from the one that stays
+                    if (resumed == a && pendingManage && !a.isFinishing()) { pendingManage = false; openSettings(a); }
                     else Log.i(TAG, "settings not shown on " + a.getClass().getName() + " (resumed: " + (resumed == a) + ", finishing: " + a.isFinishing() + ")");
                 }, 700);
             }
         } catch (Throwable t) { fail("onActivityResumed", t); }
+    }
+
+    /**
+     * Dialogs, bottom sheets, popup menus and drop-downs (search suggestions) are windows of their own, not part of
+     * the activity's. Their root views are found through WindowInspector: on every frame for a second after a touch,
+     * a key or a resume (what opens such windows), so a new window gets its scanner before its first traversal, and
+     * every half second otherwise (a window the app opens on its own may show that long before it is covered).
+     */
+    private final Runnable windowPoll = new Runnable() {
+        @Override public void run() {
+            if (dead || resumed == null) return;
+            checkWindows();
+            main.postDelayed(this, 500);
+        }
+    };
+    private long watchUntil;
+    private boolean frameWatch;
+    private final android.view.Choreographer.FrameCallback windowFrame = new android.view.Choreographer.FrameCallback() {
+        @Override public void doFrame(long t) {
+            checkWindows();
+            if (!dead && resumed != null && SystemClock.uptimeMillis() < watchUntil) android.view.Choreographer.getInstance().postFrameCallback(this);
+            else frameWatch = false;
+        }
+    };
+
+    /** Main thread: look for new windows on every frame for the next second. */
+    void watchWindows() {
+        watchUntil = SystemClock.uptimeMillis() + 1000;
+        if (!frameWatch && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            frameWatch = true;
+            android.view.Choreographer.getInstance().postFrameCallback(windowFrame);
+        }
+    }
+
+    void checkWindows() {
+        if (dead || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
+        try {
+            List<View> roots = android.view.inspector.WindowInspector.getGlobalWindowViews();
+            for (View r : roots) {
+                if (scanners.containsKey(r)) continue;
+                Activity owner = activityOf(r.getContext());
+                // our own screen is never covered; activity windows get their scanner in onActivityResumed
+                if (owner instanceof SettingsActivity || (owner != null && owner.getWindow().getDecorView() == r)) continue;
+                // not attached yet is fine: a new window's tree listeners are merged in at its first traversal
+                scanners.put(r, new Scanner(this, r, false));
+                Log.i(TAG, "scanning window " + r.getClass().getName());
+            }
+            for (java.util.Iterator<Map.Entry<View, Scanner>> i = scanners.entrySet().iterator(); i.hasNext(); ) {
+                Map.Entry<View, Scanner> e = i.next();
+                if (!e.getValue().activityWindow && !roots.contains(e.getKey())) { e.getValue().detach(); i.remove(); }
+            }
+        } catch (Throwable t) { fail("window watch", t); }
+    }
+
+    static Activity activityOf(android.content.Context c) {
+        while (c instanceof android.content.ContextWrapper && !(c instanceof Activity)) c = ((android.content.ContextWrapper) c).getBaseContext();
+        return c instanceof Activity ? (Activity) c : null;
     }
 
     @Override public void onActivityPaused(Activity a) { if (resumed == a) resumed = null; }
@@ -496,7 +663,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
 
     private boolean shortcutAdded;
 
-    /** Long-press the app icon -> "Spoiler settings": the way back in when blocking is switched off. */
+    /** Long-press the app icon -> "SpolierBlock settings": the way back in when blocking is switched off. */
     private void addShortcutOnce() {
         if (shortcutAdded) return;
         shortcutAdded = true;
@@ -506,7 +673,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         launch.setAction(Intent.ACTION_MAIN).addCategory(EXTRA_MANAGE).putExtra(EXTRA_MANAGE, true);
         try {
             sm.addDynamicShortcuts(Collections.singletonList(new ShortcutInfo.Builder(app, "spoilerblock")
-                .setShortLabel("Spoiler settings").setIntent(launch).build()));
+                .setShortLabel("SpolierBlock settings").setIntent(launch).build()));
         } catch (RuntimeException e) { // rate limits / launcher quirks: not fatal
             Log.w(TAG, "shortcut not added: " + e);
         }

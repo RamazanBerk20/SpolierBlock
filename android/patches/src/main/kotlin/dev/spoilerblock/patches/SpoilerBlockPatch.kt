@@ -12,6 +12,7 @@ import app.morphe.patcher.patch.packageMetadata
 import app.morphe.patcher.patch.patch
 import app.morphe.patcher.patch.resourceFile
 import app.morphe.patcher.patch.resourceXml
+import app.morphe.patcher.patch.resourceXmlOrNull
 import java.util.logging.Logger
 
 private const val INIT = "Ldev/spoilerblock/SpoilerBlock;->init(Landroid/app/Application;)V"
@@ -46,11 +47,26 @@ private fun bundled(name: String) = object {}.javaClass.getResourceAsStream("/sp
 private class TextHook(val type: String, val method: String, val param: String)
 
 /**
+ * A row in the host's own settings screen, added to a preference XML. [file]: the screen; [itemLayout]: the layout the
+ * screen's own rows use, set only when the app has it. The row opens SettingsActivity with an explicit intent whose
+ * package is written last (finalize), after any patch that renames the app (Morphe's GmsCore support renames YouTube).
+ */
+private class SettingsRow(val file: String, val itemLayout: String? = null, val order: String? = null, val inLastCategory: Boolean = false)
+
+private const val SETTINGS_KEY = "spoilerblock_settings"
+private const val SETTINGS_ACTIVITY = "dev.spoilerblock.SettingsActivity"
+
+/**
  * The same patch for every app: merge the app-agnostic blocker extension, ship the matcher index as assets and
  * call SpoilerBlock.init(this) first thing in Application.onCreate. The Application class is read from the
  * manifest, so nothing here depends on obfuscated names and the patch survives app updates.
  */
-private fun spoilerBlockPatch(compatibility: Compatibility, textHooks: List<TextHook> = emptyList(), testEndpoint: String? = null) = patch(
+private fun spoilerBlockPatch(
+    compatibility: Compatibility,
+    textHooks: List<TextHook> = emptyList(),
+    settingsRows: List<SettingsRow> = emptyList(),
+    testEndpoint: String? = null,
+) = patch(
     name = "SpoilerBlock",
     description = "Blacks out feed items about films, shows, games and books you have not marked as seen. On-device only.",
     default = true,
@@ -85,6 +101,43 @@ private fun spoilerBlockPatch(compatibility: Compatibility, textHooks: List<Text
             if (application.attribute("android:extractNativeLibs") == "false") application.setAttribute("android:extractNativeLibs", "true")
         }
 
+        // The settings screen is an activity of the extension: declared here, it can use the system's file pickers for
+        // export and import. <queries>: the app must see the companion app to use its shared config (Android 11+).
+        resourceXml("AndroidManifest.xml").use { xml ->
+            val application = xml.elements("application").first()
+            if (xml.elementByAttributeOrNull("android:name", SETTINGS_ACTIVITY) == null) application.appendChild("activity") {
+                setAttribute("android:name", SETTINGS_ACTIVITY)
+                setAttribute("android:exported", "false")
+                setAttribute("android:theme", "@android:style/Theme.Material.NoActionBar")
+                setAttribute("android:windowSoftInputMode", "adjustResize")
+            }
+            xml.root.insertChild(0, "queries") { appendChild("package") { setAttribute("android:name", "dev.spoilerblock") } }
+        }
+
+        // A "SpolierBlock" row in the app's own settings. Optional like the text hooks: a screen missing in another
+        // version only loses the row (the cover's settings button and the app shortcut still open the screen).
+        for (row in settingsRows) {
+            val xml = resourceXmlOrNull(row.file)
+            if (xml == null) { Logger.getLogger("SpoilerBlock").warning("settings screen not found: ${row.file}"); continue }
+            xml.use {
+                if (it.elementByAttributeOrNull("android:key", SETTINGS_KEY) != null) return@use
+                val screen = it.root
+                val parent = if (row.inLastCategory) screen.children("PreferenceCategory").lastOrNull() ?: screen else screen
+                val layout = row.itemLayout?.takeIf { l -> resourceXmlOrNull("res/layout/$l.xml")?.use { true } == true }
+                parent.appendChild("Preference") {
+                    setAttribute("android:key", SETTINGS_KEY)
+                    setAttribute("android:title", "SpolierBlock")
+                    setAttribute("android:summary", "Spoiler blocking, your library, backup")
+                    if (layout != null) setAttribute("android:layout", "@layout/$layout")
+                    if (row.order != null) setAttribute("android:order", row.order)
+                    appendChild("intent") {
+                        setAttribute("android:targetPackage", pkg) // rewritten in finalize with the final package name
+                        setAttribute("android:targetClass", SETTINGS_ACTIVITY)
+                    }
+                }
+            }
+        }
+
         // Optional: a missing hook (renamed in a future app version) only loses that view's text, it does not fail the patch.
         for (h in textHooks) {
             val m = classDefByOrNull(h.type)?.let { mutableClassDefBy(h.type) }?.methods
@@ -114,6 +167,15 @@ private fun spoilerBlockPatch(compatibility: Compatibility, textHooks: List<Text
         // shortcut: an Application without any onCreate() in app code is not handled, add a generated override if an app needs it.
         throw PatchException("no onCreate() in the hierarchy of $appType")
     }
+
+    finalize {
+        val pkg = resourceXml("AndroidManifest.xml").use { it.root.attribute("package") } ?: return@finalize
+        for (row in settingsRows) resourceXmlOrNull(row.file)?.use { xml ->
+            xml.elements("intent").filter { it.attribute("android:targetClass") == SETTINGS_ACTIVITY }
+                .forEach { it.setAttribute("android:targetPackage", pkg) }
+        }
+        if (settingsRows.isNotEmpty()) Logger.getLogger("SpoilerBlock").info("settings rows open $pkg/$SETTINGS_ACTIVITY")
+    }
 }
 
 private fun tested(packageName: String, name: String, version: String, type: ApkFileType, color: Int) = Compatibility(
@@ -135,10 +197,17 @@ val xPatch = spoilerBlockPatch(
         TextHook("Lcom/twitter/ui/widget/TextContentView;", "setText", "Ljava/lang/CharSequence;"),
         TextHook("Lcom/twitter/ui/widget/TextLayoutView;", "setText", "Ljava/lang/CharSequence;"),
     ),
+    // "Settings and privacy" is a preference XML; its rows are ordered by android:order (10 to 100 in 12.19).
+    listOf(SettingsRow("res/xml/settings_root.xml", order = "105")),
 )
 
 @Suppress("unused")
-val youtubePatch = spoilerBlockPatch(tested("com.google.android.youtube", "YouTube", "21.30.216", ApkFileType.APK, 0xFF0000))
+val youtubePatch = spoilerBlockPatch(
+    tested("com.google.android.youtube", "YouTube", "21.30.216", ApkFileType.APK, 0xFF0000),
+    // The settings list exists twice (21.30 shows the "Cairo" one); Morphe's own settings patch edits both as well.
+    settingsRows = listOf(SettingsRow("res/xml/settings_fragment.xml"),
+        SettingsRow("res/xml/settings_fragment_cairo.xml", itemLayout = "preference_with_icon", inLastCategory = true)),
+)
 
 @Suppress("unused")
 val instagramPatch = spoilerBlockPatch(
@@ -148,10 +217,16 @@ val instagramPatch = spoilerBlockPatch(
     listOf(TextHook("Lcom/instagram/ui/widget/textview/IgTextLayoutView;", "setTextLayout", "Landroid/text/Layout;")),
 )
 
-/** Test app in android/demo, patched exactly like the real apps. */
-@Suppress("unused")
-val demoPatch = spoilerBlockPatch(
-    Compatibility(packageName = "dev.spoilerblock.demo", name = "SpoilerBlock demo"),
+/** Test app in android/demo, patched exactly like the real apps; a second package tests the shared config. */
+private fun demoPatch(pkg: String) = spoilerBlockPatch(
+    Compatibility(packageName = pkg, name = "SpoilerBlock demo"),
     listOf(TextHook("Ldev/spoilerblock/demo/DrawnText;", "setText", "Ljava/lang/CharSequence;")),
+    listOf(SettingsRow("res/xml/demo_settings.xml")),
     testEndpoint = "http://10.0.2.2:8765/sparql", // the emulator's host: android/tools/mock-sparql.mjs
 )
+
+@Suppress("unused")
+val demoPatch = demoPatch("dev.spoilerblock.demo")
+
+@Suppress("unused")
+val demo2Patch = demoPatch("dev.spoilerblock.demo2")

@@ -48,15 +48,18 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     private long statFrames, statNs, statMaxNs, statReads, statReadNs, statEvals, statEvalNs, statLast = SystemClock.uptimeMillis();
 
     private static final class Item implements View.OnAttachStateChangeListener {
-        long fp; int gen = -1; long at; String text; int[] groups; boolean stale;
+        long fp; int gen = -1; long at; String text; int[] groups; boolean stale, pending;
         // A recycled view is removed and re-added (RecyclerView pool): treat it as unknown, whatever its fingerprint.
         @Override public void onViewAttachedToWindow(View v) { stale = true; }
         @Override public void onViewDetachedFromWindow(View v) { stale = true; }
     }
 
-    Scanner(SpoilerBlock sb, View decor) {
+    final boolean activityWindow; // false: a dialog, popup or drop-down (no TouchGate: covers there have no buttons)
+
+    Scanner(SpoilerBlock sb, View decor, boolean activityWindow) {
         this.sb = sb;
         this.decor = decor;
+        this.activityWindow = activityWindow;
         decor.getViewTreeObserver().addOnPreDrawListener(this);
         decor.getViewTreeObserver().addOnGlobalLayoutListener(this);
     }
@@ -100,6 +103,8 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     }
 
     private void scan() {
+        // a popup opened by what changed in this frame (typing -> suggestions) is found before its own first traversal
+        if (activityWindow) sb.checkWindows();
         if (!sb.enabled) { if (!covers.isEmpty()) clear(); return; }
         long now = SystemClock.uptimeMillis();
         if (layoutDirty || now - lastDiscover > REDISCOVER_MS) {
@@ -120,6 +125,11 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
                 if (m == null && (m = sb.awaitMatcher()) == null) return;
                 judge(it, g, m, now);
             }
+        }
+        // a dialog or popup without a list (a message preview, a bottom sheet): its whole content is one item
+        if (!activityWindow && containers.isEmpty() && decor instanceof ViewGroup && ((ViewGroup) decor).getChildCount() > 0) {
+            View it = ((ViewGroup) decor).getChildAt(0);
+            if (it.getVisibility() == View.VISIBLE && it.getWidth() > 0 && (m != null || (m = sb.awaitMatcher()) != null)) judge(it, (ViewGroup) decor, m, now);
         }
         // covers whose item left its list (removed, recycled into the scrap) go; a re-attached item is judged again
         for (int i = covers.size() - 1; i >= 0; i--) {
@@ -219,26 +229,30 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         Item st = items.get(it);
         if (st == null) { items.put(it, st = new Item()); it.addOnAttachStateChangeListener(st); }
         long fp = fingerprint(it, 17);
-        if (!st.stale && st.gen == sb.generation && st.fp == fp && now - st.at < RECHECK_MS) return;
+        if (!st.stale && !st.pending && st.gen == sb.generation && st.fp == fp && now - st.at < RECHECK_MS) return;
         long r0 = System.nanoTime();
         TextCapture.Texts texts = new TextCapture.Texts();
         collect(it, texts, true);
         String text = texts.sb.toString();
         // media views: their verdicts (requested here when missing) and the text OCR found in them
         media.clear();
-        if (sb.scanImages) sb.images.candidates(it, this, media, true);
+        if (sb.imagesMatter()) sb.images.candidates(it, this, media, true);
+        Config.Works v = sb.works;
         boolean pending = false, unknown = false;
         List<Integer> imgGroups = new ArrayList<>();
         StringBuilder ocr = new StringBuilder(), key = new StringBuilder(text);
-        for (View v : media) {
-            Images.State s = sb.images.state(v);
+        for (View mv : media) {
+            Images.State s = sb.images.state(mv);
             key.append('\u0000').append(s.key);
             if (!s.done) { pending = true; continue; }
-            if (s.failed) { unknown = true; continue; } // fail closed
+            if (s.failed) { unknown = true; continue; } // fail closed (as far as unknown images are covered at all)
             for (double[] h : s.hits) { // the first hit not seen, as the extension takes it
                 int g = (int) h[0];
                 if (g == Clip.UNKNOWN) { unknown = true; break; }
-                if (!m.groupSeen(g, sb.seenWork)) { imgGroups.add(g); break; }
+                if (!m.groupSeen(g, v.seen)) {
+                    if (Config.group(m.groupWorks(g), v, sb.blockUnlisted) != Config.NOT_COVERED && !imgGroups.contains(g)) imgGroups.add(g);
+                    break;
+                }
             }
             if (!s.ocr.isEmpty()) ocr.append('\n').append(s.ocr);
         }
@@ -247,36 +261,60 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         statReadNs += System.nanoTime() - r0;
         if (st.gen != sb.generation || !full.equals(st.text)) {
             long e0 = System.nanoTime();
-            st.groups = m.evaluate(full, sb.seenWork);
+            st.groups = m.evaluate(full, v.seen);
             statEvals++; statEvalNs += System.nanoTime() - e0;
         }
-        st.fp = fp; st.gen = sb.generation; st.at = now; st.text = full; st.stale = false;
-        int[] show; // as the extension's apply(): text works, then image titles; an image with no certain title -> UNKNOWN
-        if (!imgGroups.isEmpty() || unknown) { // a media verdict blocks in both modes
-            java.util.TreeSet<Integer> all = new java.util.TreeSet<>(imgGroups);
-            int[] u = new int[st.groups.length + all.size()];
-            int n = 0;
-            for (int g : st.groups) { u[n++] = g; all.remove(g); }
-            for (int g : all) u[n++] = g;
-            show = n > 0 ? java.util.Arrays.copyOf(u, n) : new int[]{Clip.UNKNOWN};
-        } else {
-            show = st.groups.length > 0 && sb.coverMatch(full) ? st.groups : new int[0];
+        st.fp = fp; st.gen = sb.generation; st.at = now; st.text = full; st.stale = false; st.pending = pending; // a pending image is asked again next frame
+
+        // the contract's decision rule: which groups cover, and why (its cover wording)
+        List<Integer> all = new ArrayList<>(), spoilers = new ArrayList<>();
+        for (int g : st.groups) {
+            int k = Config.group(m.groupWorks(g), v, sb.blockUnlisted);
+            if (k == Config.STYLE_ALL) all.add(g); else if (k == Config.STYLE_SPOILERS) spoilers.add(g);
+        }
+        String msg = null;
+        List<Integer> named = new ArrayList<>();
+        if (!all.isEmpty()) { msg = "Mentions "; named.addAll(all); named.addAll(spoilers); }
+        else if (!imgGroups.isEmpty()) { msg = "Image from "; named.addAll(imgGroups); named.addAll(spoilers); }
+        else if (!spoilers.isEmpty()) {
+            Boolean spoiler = sb.spoilerVerdict(full);
+            if (spoiler == null) msg = "Checking ";
+            else if (spoiler) msg = "Spoiler about ";
+            if (msg != null) named.addAll(spoilers);
+        }
+        if (msg != null) for (int g : imgGroups) if (!named.contains(g)) named.add(g);
+        String label = null;
+        if (msg != null) {
+            label = m.labels[named.get(0)] + (named.size() > 1 ? " and " + (named.size() - 1) + " more" : "");
+            msg = msg.equals("Checking ") ? "Checking " + label + " for spoilers…" : msg + label;
+        } else if (unknown && Config.coverUnknownImage(sb.unknownImages, namesSeen(m, full, v), !all.isEmpty() || !spoilers.isEmpty())) {
+            msg = "Possible film, show or game image";
+        } else if (pending) {
+            msg = "Checking image…"; // covered until its verdicts are in
         }
         String reveal = key.toString(); // "Show once" is for this text with these images
         Cover cv = coverOf(it);
-        boolean block = (show.length > 0 || pending) && !sb.revealed.contains(reveal);
+        boolean block = msg != null && !sb.revealed.contains(reveal);
         boolean log = Log.isLoggable(SpoilerBlock.TAG, Log.DEBUG);
         if (block) {
             if (cv == null) covers.add(cv = new Cover(this, it, parent));
-            if (cv.show(m, show, reveal) && log) {
-                Log.d(SpoilerBlock.TAG, "block " + (show.length == 0 ? "(pending image)" : show[0] == Clip.UNKNOWN ? "(unrecognised image)" : m.labels[show[0]]) +
-                    " " + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)) + " text=" + full.replace('\n', '|'));
+            if (cv.show(msg, label != null ? named.get(0) : -1, reveal) && log) {
+                Log.d(SpoilerBlock.TAG, "block \"" + msg + "\" " + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)) + " text=" + full.replace('\n', '|'));
             }
         } else if (cv != null) {
             cv.remove();
             covers.remove(cv);
             if (log) Log.d(SpoilerBlock.TAG, "unblock " + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)));
         }
+    }
+
+    private boolean[] noneSeen; // for rule 6's "names a seen work"
+
+    /** Whether the text names a work the user has seen (the matcher drops seen groups, so it is asked without them). */
+    private boolean namesSeen(Matcher m, String text, Config.Works v) {
+        if (noneSeen == null || noneSeen.length != m.ids.length) noneSeen = new boolean[m.ids.length];
+        for (int g : m.evaluate(text, noneSeen)) if (m.groupSeen(g, v.seen)) return true;
+        return false;
     }
 
     private Cover coverOf(View it) {

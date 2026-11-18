@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- No permissions: no network, no storage (export and import go through the system's document picker). -->
+    <application
+        android:label="SpolierBlock"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:allowBackup="true"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+        <activity android:name="dev.spoilerblock.SettingsActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- The shared config. Exported: the patched apps carry other signatures; ConfigProvider checks the caller. -->
+        <provider
+            android:name="dev.spoilerblock.ConfigProvider"
+            android:authorities="dev.spoilerblock.config"
+            android:exported="true" />
+    </application>
+</manifest>
