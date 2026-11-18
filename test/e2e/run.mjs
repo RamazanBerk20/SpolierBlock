@@ -81,6 +81,7 @@ servers.push(http.createServer((req, res) => {
     if (sparqlMode === '429') { res.writeHead(429, { 'retry-after': '1' }); return res.end('Too Many Requests'); }
     if (sparqlMode === 'bad') { res.writeHead(200, { 'content-type': 'application/sparql-results+json' }); return res.end('{"results": <html>'); }
     res.writeHead(200, { 'content-type': 'application/sparql-results+json' });
+    if (q.includes('VALUES ?l')) return res.end(bindings([])); // "name means something else" lookup: nothing else has the name
     if (q.includes('hint:rangeSafe')) return res.end(bindings(q.includes('P577') ? [{ item: wdUri(NEW_WORK.id), cls: wdUri('Q7889'), sl: { value: '25' } }] : []));
     if (q.includes('rdfs:label ?en')) return res.end(bindings([{ w: wdUri(NEW_WORK.id), en: { value: NEW_WORK.title } }]));
     if (q.includes('wdt:P577')) return res.end(bindings([{ w: wdUri(NEW_WORK.id), d: { value: '2026-09-01T00:00:00Z' } }]));

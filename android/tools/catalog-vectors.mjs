@@ -34,7 +34,7 @@ const fetch = async (url, init) => {
 const stats = { queries: 0, bytes: 0 };
 const sinceYear = new Date(info.builtAt).getUTCFullYear() - 1;
 const known = new Set(catalog.works.map((w) => w.id));
-const fresh = await fetchDelta({ classes, sinceYear, known, ambiguous: makeAmbiguous(words), fetch, endpoint: 'mock', stats });
+const fresh = await fetchDelta({ classes, sinceYear, known, ambiguous: makeAmbiguous(words), words, fetch, endpoint: 'mock', stats });
 
 setCommonWords(words);
 const bundledBuilt = buildIndex(catalog);
@@ -47,6 +47,12 @@ const sw = built.meta.ids.indexOf('Q900000002');
 assert.ok(sw >= 0);
 assert.ok(built.meta.groups.some((g) => g[0] === 'Star Wars' && g.includes(sw, 1) && g.length > 3), 'sequel not in the Star Wars group');
 assert.deepEqual(fresh.map((w) => w.id).sort(), ['Q900000001', 'Q900000002', 'Q900000003', 'Q900000005', 'Q900000007', 'Q900000008', 'Q900000009']);
+// "other" names: a city called Zorblax, a person nicknamed Hollow Crown; not the character, the dab page or the minor item
+const other = Object.fromEntries(fresh.map((w) => [w.id, w.other ?? []]));
+assert.deepEqual(other.Q900000001, ['Zorblax']);
+assert.ok(other.Q900000009.includes('Hollow Crown'));
+assert.deepEqual(other.Q900000007, []);
+assert.deepEqual(other.Q900000008, []);
 
 fs.writeFileSync(path.join(out, 'delta-http.json'), JSON.stringify({ sinceYear, exchanges }));
 fs.writeFileSync(path.join(out, 'delta-works.json'), JSON.stringify(fresh));

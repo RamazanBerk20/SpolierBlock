@@ -15,9 +15,13 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -77,9 +81,63 @@ final class CatalogUpdate {
         return "SELECT ?w ?cl ?cs WHERE { VALUES ?w { " + values(b) + " } ?c wdt:P1441 ?w ; wdt:P31 wd:Q95074 ; rdfs:label ?cl . FILTER(LANG(?cl) IN (\"en\", \"mul\")) OPTIONAL { ?c wikibase:sitelinks ?cs } }";
     }
 
-    private static List<List<String>> batches(List<String> a) {
+    static String kindQuery(List<String> b) {
+        return "SELECT ?w ?p ?v WHERE { VALUES ?w { " + values(b) + " } VALUES ?p { wdt:P31 wdt:P136 wdt:P7937 } ?w ?p ?v }";
+    }
+    static String senseQuery(List<String> names, String prop) {
+        StringBuilder v = new StringBuilder();
+        for (String n : names) {
+            StringBuilder q = new StringBuilder();
+            Json.quote(q, n);
+            if (v.length() > 0) v.append(' ');
+            v.append(q).append("@en ").append(q).append("@mul");
+        }
+        return "SELECT ?l ?e ?sl (GROUP_CONCAT(DISTINCT ?c) AS ?cs) WHERE { VALUES ?l { " + v + " } ?e " + prop +
+            " ?l ; wikibase:sitelinks ?sl . FILTER(?sl >= " + Catalog.MIN_SITELINKS + ") OPTIONAL { ?e wdt:P31 ?c } } GROUP BY ?l ?e ?sl";
+    }
+
+    // ---------- catalog-rules.js: narrative works and names that mostly mean something else ----------
+
+    private static Set<String> set(String s) { return new HashSet<>(Arrays.asList(s.split(" "))); }
+    static final Set<String> NOT_NARRATIVE = set(
+        "Q179461 Q29154430 Q6718887 Q10642135 Q170207 Q34274 Q1054662 Q1001051 Q1194040 Q47148 Q209680 Q188602 Q2986441 " +
+        "Q215495 Q63203971 Q21848887 Q1147354 Q3831847 Q7831615 Q938714 Q1377898 Q208628 Q12378012 Q1924246 " +
+        "Q13136 Q5292 Q23622 Q4942969 Q1787111 Q521983 Q1239328 Q975413 Q162827 Q1459574 Q2352616 Q18168594 Q223638 " +
+        "Q2191807 Q198614 Q1631107 Q615699 Q30721375 Q55594435 Q3136090 Q1429277 " +
+        "Q213051 Q27801 Q35760 Q384515 Q864737 Q185363 Q11080698 Q30277550 Q4465563 Q116513838 Q124409385 Q36279 Q4184 " +
+        "Q112983 Q5891 Q13408937 Q1683266 Q995600 Q1129795 Q11826511 Q193495 Q6498453 Q58854 Q1748756 Q190399 " +
+        "Q93204 Q7603925 Q133731271 Q133731263 Q1760864 Q110593123 Q1800833 Q3648909 Q4765076 Q430525 Q1358344 " +
+        "Q139850703 Q5401282 Q622812 Q986699 Q131762936 Q6645282 Q3546572 Q7257679 Q5428822 Q10676514 Q2670855 Q7832972 " +
+        "Q126914943 Q7551149 Q4677832 Q2096046 Q1371394 Q116763393 Q34682961");
+    private static final Set<String> NARRATIVE = set("Q8261 Q149537 Q49084 Q25379 Q1279564 Q104213567 Q1667921 Q8253 " +
+        "Q130232 Q157443 Q859369 Q959790 Q2484376 Q188473 Q1054574 Q200092 Q471839");
+    private static final Set<String> NOT_A_SENSE = set("Q4167410 Q13406463 Q4167836 Q11266439 Q15407973 Q22808320 Q17362920");
+    static final int SENSE_BATCH = 150, MAX_SENSE_QUERIES = 20;
+
+    static boolean isNarrative(List<String> vals) {
+        boolean not = false, story = false;
+        for (String v : vals) { not |= NOT_NARRATIVE.contains(v); story |= NARRATIVE.contains(v); }
+        return !not || story;
+    }
+
+    static boolean shortName(String n) { return Catalog.splitSpace(Catalog.jsTrim(n)).size() <= 2; }
+
+    static List<String> senseNames(Catalog.Work w, Catalog.Words words) {
+        List<String> out = new ArrayList<>();
+        out.add(w.title);
+        out.addAll(Arrays.asList(w.aliases));
+        out.addAll(Arrays.asList(w.characters));
+        String p = Catalog.seriesPrefix(w.title, words);
+        if (p != null) out.add(p);
+        out.removeIf(String::isEmpty);
+        return out;
+    }
+
+    private static List<List<String>> batches(List<String> a) { return batches(a, 200); }
+
+    private static List<List<String>> batches(List<String> a, int n) {
         List<List<String>> out = new ArrayList<>();
-        for (int i = 0; i < a.size(); i += 200) out.add(a.subList(i, Math.min(a.size(), i + 200)));
+        for (int i = 0; i < a.size(); i += n) out.add(a.subList(i, Math.min(a.size(), i + n)));
         return out;
     }
 
@@ -173,8 +231,8 @@ final class CatalogUpdate {
     // ---------- delta ----------
 
     /** New works (catalog schema) dated since sinceYear that are not in `known`; types from the bundled class list. */
-    List<Catalog.Work> fetchDelta(Map<String, List<String>> classes, int sinceYear, Set<String> known, Catalog.Ambiguity amb)
-        throws Failure, InterruptedException {
+    List<Catalog.Work> fetchDelta(Map<String, List<String>> classes, int sinceYear, Set<String> known, Catalog.Ambiguity amb,
+                                  Catalog.Words words) throws Failure, InterruptedException {
         Map<String, String> typeOf = new HashMap<>(); // class -> highest-priority type containing it
         for (int p = Catalog.PRIORITY.length - 1; p >= 0; p--) {
             List<String> cs = classes.get(Catalog.PRIORITY[p]);
@@ -207,6 +265,18 @@ final class CatalogUpdate {
                     }
                 }
             }
+            // scripture, reference works, documentaries... are left out, as in the catalog build
+            Map<String, List<String>> kinds = new HashMap<>();
+            for (List<String> b : batches(new ArrayList<>(found.keySet()))) for (Map<String, String[]> r : sparql(kindQuery(b))) {
+                String id = Catalog.qid(val(r, "w"));
+                List<String> l = kinds.get(id);
+                if (l == null) kinds.put(id, l = new ArrayList<>());
+                l.add(Catalog.qid(val(r, "v")));
+            }
+            for (Iterator<String> it = found.keySet().iterator(); it.hasNext(); ) {
+                List<String> k = kinds.get(it.next());
+                if (!isNarrative(k == null ? Collections.<String>emptyList() : k)) it.remove();
+            }
             List<String> ids = new ArrayList<>(found.keySet());
             for (List<String> b : batches(ids)) for (Map<String, String[]> r : sparql(yearsQuery(b))) {
                 int y = Catalog.yearOf(val(r, "d"));
@@ -225,9 +295,63 @@ final class CatalogUpdate {
             for (List<String> b : batches(missing)) for (Map<String, String[]> r : sparql(charFallbackQuery(b))) addTo(chars, Catalog.qid(val(r, "w")), charPair(r));
             List<Catalog.Work> out = new ArrayList<>();
             for (Catalog.Raw w : found.values()) out.add(Catalog.finalizeWork(w, aliases.get(w.id), chars.get(w.id), amb));
+            Set<String> inCatalog = new HashSet<>(known);
+            inCatalog.addAll(ids);
+            markOther(out, inCatalog, classes, words);
             return out;
         } catch (RuntimeException e) { // a well-formed answer of the wrong shape
             throw new Failure("Wikidata sent an unreadable answer");
+        }
+    }
+
+    /** Sets work.other like the catalog build, with at most MAX_SENSE_QUERIES queries; fail safe as in the JS. */
+    private void markOther(List<Catalog.Work> works, Set<String> inCatalog, Map<String, List<String>> classes, Catalog.Words words)
+        throws InterruptedException {
+        Set<String> same = new HashSet<>();
+        for (String t : Catalog.PRIORITY) { List<String> l = classes.get(t); if (l != null) same.addAll(l); }
+        List<String> extra = classes.get("sameSense");
+        if (extra != null) same.addAll(extra);
+        same.removeAll(NOT_NARRATIVE);
+        LinkedHashSet<String> uniq = new LinkedHashSet<>();
+        for (Catalog.Work w : works) uniq.addAll(senseNames(w, words));
+        List<String> names = new ArrayList<>(uniq);
+        Collections.sort(names);
+        Map<String, Double> otherPop = new HashMap<>();
+        Set<String> looked = new HashSet<>();
+        int queries = 0;
+        try {
+            for (List<String> b : batches(names, SENSE_BATCH)) {
+                List<String> shortOnes = new ArrayList<>();
+                for (String n : b) if (shortName(n)) shortOnes.add(n);
+                int need = shortOnes.isEmpty() ? 1 : 2;
+                if (queries + need > MAX_SENSE_QUERIES) break;
+                queries += need;
+                List<Map<String, String[]>> rows = new ArrayList<>(sparql(senseQuery(b, "rdfs:label")));
+                if (!shortOnes.isEmpty()) rows.addAll(sparql(senseQuery(shortOnes, "skos:altLabel")));
+                for (Map<String, String[]> r : rows) {
+                    String[] cv = r.get("cs");
+                    boolean skip = inCatalog.contains(Catalog.qid(val(r, "e")));
+                    if (cv != null && cv[0] != null && !cv[0].isEmpty()) {
+                        for (String c : cv[0].split(" ", -1)) { String q = Catalog.qid(c); skip |= NOT_A_SENSE.contains(q) || same.contains(q); }
+                    }
+                    if (skip) continue;
+                    String l = val(r, "l");
+                    double sl = Double.parseDouble(val(r, "sl"));
+                    Double prev = otherPop.get(l);
+                    otherPop.put(l, prev == null ? sl : Math.max(prev, sl));
+                }
+                looked.addAll(b);
+            }
+        } catch (Failure | RuntimeException e) {
+            // busy, refused or an odd answer: the names not looked up get the fail-safe rule
+        }
+        for (Catalog.Work w : works) {
+            LinkedHashSet<String> other = new LinkedHashSet<>();
+            for (String n : senseNames(w, words)) {
+                Double p = otherPop.get(n);
+                if (looked.contains(n) ? (p == null ? 0 : p) > w.pop : shortName(n)) other.add(n);
+            }
+            if (!other.isEmpty()) w.other = other.toArray(new String[0]);
         }
     }
 
@@ -374,10 +498,11 @@ final class CatalogUpdate {
         for (Catalog.Work w : bundle.catalog) known.add(w.id);
         for (Catalog.Work w : prev) known.add(w.id);
         Result r = new Result();
-        r.fresh = fetchDelta(bundle.classes, bundle.sinceYear(), known, new Catalog.Ambiguity(bundle.words));
+        Catalog.Words words = new Catalog.Words(bundle.words);
+        r.fresh = fetchDelta(bundle.classes, bundle.sinceYear(), known, new Catalog.Ambiguity(bundle.words), words);
         r.added = new ArrayList<>(prev);
         r.added.addAll(r.fresh);
-        if (!r.fresh.isEmpty()) r.built = Catalog.buildIndex(Catalog.merge(bundle.catalog, r.added), new Catalog.Words(bundle.words));
+        if (!r.fresh.isEmpty()) r.built = Catalog.buildIndex(Catalog.merge(bundle.catalog, r.added), words);
         return r;
     }
 }
