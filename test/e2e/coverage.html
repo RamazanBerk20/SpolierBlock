@@ -52,10 +52,17 @@
 
   <section id="dark"><article id="dark-post"><p>Lost season 6 finale still makes me angry, the ending made no sense.</p></article></section>
 
+  <!-- a post whose video the site starts with sound (and later tries to un-mute and play again) -->
+  <article id="av-post"><p>Walter White's last scene, sound on:</p><video id="av" src="{{SELF}}/video_lake.webm" loop playsinline></video></article>
+
   <iframe id="fr-srcdoc" srcdoc="<article id=f1><p>Snape kills Dumbledore at the end of the sixth book.</p></article>"></iframe>
   <iframe id="fr-cross" src="{{FRAME}}"></iframe>
 </main>
 <script>
+  const av = document.getElementById('av');
+  av.muted = false;
+  av.addEventListener('play', () => { window.__avStarted = true; }, { once: true });
+  av.play().catch(() => {});
   const thread = document.getElementById('dm-thread');
   for (let i = 0; i < 40; i++) {
     const row = document.createElement('div');

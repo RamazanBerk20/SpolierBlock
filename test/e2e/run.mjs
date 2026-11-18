@@ -108,6 +108,7 @@ if (target === 'firefox') {
     'network.proxy.type': 1, 'network.proxy.http': '127.0.0.1', 'network.proxy.http_port': PROXY,
     'network.proxy.ssl': '127.0.0.1', 'network.proxy.ssl_port': PROXY, 'network.proxy.no_proxies_on': 'localhost, 127.0.0.1',
     'network.proxy.allow_hijacking_localhost': false,
+    'media.autoplay.default': 0, 'media.autoplay.blocking_policy': 0, // the page may start sound (covered-video case)
     'extensions.webextensions.uuids': JSON.stringify({ 'spolierblock@local': uuid }),
   };
   const args = ['web-ext', 'run', '--source-dir', EXT, '--firefox=/usr/bin/zen-browser',
@@ -128,7 +129,7 @@ if (target === 'firefox') {
   const ext = EXT;
   browser = await puppeteer.launch({
     executablePath: exe, headless: true, pipe: true, enableExtensions: [ext],
-    args: [`--proxy-server=http://127.0.0.1:${PROXY}`, '--no-first-run', '--no-default-browser-check'],
+    args: [`--proxy-server=http://127.0.0.1:${PROXY}`, '--no-first-run', '--no-default-browser-check', '--autoplay-policy=no-user-gesture-required'],
   });
   let sw;
   for (let i = 0; i < 30 && !sw; i++) { sw = browser.targets().find((t) => t.type() === 'service_worker' && t.url().includes('background.js')); if (!sw) await sleep(500); }
@@ -571,6 +572,20 @@ check('shadow root attached after the element was seen', lab(shadow.late) === 'M
 check('about:srcdoc iframe covered', lab(shadow.srcdoc) === 'Mentions Harry Potter', shadow.srcdoc);
 check('cross-origin iframe covered', lab(crossC) === 'Mentions Star Wars', crossC);
 check('document.title replaced', shadow.title === 'Mentions Breaking Bad', shadow.title);
+// a covered post's video is silent (the page started it with sound), stays silent when the page un-mutes and plays it
+// again, and gets its sound and playback back after "Show once"
+const av = () => page.evaluate(() => { const v = document.getElementById('av'); return { covered: document.getElementById('av-post').hasAttribute('data-sb-blocked'), muted: v.muted, paused: v.paused, startedBySite: window.__avStarted }; });
+const av1 = await av();
+check('covered post: its video is muted and paused', av1.covered && av1.muted && av1.paused && av1.startedBySite === true, av1);
+await page.evaluate(() => { const v = document.getElementById('av'); v.muted = false; v.play().catch(() => {}); });
+await sleep(600);
+const av2 = await av();
+check('page un-mutes and plays it while covered: stays silent', av2.covered && av2.muted && av2.paused, av2);
+await page.evaluate(() => document.getElementById('av-post').scrollIntoView({ block: 'center' }));
+await page.evaluate(() => document.querySelector('#av-post > sb-overlay').shadowRoot.querySelector('[data-a="once"]').click());
+await sleep(800);
+const av3 = await av();
+check('"Show once" restores sound and playback', !av3.covered && !av3.muted && !av3.paused, av3);
 
 }
 

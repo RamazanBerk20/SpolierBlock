@@ -274,6 +274,7 @@
       countChanged();
     }
     ov.marks = d.marks;
+    silence(block); // also media added to the post since it was covered
     const p = ov.shadowRoot.querySelector('p');
     if (p.textContent !== d.label) p.textContent = d.label;
     ov.shadowRoot.querySelector('[data-a="seen"]').hidden = !d.marks.length; // nothing to mark for an unidentified image
@@ -286,12 +287,53 @@
     block.removeAttribute('data-sb-blocked');
     block.removeAttribute('data-sb-pos');
     blocked.delete(block);
+    unsilence(block);
     countChanged();
+  }
+
+  // ---------- covered media stay silent ----------
+  // A covered post's video/audio is muted and paused, and kept so if the page un-mutes or plays it again (autoplay on
+  // scroll); uncovering restores the muted state and resumes what was playing or what the page started since.
+  // shortcut: a pause() the page calls on media we already paused leaves no trace, so only media still on screen is
+  // resumed (pages pause what they scroll away from); a cross-origin iframe player is not reached (separate instance).
+  const quiet = new Map(); // media element -> { block, muted, resume }
+  function hush(e) {
+    const m = e.target, st = quiet.get(m);
+    if (!st) return;
+    if (e.type === 'play') st.resume = true; // the page wants it playing: honoured on uncover
+    if (!m.muted) m.muted = true;
+    if (!m.paused) m.pause();
+  }
+  function mediaIn(block) {
+    const out = [...block.querySelectorAll('video, audio')];
+    for (const h of hostsIn(block)) { const sr = shadowOf(h); if (sr) out.push(...sr.querySelectorAll('video, audio')); }
+    for (const f of block.querySelectorAll('iframe')) { try { out.push(...(f.contentDocument?.querySelectorAll('video, audio') ?? [])); } catch {} }
+    return out;
+  }
+  function silence(block) {
+    for (const m of mediaIn(block)) {
+      if (quiet.has(m)) continue;
+      quiet.set(m, { block, muted: m.muted, resume: !m.paused });
+      m.addEventListener('play', hush);
+      m.addEventListener('volumechange', hush);
+      m.muted = true;
+      if (!m.paused) m.pause();
+    }
+  }
+  function unsilence(block) {
+    for (const [m, st] of quiet) {
+      if (st.block !== block) continue;
+      quiet.delete(m);
+      m.removeEventListener('play', hush);
+      m.removeEventListener('volumechange', hush);
+      m.muted = st.muted;
+      if (st.resume && m.isConnected && inView(m)) m.play()?.catch(() => {});
+    }
   }
 
   // The toolbar badge shows the top frame's cover count (background: tab.count / sb.stats).
   function coverCount() {
-    for (const b of blocked.keys()) if (!b.isConnected) blocked.delete(b); // removed by the page
+    for (const b of blocked.keys()) if (!b.isConnected) { blocked.delete(b); unsilence(b); } // removed by the page
     return blocked.size;
   }
   let sentCount = 0, countTimer = 0;
@@ -528,8 +570,7 @@
         const now = performance.now();
         if (now - last < FRAME_EVERY_MS) return;
         last = now;
-        const before = blocked.has(findMediaBlock(v));
-        frame().then(() => { if (!before && blocked.has(findMediaBlock(v))) v.pause(); });
+        frame(); // a frame that turns out blocked covers the post, which silences the video
       });
     }
     // Fail closed: a video stays a placeholder until its first frame has a verdict (it loads on play at the latest).
