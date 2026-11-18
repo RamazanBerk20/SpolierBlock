@@ -63,9 +63,9 @@ Neither file was used for training or for choosing the threshold. `spoiler-eval2
 | Title check on `test/fixtures/images` | 5 of 31 media images titled right, 0 wrong, 0 of 44 ordinary photos named (measured before the recalibration, not re-run). The cut-offs were fitted on a set that includes these images, so this is not held out. |
 | OCR captions read, synthetic but realistic set (thumbnails, subtitles, HUDs, memes, post screenshots) | 171 of 185, against 34 of 185 with Tesseract. The OCR settings were tuned on the same set. |
 | Cross-browser score spread, Chrome against Firefox, fixture images (`tools/bench-stats-diff.mjs`) | Up to 0.010 with canvas scaling, at most 0.0013 now that the engine resizes in JavaScript. |
-| Time per screenful, Chrome 4 threads | title check 65 to 197 ms, OCR 358 to 175 ms |
-| Time per screenful, Zen 1 thread | title check 205 to 482 ms, OCR 383 to 341 ms |
-| Process memory, Chrome and Zen | 491 and 411 MB before, 467 and 351 MB now |
+| Time per screenful, Chrome 4 threads | title check 65 to 171 ms (175 ms for one image alone), OCR 358 to 193 ms |
+| Time per screenful, Zen 1 thread | title check 205 to 426 ms (448 ms for one image alone), OCR 383 to 350 ms |
+| Process memory, Chrome | 491 MB before, 991 MB now: since 0.2.1 the title model's weights are held in full precision, which is faster and costs memory. Zen was not re-measured (about 910 MB in the earlier image work). |
 
 Title checks are slower than in 0.1 and OCR is faster. Image recognition is still weak: it names few titles, and a wrong title is possible (8 wrong titles and 2 ordinary photos named on the held-out split). The dependable signals are text inside images (OCR) and the text around a post.
 

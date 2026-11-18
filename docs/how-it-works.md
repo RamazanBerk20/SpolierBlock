@@ -233,7 +233,7 @@ Cut-offs, set in `tools/build.mjs` (`CUT`) and stored in `data/clip-meta.json` w
 
 They come from `tools/calibrate-clip.mjs`, which fits them on all calibration images and reports a two-fold split (media images split by work, ordinary photos by file name) so that the reported result is held out. The held-out total is in the README. The shipped values are fitted on all images including the fixtures, so the fixture figures are not held out. They were recalibrated after the merged catalog and the `pixels.js` resize landed. The calibration is noisy: the two folds pick very different cut-offs (for example `titleGap` 0 on one and 0.0325 on the other), so a small change in the data moves the held-out result by a few images.
 
-The title tower's weights are quantised to int8 and the activations stay fp32. Ordinary int8 quantisation of activations breaks this model (see [agents/pitfalls.md](agents/pitfalls.md)). `tools/quantize-vision.mjs` does it at build time, without Python, from a pinned fp32 download. Restoring the weights costs time on every run. Folding them to fp32 at load is one setting in `engine.js` (`disable_quant_qdq`): the image work measured it faster (Chrome 142 ms and Zen 431 ms per image) but about 980 and 910 MB of process memory. It is not enabled.
+The title tower's weights are quantised to int8 and the activations stay fp32. Ordinary int8 quantisation of activations breaks this model (see [agents/pitfalls.md](agents/pitfalls.md)). `tools/quantize-vision.mjs` does it at build time, without Python, from a pinned fp32 download. Restoring the weights on every run costs time, so since 0.2.1 the engine folds them to fp32 once at load (`disable_quant_qdq` in `engine.js`). The scores are identical (same weights; `tools/bench-stats-diff.mjs` shows a spread of 0 on the 87 fixture images in both browsers). One image alone went from 403 to 175 ms in Chrome and from 629 to 448 ms in Zen; the Chrome extension process went from 481 to 991 MB. Remove the setting to trade the speed back for memory.
 
 Works added by a catalog update or by hand have no title rows, so their images only get the generic verdict.
 
@@ -291,13 +291,13 @@ A first catalog build (`tools/catalog/build.mjs`) sends up to about 800 more que
 
 ## Memory and latency
 
-Figures are from the image work (Chrome for Testing and Zen on an i5-10500H, measured with other jobs running, good to about 30 percent). They apply to the models that ship now: SigLIP 2 base/32 with int8 weights, PP-OCR and the fine-tuned MiniLM. They were not re-run for this page.
+Figures are from the image work (Chrome for Testing and Zen on an i5-10500H, measured with other jobs running, good to about 30 percent). They apply to the models that ship now: SigLIP 2 base/32 with its weights folded to fp32 at load, PP-OCR and the fine-tuned MiniLM, measured on the fixture build for 0.2.1.
 
 | | Chrome, 4 threads | Zen, 1 thread |
 |---|---|---|
-| Title check, per screenful of images | 197 ms | 482 ms |
-| OCR, per screenful of images | 175 ms | 341 ms |
-| Process memory | 467 MB | 351 MB |
+| Title check, per image in a screenful | 171 ms | 426 ms |
+| OCR, per image in a screenful | 193 ms | 350 ms |
+| Process memory | 991 MB | not re-measured (about 910 MB in the earlier image work) |
 
 - `dist/firefox` is about 160 MB (162 MB measured by the image work).
 - `research/REPORT.md` predates these models. Read its image sections as research notes, not as a description of the shipped build.

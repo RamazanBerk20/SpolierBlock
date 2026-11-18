@@ -72,9 +72,9 @@ const vision = once(async () => {
   const [meta, bin, sess] = await Promise.all([
     getJSON('data/clip-meta.json'),
     fetch(url('data/clip-text.bin')).then((r) => r.arrayBuffer()),
-    // weight-only int8 (tools/quantize-vision.mjs), dequantised on every run. Folding the weights to fp32 at load
-    // ({ session: { disable_quant_qdq: '1' } }) is 2.6x faster in Chrome but doubles the process to ~1 GB.
-    session('models/vision/model.onnx'),
+    // weight-only int8 on disk (tools/quantize-vision.mjs), folded to fp32 once at load: same scores, 2.3x faster per
+    // image in Chrome, but the process is ~1 GB. Drop the option to dequantise on every run instead (~480 MB).
+    session('models/vision/model.onnx', { session: { disable_quant_qdq: '1' } }),
   ]);
   return { meta, mat: new Int8Array(bin), sess };
 });
