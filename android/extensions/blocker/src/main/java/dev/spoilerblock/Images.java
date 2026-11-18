@@ -559,7 +559,7 @@ final class Images {
         android.graphics.BitmapFactory.Options opt = new android.graphics.BitmapFactory.Options();
         opt.inPreferredConfig = Bitmap.Config.ARGB_8888;
         opt.inPreferredColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB);
-        for (String mode : new String[]{"cpu", "xnnpack"}) {
+        for (String mode : new String[]{"cpu"}) { // XNNPACK was measured slower (690 ms alone, 355 in a batch of 4): not used
             long t0 = SystemClock.uptimeMillis();
             OrtSession s;
             try (OrtSession.SessionOptions o = cpuOptions()) {
@@ -599,7 +599,8 @@ final class Images {
         File ocrCases = new File(dir, "ocr-cases.json");
         if (ocrCases.exists()) {
             org.json.JSONArray oc = new org.json.JSONArray(new String(java.nio.file.Files.readAllBytes(ocrCases.toPath()), StandardCharsets.UTF_8));
-            try (OrtSession.SessionOptions o = cpuOptions(); OrtSession.SessionOptions o2 = cpuOptions();
+            for (OrtSession.SessionOptions.OptLevel lvl : OrtSession.SessionOptions.OptLevel.values())
+            try (OrtSession.SessionOptions o = cpuOptions(); OrtSession.SessionOptions o2 = cpuOptions(); AutoCloseable z = level(o, lvl);
                  Ocr ocr = new Ocr(env.createSession(sb.directAsset("spoilerblock/ocr/det.onnx"), o), env.createSession(sb.directAsset("spoilerblock/ocr/rec.onnx"), o2),
                      new String(sb.asset("spoilerblock/ocr/dict.txt"), StandardCharsets.UTF_8))) {
                 int same = 0;
@@ -615,11 +616,13 @@ final class Images {
                     Log.i("SBIMG", (eq ? "ocr same " : "OCR DIFF ") + k.getString("file") + " android=\"" + text.replace('\n', '|') + "\"" +
                         (eq ? "" : " js=\"" + k.getString("text").replace('\n', '|') + "\""));
                 }
-                Log.i("SBIMG", "ocr: " + same + "/" + oc.length() + " texts identical, " + t / Math.max(1, oc.length()) + " ms per image");
+                Log.i("SBIMG", "ocr (detector " + lvl + "): " + same + "/" + oc.length() + " texts identical, " + t / Math.max(1, oc.length()) + " ms per image");
             }
         }
         Log.i("SBIMG", "accel: " + sb.images.accel.status());
     }
+
+    private static AutoCloseable level(OrtSession.SessionOptions o, OrtSession.SessionOptions.OptLevel l) throws Exception { o.setOptimizationLevel(l); return () -> { }; } // PROBE
 
     static String kind(List<double[]> hits) { return hits.isEmpty() ? "none" : hits.get(0)[0] == Clip.UNKNOWN ? "generic" : "title " + (int) hits.get(0)[0]; }
 

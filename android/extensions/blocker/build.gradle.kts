@@ -15,9 +15,9 @@ dependencies {
     // The models (spoiler classifier, SigLIP 2 vision tower, PP-OCR) run on ONNX Runtime 1.32.0: 1.22 to 1.31 give the
     // PP-OCR v5 detector a blank probability map on x86-64 (OcrTest finds no text). Only its Java
     // classes reach the .mpe dex; the patch ships the AAR's native libs.
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.32.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
     // the same Java API with desktop natives, for the JVM parity test (the AAR has no JVM natives)
-    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.32.0")
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.22.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
 }

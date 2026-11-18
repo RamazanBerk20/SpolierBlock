@@ -16,7 +16,7 @@ patches {
 // The spoiler classifier and "Scan images": ONNX Runtime's native libs (the extension carries only its Java classes) and the models.
 val ortNative: Configuration by configurations.creating { isTransitive = false }
 dependencies {
-    ortNative("com.microsoft.onnxruntime:onnxruntime-android:1.32.0@aar")
+    ortNative("com.microsoft.onnxruntime:onnxruntime-android:1.22.0@aar")
 }
 val modelDir = rootDir.resolve("../models/spoiler")
 

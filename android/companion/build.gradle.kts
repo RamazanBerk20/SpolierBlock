@@ -46,7 +46,7 @@ android {
 
 dependencies {
     // only to compile the shared sources; the companion never loads a model
-    compileOnly("com.microsoft.onnxruntime:onnxruntime-android:1.32.0")
+    compileOnly("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
 }
 
 // The title index the extension builds (npm run build -> dist/firefox/data), for the library's search.
