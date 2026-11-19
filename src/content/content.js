@@ -414,7 +414,8 @@
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
     dlg.querySelector('ul').innerHTML = xs.map((x) => `<li><label><input type="checkbox" value="${x}"><span>${esc(meta.titles[x])}` +
       `<small>${esc([TYPE_NAMES[meta.types[x]] ?? meta.types[x], meta.years[x]].filter(Boolean).join(' · '))}</small></span></label></li>`).join('');
-    dlg.querySelector('.note').textContent = `Posts that only say "${names(ov.marks)}" stay covered until every one is marked.`;
+    dlg.querySelector('.note').textContent = ov.marks.length > 1 ? 'This post names several works. It stays covered until each one is marked.'
+      : `Posts that only say "${meta.groups[ov.marks[0]][0]}" stay covered until every one is marked.`;
     dlg.showModal();
     dlg.querySelector('input')?.focus();
   }
