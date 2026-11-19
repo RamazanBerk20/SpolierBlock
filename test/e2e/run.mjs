@@ -29,6 +29,15 @@ fs.writeFileSync(path.join(EXT, 'data/update-config.json'), JSON.stringify({ end
 const mf = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
 Object.assign(mf.content_scripts[0], { all_frames: true, match_about_blank: true });
 fs.writeFileSync(path.join(EXT, 'manifest.json'), JSON.stringify(mf, null, 2));
+// Test-only `series` column in the index meta (per work: a series label or null), the shape the picker's "More from this
+// series" section reads until the catalog carries series data: Dune's two works plus eight other fixture works.
+const SERIES_EXTRA = ['Inception', 'Interstellar', 'Ratatouille', 'Cars', 'Rocky II', 'Chernobyl', 'Severance', 'Napoleon'];
+{
+  const f = path.join(EXT, 'data/index.json'), m = JSON.parse(fs.readFileSync(f, 'utf8'));
+  const dune = m.groups.find((g) => g[0] === 'Dune').slice(1);
+  m.series = m.ids.map((_, w) => (dune.includes(w) || SERIES_EXTRA.includes(m.titles[w]) ? 'Dune saga' : null));
+  fs.writeFileSync(f, JSON.stringify(m));
+}
 // SB_CONTENT=<dir with content.js/content.css>: run another content script (e.g. 0.1) against the same pages
 if (process.env.SB_CONTENT) for (const f of ['content.js', 'content.css']) fs.copyFileSync(path.join(process.env.SB_CONTENT, f), path.join(EXT, 'src/content', f));
 const only = process.env.ONLY; // ONLY=1: skip the 0.1 flow and run the 0.2 cases only; ONLY=feed,coverage: those cases
@@ -458,6 +467,9 @@ const addPicPosts = async () => {
 };
 
 let c;
+// the 0.1 flow's catalog update stored a rebuilt index; the 0.2 cases use the bundled one (it has the series column)
+await storage(() => (globalThis.browser ?? chrome).storage.local.remove('catalogIndex'));
+await sleep(1000);
 if (want('states')) {
 // A) defaults: every work unlisted, style all, unknown images off
 await setConfig({});
@@ -557,7 +569,11 @@ await addPost('x-dune', 'Paul Atreides rides the sandworm at the end.');
 await sleep(500);
 const pkState = (id = 'x-dune') => page.evaluate((id) => {
   const sr = document.querySelector(`#${id} > sb-overlay`).shadowRoot, d = sr.querySelector('dialog'), f = sr.activeElement;
-  return { open: d.open, rows: [...d.querySelectorAll('li')].map((li) => li.textContent), checked: d.querySelectorAll('input:checked').length,
+  const more = d.querySelector('.more'), moreBtn = d.querySelector('[data-a="pk-more"]');
+  return { open: d.open, rows: [...d.querySelectorAll('.first li')].map((li) => li.textContent), checked: d.querySelectorAll('.first input:checked').length,
+    more: more.hidden ? null : { title: d.querySelector('.h2').textContent, rows: [...d.querySelectorAll('.second li')].map((li) => li.textContent),
+      visible: d.querySelectorAll('.second li:not([hidden])').length, showMore: moreBtn.hidden ? null : moreBtn.textContent,
+      all: d.querySelector('[data-a="pk-all2"]').textContent, checked: d.querySelectorAll('.second input:checked').length },
     focus: f?.localName === 'input' ? 'input' : f?.dataset?.a ?? null, title: d.querySelector('.h').textContent,
     note: d.querySelector('.note').textContent, label: sr.querySelector('p').textContent };
 }, id);
@@ -572,20 +588,29 @@ await clickIn('[data-a="pk-all"]');
 const pk2 = await pkState();
 await clickIn('[data-a="pk-cancel"]');
 const pk3 = await pkState();
-check('picker: All ticks every row; Cancel writes nothing and returns focus', pk2.checked === 2 && !pk3.open && pk3.focus === 'seen' &&
-  !Object.keys(await worksNow()).length, { pk2, pk3 });
+check('picker: All ticks the first section only; Cancel writes nothing and returns focus', pk2.checked === 2 && pk2.more?.checked === 0 &&
+  !pk3.open && pk3.focus === 'seen' && !Object.keys(await worksNow()).length, { pk2, pk3 });
+const years = SERIES_EXTRA.map((t) => META.years[META.titles.indexOf(t)]);
+check('picker: "More from this series", oldest first, six shown, "Show 2 more", its own "All 8"', pk1.more?.title === 'More from this series' &&
+  pk1.more.rows.length === 8 && pk1.more.visible === 6 && pk1.more.showMore === 'Show 2 more' && pk1.more.all === 'All 8' &&
+  pk1.more.rows.every((r, i, a) => i === 0 || +a[i - 1].slice(-4) <= +r.slice(-4)), { more: pk1.more, years });
 await clickIn('[data-a="seen"]');
 await page.keyboard.press('Escape');
 await sleep(300);
 const pk4 = await pkState();
 check('picker: Escape closes it and returns focus', !pk4.open && pk4.focus === 'seen', pk4);
 await clickIn('[data-a="seen"]');
-await clickIn('.pk li:first-child input');
+await clickIn('[data-a="pk-more"]');
+const pkMore = await pkState();
+await clickIn('.pk .first li:first-child input');
+await clickIn('[data-a="pk-all2"]');
 await clickIn('[data-a="pk-ok"]');
 await sleep(1500);
 const w2 = await worksNow(), pk5 = await pkState(), duneIds = Object.keys(worksOf('Dune', {}));
-check('picker: only the ticked work is written, the cover stays (focus kept)', Object.keys(w2).length === 1 && duneIds.includes(Object.keys(w2)[0]) &&
-  Object.values(w2)[0].state === 'seen' && pk5.label === 'Mentions Dune' && !pk5.open && pk5.focus === 'seen', { w2, pk5 });
+const written = Object.keys(w2), writtenDune = written.filter((id) => duneIds.includes(id));
+check('picker: "Show 2 more" shows the rest; only the ticked works are written (one of the post\'s, the eight of the series); the cover stays',
+  pkMore.more?.visible === 8 && pkMore.more.showMore === null && written.length === 9 && writtenDune.length === 1 &&
+  Object.values(w2).every((x) => x.state === 'seen') && pk5.label === 'Mentions Dune' && !pk5.open && pk5.focus === 'seen', { written: Object.values(w2).map((x) => x.title), pk5 });
 // a cover naming several groups (Breaking Bad: one work; Dune: two): every unseen work of all of them, and the other note
 await setConfig({});
 await addPost('x-multi', 'Paul Atreides and Walter White both end badly.');
@@ -603,10 +628,11 @@ if (want('feed')) {
 // F) virtualised, recycled, height-measured feed with late images (scan images on, unknown images on)
 await setConfig({}, { unknownImages: true });
 await open('/feed');
-const problems = new Set();
+const problems = new Set(), shownItems = new Set();
 const inspect = async (final) => {
   const rows = await page.evaluate(() => window.feedState());
   for (const r of rows) {
+    if (shownItems.has(r.i)) { if (r.covered) problems.add(`item ${r.i}: covered again after "Show once" ("${r.label}")`); r.expect = null; r.covered = false; }
     if (Math.abs(r.height - r.measured) > 0.5) problems.add(`item ${r.i}: height changed after the feed measured it (${r.measured} -> ${r.height})`);
     if (r.pendingVisible) problems.add(`item ${r.i}: photo visible before its verdict`);
     if (r.covered && !r.expect) problems.add(`item ${r.i}: clean post covered ("${r.label}")`);
@@ -617,6 +643,26 @@ const inspect = async (final) => {
     if (b.i === a.i + 1 && a.bottom > b.top + 0.5) problems.add(`items ${a.i} and ${b.i} overlap by ${Math.round(a.bottom - b.top)} px`);
   }
 };
+// "Show once" is per post: on item 3 (text) and on item 8 (text, picture still being judged); the feed recycles both
+// cells while scrolling and draws the posts again on other nodes at the end
+const showOnceIn = async (i) => {
+  for (let y = 0; y < 3000; y += 150) {
+    await page.evaluate((y) => scrollTo(0, y), y);
+    await sleep(150);
+    if (await page.evaluate((i) => !!document.querySelector(`.cell[data-item="${i}"] article[data-sb-blocked] > sb-overlay`), i)) break;
+  }
+  const pending = await page.evaluate((i) => !document.querySelector(`.cell[data-item="${i}"] .media`).hidden &&
+    !document.querySelector(`.cell[data-item="${i}"] img`).hasAttribute('data-sb-ok'), i);
+  await page.evaluate((i) => document.querySelector(`.cell[data-item="${i}"] article > sb-overlay`).shadowRoot.querySelector('[data-a="once"]').click(), i);
+  shownItems.add(i);
+  return pending;
+};
+await showOnceIn(3);
+const pending8 = await showOnceIn(8);
+await page.waitForFunction(() => document.querySelector('.cell[data-item="8"] img')?.hasAttribute('data-sb-ok') &&
+  document.documentElement.getAttribute('data-sb-busy') === '0', { timeout: 180000 });
+const after8 = await page.evaluate(() => document.querySelector('.cell[data-item="8"] article').hasAttribute('data-sb-blocked'));
+check('Show once: a picture verdict arriving afterwards does not cover the post again', pending8 && !after8, { pendingAtShowOnce: pending8, coveredAfter: after8 });
 const feedEnd = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
 for (let y = 0; y <= feedEnd + 300; y += 350) { await page.evaluate((y) => scrollTo(0, y), y); await sleep(120); await inspect(false); }
 for (let y = feedEnd; y >= 0; y -= 500) { await page.evaluate((y) => scrollTo(0, y), y); await sleep(300); await inspect(false); }
@@ -632,7 +678,7 @@ for (const y of [0, Math.round(feedEnd / 2), feedEnd]) {
 await page.screenshot({ path: path.join(OUT, `${target}-feed.png`) });
 const kinds = {};
 for (const p of problems) (kinds[['overlap', 'height changed', 'before its verdict', 'clean post covered', 'label'].find((k) => p.includes(k))] ??= []).push(p);
-check('recycled feed: no overlap, no height change, covers belong to their post, labels right', !problems.size,
+check('recycled feed: no overlap, no height change, covers belong to their post, labels right; "Show once" posts stay shown', !problems.size,
   Object.values(kinds).map((ps) => `${ps.length}x, e.g. ${ps.slice(0, 3).join(' | ')}`).join('; ') +
   ` (stats ${await page.evaluate(() => document.documentElement.getAttribute('data-sb-stats'))})`);
 }

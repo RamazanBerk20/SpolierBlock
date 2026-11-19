@@ -130,7 +130,14 @@
   const scanned = new WeakMap(); // block -> { dom, text, key, hits, groups }
   const verdict = new WeakMap(); // media element -> { src, hits: raw groups, ocr } for the picture it showed when judged
   let haveVerdicts = false;
-  const shown = new WeakMap(); // block -> its text when "Show once" was pressed (a recycled node shows other text)
+  // "Show once" is remembered for the post, not the element drawing it (sites recycle and replace nodes): keyed by the
+  // post's own text (no OCR text), or its pictures when it has none, for the page's lifetime, the oldest dropped first
+  const shown = new Set();
+  const SHOWN_MAX = 500;
+  function showKey(block, dom) {
+    const t = dom.replace(/\s+/g, ' ').trim();
+    return t || 'media:' + [...block.querySelectorAll('img, video, [data-sb-bg]')].map(mediaSrc).join(' ');
+  }
   const blocked = new Map(); // block -> overlay host
   const verdicts = new Map(); // text -> true (spoiler) | false, classifier cache
   const waiting = new Map(); // text -> callbacks for a classification in flight
@@ -211,13 +218,13 @@
       // own-text groups before OCR-only ones, keeping the matcher's order (a no-op once the matcher orders them so)
       groups = [...groups.filter((g) => own.includes(g)), ...groups.filter((g) => !own.includes(g))];
     }
-    scanned.set(block, { dom, text, key, hits: mi.hits, groups, own });
+    scanned.set(block, { dom, text, key, hits: mi.hits, groups, own, show: showKey(block, dom) });
     apply(block);
   }
 
   function apply(block) {
     const st = scanned.get(block);
-    if (!active || !st || shown.get(block) === st.dom) return unblock(block);
+    if (!active || !st || shown.has(st.show)) return unblock(block);
     const d = decide(st, () => { if (block.isConnected && scanned.get(block)?.text === st.text) apply(block); });
     if (d) showOverlay(block, d); else unblock(block);
   }
@@ -260,7 +267,12 @@
     .pk[open]{display:flex;flex-direction:column;gap:10px}
     .pk::backdrop{background:rgba(0,0,0,.35)}
     .pk .h{margin:0;font-weight:600;font-size:15px}
-    .pk ul{list-style:none;margin:0;padding:0;overflow:auto;min-height:0}
+    .pk [hidden]{display:none!important}
+    .pk .sc{overflow:auto;min-height:0;display:flex;flex-direction:column;gap:10px}
+    .pk ul{list-style:none;margin:0;padding:0}
+    .pk .mh{display:flex;align-items:center;justify-content:space-between;gap:8px}
+    .pk .h2{margin:0;font-weight:600;font-size:13px}
+    .pk [data-a=pk-more]{align-self:flex-start}
     .pk label{display:flex;gap:10px;align-items:flex-start;padding:6px 2px;cursor:pointer}
     .pk input{margin:2px 0 0;width:18px;height:18px;flex:none}
     .pk small{display:block;opacity:.75;font-size:12px}
@@ -290,7 +302,9 @@
       sr.innerHTML = `<style>${OVERLAY_CSS}</style><div class="b" role="group" aria-labelledby="l"><p id="l"></p>` +
         `<button type="button" data-a="once">Show once</button><button type="button" data-a="seen">I've seen it</button>` +
         `<button type="button" data-a="menu" aria-label="SpolierBlock settings" title="SpolierBlock settings">⋮</button></div>` +
-        `<dialog class="pk" aria-labelledby="pt"><p id="pt" class="h">Which have you seen?</p><ul></ul><p class="note"></p>` +
+        `<dialog class="pk" aria-labelledby="pt"><p id="pt" class="h">Which have you seen?</p><div class="sc"><ul class="first"></ul>` +
+        `<p class="note"></p><section class="more" aria-labelledby="mt" hidden><div class="mh"><p id="mt" class="h2">More from this series</p>` +
+        `<button type="button" data-a="pk-all2"></button></div><ul class="second"></ul><button type="button" data-a="pk-more"></button></section></div>` +
         `<div class="row"><button type="button" data-a="pk-all">All</button><button type="button" data-a="pk-cancel">Cancel</button>` +
         `<button type="button" data-a="pk-ok" class="pri">Mark seen</button></div></dialog>`;
       sr.querySelector('dialog').addEventListener('close', () => sr.querySelector('[data-a="seen"]')?.focus()); // Escape too
@@ -303,9 +317,20 @@
       }
       sr.addEventListener('click', (e) => {
         const a = e.target.closest?.('button')?.dataset.a;
-        if (a === 'once') { const st = scanned.get(block); if (st) shown.set(block, st.dom); unblock(block); }
+        if (a === 'once') {
+          const st = scanned.get(block);
+          if (st) { shown.delete(st.show); shown.add(st.show); if (shown.size > SHOWN_MAX) shown.delete(shown.values().next().value); }
+          unblock(block);
+        }
         if (a === 'seen') seenClicked(ov);
-        if (a === 'pk-all') sr.querySelectorAll('.pk input').forEach((c) => { c.checked = true; });
+        if (a === 'pk-all') sr.querySelectorAll('.pk .first input').forEach((c) => { c.checked = true; });
+        if (a === 'pk-all2') sr.querySelectorAll('.pk .second input').forEach((c) => { c.checked = true; });
+        if (a === 'pk-more') {
+          const rest = sr.querySelectorAll('.pk .second li[hidden]');
+          rest.forEach((li) => { li.hidden = false; });
+          e.target.closest('button').hidden = true;
+          rest[0]?.querySelector('input').focus();
+        }
         if (a === 'pk-ok') markWorks([...sr.querySelectorAll('.pk input:checked')].map((c) => +c.value));
         if (a === 'pk-cancel' || a === 'pk-ok') { sr.querySelector('dialog').close(); sr.querySelector('[data-a="seen"]').focus(); }
         if (a === 'menu') send({ type: 'ui.openSettings' }).catch(() => {});
@@ -406,14 +431,35 @@
   // "I've seen it": one work is marked at once; several (a franchise name, an original and its remake) open the picker,
   // a modal dialog in the cover's shadow root (top layer: it may be larger than the post and changes no layout).
   const TYPE_NAMES = { movie: 'Film', tv: 'Series', game: 'Game', book: 'Book', anime: 'Anime', manga: 'Manga', comic: 'Comic' };
+  // The other not-yet-seen works of the same series as the groups' works, oldest first (picker's second section).
+  // shortcut: reads a per-work `series` column of the index meta, which the catalog does not carry yet; until it does
+  // (or if its API differs) this returns nothing and the section stays hidden.
+  function moreFromSeries(groups) {
+    const ser = meta.series;
+    if (!Array.isArray(ser)) return [];
+    const own = new Set(groups.flatMap((g) => meta.groups[g].slice(1)));
+    const names = new Set([...own].map((w) => ser[w]).filter((x) => x != null));
+    const out = [];
+    for (let w = 0; w < ser.length; w++) if (names.has(ser[w]) && !own.has(w) && workState.get(w)?.state !== 'seen') out.push(w);
+    return out.sort((a, b) => (meta.years[a] || 1e4) - (meta.years[b] || 1e4) || a - b);
+  }
+  const MORE_SHOWN = 6;
   function seenClicked(ov) {
     const all = [...new Set(ov.marks.flatMap((g) => meta.groups[g].slice(1)))];
     const xs = all.filter((x) => workState.get(x)?.state !== 'seen');
     if (all.length <= 1) return markWorks(all);
     const dlg = ov.shadowRoot.querySelector('dialog');
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
-    dlg.querySelector('ul').innerHTML = xs.map((x) => `<li><label><input type="checkbox" value="${x}"><span>${esc(meta.titles[x])}` +
-      `<small>${esc([TYPE_NAMES[meta.types[x]] ?? meta.types[x], meta.years[x]].filter(Boolean).join(' · '))}</small></span></label></li>`).join('');
+    const row = (x, i) => `<li${i >= MORE_SHOWN ? ' hidden' : ''}><label><input type="checkbox" value="${x}"><span>${esc(meta.titles[x])}` +
+      `<small>${esc([TYPE_NAMES[meta.types[x]] ?? meta.types[x], meta.years[x]].filter(Boolean).join(' · '))}</small></span></label></li>`;
+    dlg.querySelector('.first').innerHTML = xs.map((x) => row(x, 0)).join('');
+    const more = moreFromSeries(ov.marks);
+    dlg.querySelector('.more').hidden = !more.length;
+    dlg.querySelector('.second').innerHTML = more.map(row).join('');
+    dlg.querySelector('[data-a="pk-all2"]').textContent = `All ${more.length}`;
+    const moreBtn = dlg.querySelector('[data-a="pk-more"]');
+    moreBtn.hidden = more.length <= MORE_SHOWN;
+    moreBtn.textContent = `Show ${more.length - MORE_SHOWN} more`;
     dlg.querySelector('.note').textContent = ov.marks.length > 1 ? 'This post names several works. It stays covered until each one is marked.'
       : `Posts that only say "${meta.groups[ov.marks[0]][0]}" stay covered until every one is marked.`;
     dlg.showModal();
