@@ -50,6 +50,7 @@ final class Images {
         boolean done, failed;
         List<double[]> hits = new ArrayList<>();
         String ocr = "";
+        Matcher namesFor; boolean ocrNames; // main thread: whether ocr names any work (rule 7), for that index
         State(long key) { this.key = key; }
     }
 
@@ -154,6 +155,14 @@ final class Images {
         return st;
     }
 
+    private long firstVerdict; // main thread
+    private volatile long loadStart, loadEnd, cacheHits;
+
+    String coldStats(long start) {
+        return ", models loaded " + (loadStart == 0 ? "-" : (loadStart - start) + "-" + (loadEnd - start)) + " ms, first verdict " +
+            (firstVerdict == 0 ? "-" : String.valueOf(firstVerdict - start)) + " ms, " + cacheHits + " verdicts from the verdict cache";
+    }
+
     private void retry() { retryPosted = false; sb.invalidateAll(); } // a new frame: only items with pending images are judged again
 
     private void enqueue(Job j) { // any thread
@@ -163,16 +172,33 @@ final class Images {
                 Job old = jobs.removeLast();
                 sb.main.post(() -> { if (states.get(old.view) == old.state && !old.state.done) states.remove(old.view); });
             }
-            if (worker == null) {
-                worker = new Thread(this::work, "SpoilerBlock-images");
-                worker.start();
-            }
+            startWorker();
             jobs.notifyAll();
         }
     }
 
+    private void startWorker() { // under jobs
+        if (worker == null) {
+            worker = new Thread(this::work, "SpoilerBlock-images");
+            worker.start();
+        }
+    }
+
+    private volatile boolean warm;
+
+    /**
+     * Loads the models (and the saved verdicts) now, at the first activity, so that the first pictures do not wait for
+     * them: the load (1-2 s on a phone) overlaps the host's own start instead of following its first feed. Main thread.
+     */
+    void prewarm() {
+        if (warm) return;
+        warm = true;
+        synchronized (jobs) { startWorker(); jobs.notifyAll(); }
+    }
+
     /** Drops every model (switch turned off). */
     void release() {
+        warm = false;
         synchronized (jobs) { // null job: the worker closes the models (none loaded when it never ran)
             jobs.clear();
             if (worker != null) { jobs.add(new Job(null, null, null)); jobs.notifyAll(); }
@@ -282,6 +308,10 @@ final class Images {
         while (true) {
             List<Job> batch = new ArrayList<>();
             boolean drop = false;
+            if (warm && jobs.isEmpty()) { // first pictures not there yet: get ready for them
+                try { loadClip(); readSaved(); if (clip != null && !loadFailed && !sessionsLoaded()) load(); }
+                catch (Throwable t) { Log.w(TAG, "prewarm: " + t); }
+            }
             synchronized (jobs) {
                 while (jobs.isEmpty()) try { jobs.wait(); } catch (InterruptedException e) { return; }
                 while (!jobs.isEmpty() && batch.size() < BATCH && !drop) {
@@ -294,7 +324,10 @@ final class Images {
         }
     }
 
-    /** Title check (one vision run for the batch) and OCR of each new picture; results posted to the main thread. */
+    /**
+     * Title check (one vision run for the batch) and OCR of each new picture; each verdict is posted to the main thread
+     * as soon as it is known (a saved one before any model runs), so the first picture does not wait for the batch.
+     */
     private void judge(List<Job> batch) {
         List<Job> live = new ArrayList<>();
         for (Job j : batch) {
@@ -303,10 +336,9 @@ final class Images {
         }
         if (live.isEmpty()) return;
         Object[][] res = new Object[live.size()][]; // {hits, text}
-        boolean failed = false;
         try {
-            if (clip == null && !loadFailed) load();
-            if (clip == null) throw new IllegalStateException("image models unavailable");
+            loadClip();
+            readSaved();
             byte[][] rgb = new byte[live.size()][];
             long[] keys = new long[live.size()];
             List<byte[]> todo = new ArrayList<>();
@@ -315,10 +347,12 @@ final class Images {
                 rgb[i] = visionPixels(live.get(i).bmp, clip.size);
                 keys[i] = hash(rgb[i]);
                 Object[] c = byPixels.get(keys[i]);
-                if (c != null) res[i] = new Object[]{map((List<double[]>) c[0]), c[1]};
+                if (c != null) { res[i] = new Object[]{map((List<double[]>) c[0]), c[1]}; cacheHits++; post(live.get(i), res[i]); }
                 else { todo.add(rgb[i]); at.add(i); }
             }
-            if (!todo.isEmpty()) {
+            if (!todo.isEmpty()) { // the models are needed only for pictures not seen before
+                if (!sessionsLoaded() && !loadFailed) load();
+                if (!sessionsLoaded()) throw new IllegalStateException("image models unavailable");
                 long t0 = SystemClock.uptimeMillis();
                 float[][] e = embed(todo);
                 long t1 = SystemClock.uptimeMillis();
@@ -330,28 +364,36 @@ final class Images {
                     String text = ocr(live.get(i).bmp);
                     stOcr += SystemClock.uptimeMillis() - t2; stOcrN++;
                     byPixels.put(keys[i], new Object[]{raw, text});
+                    unsaved++;
                     res[i] = new Object[]{map(raw), text};
+                    post(live.get(i), res[i]);
                     if (Log.isLoggable(TAG, Log.DEBUG)) Log.d(TAG, "image " + live.get(i).bmp.getWidth() + "x" + live.get(i).bmp.getHeight() + ": title " +
                         (t1 - t0) / todo.size() + " ms " + describe(raw) + ", ocr " + (SystemClock.uptimeMillis() - t2) + " ms \"" + text.replace('\n', '|') + "\"");
                 }
             }
         } catch (Throwable t) { // fail closed: the item stays covered as far as unknown images are covered
-            failed = true;
             Log.w(TAG, "image check failed, item stays covered: " + t);
         }
-        for (int i = 0; i < live.size(); i++) {
-            Job j = live.get(i);
-            boolean f = failed || res[i] == null;
-            @SuppressWarnings("unchecked") List<double[]> h = f ? new ArrayList<>() : (List<double[]>) res[i][0];
-            String tx = f ? "" : (String) res[i][1];
-            sb.main.post(() -> {
-                j.state.done = true;
-                j.state.failed = f;
-                j.state.hits = h;
-                j.state.ocr = tx;
-                sb.verdictsChanged();
-            });
-        }
+        for (int i = 0; i < live.size(); i++) if (res[i] == null) post(live.get(i), null); // fail closed
+        // saved when the queue runs dry (a process may be killed any time after), at most every few seconds while busy
+        boolean idle;
+        synchronized (jobs) { idle = jobs.isEmpty(); }
+        if (unsaved > 0 && (idle || SystemClock.uptimeMillis() - savedAt > SAVE_MS)) save();
+    }
+
+    /** A verdict {hits, ocr text} to the main thread; null: the check failed. */
+    private void post(Job j, Object[] res) {
+        boolean f = res == null;
+        @SuppressWarnings("unchecked") List<double[]> h = f ? new ArrayList<>() : (List<double[]>) res[0];
+        String tx = f ? "" : (String) res[1];
+        sb.main.post(() -> {
+            if (firstVerdict == 0) firstVerdict = SystemClock.uptimeMillis();
+            j.state.done = true;
+            j.state.failed = f;
+            j.state.hits = h;
+            j.state.ocr = tx;
+            sb.verdictsChanged();
+        });
     }
 
     // ---------- models (worker thread) ----------
@@ -373,10 +415,82 @@ final class Images {
         }
     }
 
+    /** The title rows and the input size (1.5 MB, no model): enough to answer pictures from the saved verdicts. */
+    private void loadClip() throws Exception {
+        if (clip == null) clip = new Clip(sb.asset("spoilerblock/vision/clip-text.bin"), new String(sb.asset("spoilerblock/vision/clip-meta.json"), StandardCharsets.UTF_8));
+    }
+
+    private boolean sessionsLoaded() { return (visionCpu != null || visionAccel != null) && ocr != null; }
+
+    // ---------- verdicts saved across restarts (worker thread) ----------
+    // A cold start shows the same pictures again (a feed's top, a channel, a search): their verdicts are kept in the
+    // app's cache directory, keyed by the hash of the model's input pixels, for the same build of the app (and so of the
+    // models and the index the verdicts name). Nothing leaves the device.
+
+    private static final long SAVE_MS = 5000;
+    private static final int SAVED_VERSION = 1;
+    private boolean savedRead;
+    private int unsaved;
+    private long savedAt;
+
+    private File savedFile() { return new File(sb.app.getCacheDir(), "spoilerblock-images.bin"); }
+
+    private long build() throws Exception {
+        android.content.pm.PackageInfo pi = sb.app.getPackageManager().getPackageInfo(sb.app.getPackageName(), 0);
+        return pi.lastUpdateTime;
+    }
+
+    private void readSaved() {
+        if (savedRead) return;
+        savedRead = true;
+        File f = savedFile();
+        if (!f.exists()) return;
+        long t0 = SystemClock.uptimeMillis();
+        int n = 0;
+        try (java.io.DataInputStream in = new java.io.DataInputStream(new java.io.BufferedInputStream(new java.io.FileInputStream(f)))) {
+            if (in.readInt() != SAVED_VERSION || in.readLong() != build()) return;
+            n = in.readInt();
+            for (int i = 0; i < n; i++) {
+                long key = in.readLong();
+                int h = in.readInt();
+                List<double[]> hits = new ArrayList<>();
+                for (int k = 0; k < h; k++) hits.add(new double[]{in.readInt(), in.readDouble()});
+                byPixels.put(key, new Object[]{hits, in.readUTF()});
+            }
+            Log.i(TAG, "saved image verdicts: " + n + " read in " + (SystemClock.uptimeMillis() - t0) + " ms");
+        } catch (Throwable t) {
+            Log.w(TAG, "saved image verdicts unreadable, starting afresh: " + t);
+            byPixels.clear();
+        }
+    }
+
+    private void save() {
+        unsaved = 0;
+        savedAt = SystemClock.uptimeMillis();
+        File f = savedFile(), tmp = new File(f.getPath() + ".tmp");
+        try (java.io.DataOutputStream out = new java.io.DataOutputStream(new java.io.BufferedOutputStream(new java.io.FileOutputStream(tmp)))) {
+            out.writeInt(SAVED_VERSION);
+            out.writeLong(build());
+            out.writeInt(byPixels.size());
+            for (Map.Entry<Long, Object[]> e : byPixels.entrySet()) { // least recently used first: read back in the same order
+                out.writeLong(e.getKey());
+                @SuppressWarnings("unchecked") List<double[]> hits = (List<double[]>) e.getValue()[0];
+                out.writeInt(hits.size());
+                for (double[] h : hits) { out.writeInt((int) h[0]); out.writeDouble(h[1]); }
+                String t = (String) e.getValue()[1];
+                out.writeUTF(t.length() > 8000 ? t.substring(0, 8000) : t); // writeUTF holds 64 KB
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "image verdicts not saved: " + t);
+            tmp.delete();
+            return;
+        }
+        if (!tmp.renameTo(f)) tmp.delete();
+    }
+
     private void load() {
-        long t0 = SystemClock.uptimeMillis(), native0 = android.os.Debug.getNativeHeapAllocatedSize();
+        long t0 = loadStart = SystemClock.uptimeMillis(), native0 = android.os.Debug.getNativeHeapAllocatedSize();
         try {
-            clip = new Clip(sb.asset("spoilerblock/vision/clip-text.bin"), new String(sb.asset("spoilerblock/vision/clip-meta.json"), StandardCharsets.UTF_8));
             OrtEnvironment env = OrtEnvironment.getEnvironment();
             ByteBuffer model = sb.directAsset("spoilerblock/vision/model.onnx");
             try (OrtSession.SessionOptions o = cpuOptions()) { visionCpu = env.createSession(model, o); }
@@ -390,6 +504,7 @@ final class Images {
                 " threads, native heap +" + (android.os.Debug.getNativeHeapAllocatedSize() - native0) / (1 << 20) + " MB");
             visionAccel = accel.start(model, visionCpu, clip);
             if (visionAccel != null) { visionCpu.close(); visionCpu = null; } // one copy of the weights in memory
+            loadEnd = SystemClock.uptimeMillis();
         } catch (Throwable t) {
             loadFailed = true;
             closeModels();
@@ -442,6 +557,7 @@ final class Images {
         clip = null; ocr = null; watchdog = null; visionCpu = null; visionAccel = null;
         loadFailed = false;
         byPixels.clear();
+        savedRead = false; // switched on again: read back from the file
     }
 
     final Accel accel;

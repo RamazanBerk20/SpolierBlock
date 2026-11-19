@@ -48,7 +48,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     private long statFrames, statNs, statMaxNs, statReads, statReadNs, statEvals, statEvalNs, statLast = SystemClock.uptimeMillis();
 
     private static final class Item implements View.OnAttachStateChangeListener {
-        long fp; int gen = -1; long at; String text; int[] groups; boolean stale, pending, ownSeenOnly; String own; int ownGen = -1;
+        long fp; int gen = -1; long at; String text; int[] groups; boolean stale, pending, ownSeenOnly, ownNames; String own; int ownGen = -1;
         // A recycled view is removed and re-added (RecyclerView pool): treat it as unknown, whatever its fingerprint.
         @Override public void onViewAttachedToWindow(View v) { stale = true; }
         @Override public void onViewDetachedFromWindow(View v) { stale = true; }
@@ -173,6 +173,23 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         }
         shadeFloaters();
         sb.silence(this, hidesSound());
+        if (activityWindow && coldLog) coldStart(now);
+    }
+
+    // ---------- cold start timings, once per process (logcat) ----------
+
+    private static boolean coldLog = true;
+    private long firstFrame, firstShade, firstJudged;
+
+    private void coldStart(long now) {
+        long start = android.os.Process.getStartUptimeMillis();
+        if (firstFrame == 0) firstFrame = now;
+        if (!pictureShades.isEmpty()) { if (firstShade == 0) firstShade = now; }
+        else if (firstShade > 0) {
+            coldLog = false;
+            Log.i(SpoilerBlock.TAG, "cold start: first frame " + (firstFrame - start) + " ms after process start, first picture shaded " +
+                (firstShade - start) + " ms, every picture on screen judged " + (now - start) + " ms" + sb.images.coldStats(start));
+        }
     }
 
     /**
@@ -300,6 +317,9 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         media.clear();
         if (sb.imagesMatter()) sb.images.candidates(it, this, media, true);
         Config.Works v = sb.worksFor(m);
+        // rule 7: what the post's own text names decides how much its pictures may say
+        if (media.isEmpty()) st.ownSeenOnly = st.ownNames = false;
+        else if (st.ownGen != sb.generation || !text.equals(st.own)) { ownNames(m, text, v, st); st.own = text; st.ownGen = sb.generation; }
         boolean pending = false, unknown = false;
         List<Integer> imgGroups = new ArrayList<>();
         StringBuilder ocr = new StringBuilder(), key = new StringBuilder(text);
@@ -309,7 +329,8 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             key.append('\u0000').append(s.key);
             if (!s.done) { pending = true; toShade.add(mv); continue; }
             if (s.failed) { toShade.add(mv); continue; } // fail closed: the picture stays shaded
-            for (double[] h : s.hits) { // the first hit not seen, as the extension takes it
+            // rule 7: the image model speaks only for a picture no text identifies
+            if (!st.ownNames && !ocrNames(m, s)) for (double[] h : s.hits) { // the first hit not seen, as the extension takes it
                 int g = (int) h[0];
                 if (g == Clip.UNKNOWN) { unknown = true; break; }
                 if (!m.groupSeen(g, v.seen)) {
@@ -329,21 +350,21 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             statEvals++; statEvalNs += System.nanoTime() - e0;
         }
         // rule 7: own text naming a seen work and no covered one outranks the pictures (their titles and their OCR names)
-        if (media.isEmpty()) st.ownSeenOnly = false;
-        else if (st.ownGen != sb.generation || !text.equals(st.own)) { st.ownSeenOnly = ownSeenOnly(m, text, v); st.own = text; st.ownGen = sb.generation; }
         int[] groups = st.ownSeenOnly ? new int[0] : st.groups;
         st.fp = fp; st.gen = sb.generation; st.at = now; st.text = full; st.stale = false; st.pending = pending; // a pending image is asked again next frame
 
         // the contract's decision rule: which groups cover, and why (its cover wording)
-        List<Integer> all = new ArrayList<>(), spoilers = new ArrayList<>();
+        // rule 7's label order: text groups as the matcher returns them (own text before OCR, longer names first), then image titles
+        List<Integer> all = new ArrayList<>(), spoilers = new ArrayList<>(), textGroups = new ArrayList<>();
         for (int g : groups) {
             int k = Config.group(m.groupWorks(g), v, sb.blockUnlisted);
             if (k == Config.STYLE_ALL) all.add(g); else if (k == Config.STYLE_SPOILERS) spoilers.add(g);
+            if (k != Config.NOT_COVERED) textGroups.add(g);
         }
         if (st.ownSeenOnly) imgGroups.clear();
         String msg = null;
         List<Integer> named = new ArrayList<>();
-        if (!all.isEmpty()) { msg = "Mentions "; named.addAll(all); named.addAll(spoilers); }
+        if (!all.isEmpty()) { msg = "Mentions "; named.addAll(textGroups); }
         else if (!imgGroups.isEmpty()) { msg = "Image from "; named.addAll(imgGroups); named.addAll(spoilers); }
         else if (!spoilers.isEmpty()) {
             Boolean spoiler = sb.spoilerVerdict(full.replace('\u0001', '\n'));
@@ -378,20 +399,33 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         }
     }
 
-    private boolean[] noneSeen; // for rules 6 and 7's "names a seen work"
+    private boolean[] noneSeen; // for rules 6 and 7's "names a work", seen or not
+
+    private boolean[] noneSeen(Matcher m) {
+        if (noneSeen == null || noneSeen.length != m.ids.length) noneSeen = new boolean[m.ids.length];
+        return noneSeen;
+    }
 
     /**
-     * Rules 6 and 7: whether the post's own text names a work the user has seen and no covered one (the matcher drops
-     * seen groups, so it is asked without them).
+     * Rules 6 and 7 on the post's own text: whether it names any work, and whether it names a work the user has seen and
+     * no covered one (the matcher drops seen groups, so it is asked without them).
      */
-    private boolean ownSeenOnly(Matcher m, String text, Config.Works v) {
-        if (noneSeen == null || noneSeen.length != m.ids.length) noneSeen = new boolean[m.ids.length];
-        boolean seen = false;
-        for (int g : m.evaluate(text, noneSeen)) {
+    private void ownNames(Matcher m, String text, Config.Works v, Item st) {
+        boolean seen = false, covered = false;
+        int[] gs = m.evaluate(text, noneSeen(m));
+        for (int g : gs) {
             if (m.groupSeen(g, v.seen)) seen = true;
-            else if (Config.group(m.groupWorks(g), v, sb.blockUnlisted) != Config.NOT_COVERED) return false;
+            else if (Config.group(m.groupWorks(g), v, sb.blockUnlisted) != Config.NOT_COVERED) covered = true;
         }
-        return seen;
+        st.ownNames = gs.length > 0;
+        st.ownSeenOnly = seen && !covered;
+    }
+
+    /** Rule 7: whether a picture's own text (OCR, read as text after the U+0001 marker) names any work. */
+    private boolean ocrNames(Matcher m, Images.State s) {
+        if (s.ocr.isEmpty()) return false;
+        if (s.namesFor != m) { s.ocrNames = m.evaluate('\u0001' + s.ocr, noneSeen(m)).length > 0; s.namesFor = m; }
+        return s.ocrNames;
     }
 
     private Catcher catcher;

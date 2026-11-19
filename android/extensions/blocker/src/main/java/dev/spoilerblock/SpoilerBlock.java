@@ -636,6 +636,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
             if (s == null) {
                 scanners.put(decor, s = new Scanner(this, decor, true));
                 addShortcutOnce();
+                if (imagesMatter() || (scanImages && works == null)) images.prewarm(); // the models load while the app starts
             }
             if (!(w.getCallback() instanceof TouchGate)) w.setCallback(new TouchGate(w.getCallback(), s));
             maybeUpdateCatalog(false); // interval elapsed? runs on a background thread, never before or during the first frame's work

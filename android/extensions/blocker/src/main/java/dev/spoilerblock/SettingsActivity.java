@@ -68,6 +68,12 @@ public final class SettingsActivity extends Activity {
     private TextView notice;
     private final Runnable hideNotice = () -> notice.setVisibility(View.GONE);
 
+    @SuppressWarnings("deprecation")
+    @Override public void onBackPressed() {
+        if (library != null && library.back()) return; // leave the library's selection first
+        super.onBackPressed();
+    }
+
     @Override protected void onCreate(Bundle b) {
         p = Ui.palette(this);
         setTheme(p.dark ? android.R.style.Theme_Material_NoActionBar : android.R.style.Theme_Material_Light_NoActionBar);
@@ -330,12 +336,16 @@ public final class SettingsActivity extends Activity {
         fl.topMargin = dp(12);
         top.addView(filter, fl);
         l.addView(top);
+        LinearLayout bulk = new LinearLayout(this);
+        bulk.setOrientation(LinearLayout.VERTICAL);
+        bulk.setPadding(dp(16), 0, dp(16), 0);
+        l.addView(bulk, Ui.matchWidth());
         ListView list = new ListView(this);
         list.setDivider(null);
         list.setSelector(new ColorDrawable(0));
         list.setClipToPadding(false);
         list.setPadding(0, 0, 0, dp(24));
-        library = new Library(search, filter);
+        library = new Library(search, filter, bulk);
         list.setAdapter(library);
         l.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         filter.select("all");
@@ -357,11 +367,134 @@ public final class SettingsActivity extends Activity {
         private Map<String, Integer> index; // work id -> matcher index
         private Matcher indexed;
         private String[] lower;
+        // multi-select (as the extension's library): long-press a work or tap Select, then act on every ticked one
+        private final LinearLayout bulk;
+        private boolean selecting;
+        private final java.util.Set<String> selected = new java.util.HashSet<>();
+        private final List<String> shown = new ArrayList<>();
 
-        Library(EditText search, Ui.Segmented filter) {
+        Library(EditText search, Ui.Segmented filter, LinearLayout bulk) {
             this.search = search;
             this.filter = filter;
+            this.bulk = bulk;
             filter.onPick(v -> { filterValue = v; refresh(); });
+        }
+
+        /** Back leaves selection first. */
+        boolean back() {
+            if (!selecting) return false;
+            select(false);
+            return true;
+        }
+
+        private void select(boolean on) {
+            selecting = on;
+            selected.clear();
+            expanded = null;
+            refresh();
+        }
+
+        private void renderBulk() {
+            bulk.removeAllViews();
+            if (shown.isEmpty()) { if (selecting) selecting = false; return; }
+            LinearLayout head = new LinearLayout(SettingsActivity.this);
+            head.setGravity(Gravity.CENTER_VERTICAL);
+            if (!selecting) {
+                head.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+                TextView sel = Ui.button(SettingsActivity.this, p, "Select", Ui.TEXT);
+                sel.setContentDescription("Select works");
+                sel.setOnClickListener(v -> select(true));
+                head.addView(sel, Ui.wrap());
+                bulk.addView(head, Ui.matchWidth());
+                return;
+            }
+            int n = 0;
+            for (String id : shown) if (selected.contains(id)) n++;
+            CheckBox all = new CheckBox(SettingsActivity.this);
+            all.setText(n > 0 ? n + " selected" : "Select all " + shown.size() + " shown");
+            all.setTextColor(p.text);
+            all.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, Ui.BODY_LARGE);
+            all.setButtonTintList(android.content.res.ColorStateList.valueOf(p.accent));
+            all.setMinHeight(dp(48));
+            all.setChecked(n == shown.size());
+            all.setOnCheckedChangeListener((v, on) -> {
+                if (on) selected.addAll(shown); else selected.removeAll(shown);
+                refresh();
+            });
+            head.addView(all, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            TextView done = Ui.button(SettingsActivity.this, p, "Done", Ui.TEXT);
+            done.setContentDescription("Leave selection");
+            done.setOnClickListener(v -> select(false));
+            head.addView(done, Ui.wrap());
+            bulk.addView(head, Ui.matchWidth());
+            if (n == 0) return;
+            LinearLayout acts = new LinearLayout(SettingsActivity.this);
+            acts.setPadding(0, dp(4), 0, dp(8));
+            String[][] a = {{"seen", "Seen", "Mark the selected works seen"}, {"blocked", "Blocked", "Mark the selected works blocked"},
+                {"style", "Style", "What to cover for the selected works"}, {"remove", "Remove", "Remove the selected works"}};
+            for (int i = 0; i < a.length; i++) {
+                String act = a[i][0];
+                TextView b = Ui.button(SettingsActivity.this, p, a[i][1], act.equals("seen") ? Ui.TONAL : act.equals("remove") ? Ui.DANGER : Ui.OUTLINED);
+                b.setPadding(dp(4), 0, dp(4), 0);
+                b.setMinWidth(0);
+                b.setMaxLines(1);
+                b.setContentDescription(a[i][2]);
+                b.setOnClickListener(v -> bulkAction(act, v));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+                if (i > 0) lp.leftMargin = dp(8);
+                acts.addView(b, lp);
+            }
+            bulk.addView(acts, Ui.matchWidth());
+        }
+
+        private void bulkAction(String act, View anchor) {
+            List<String> ids = new ArrayList<>();
+            for (String id : shown) if (selected.contains(id)) ids.add(id);
+            if (ids.isEmpty()) return;
+            if (act.equals("style")) {
+                android.widget.PopupMenu menu = new android.widget.PopupMenu(SettingsActivity.this, anchor);
+                String[][] o = {{"default", "Default"}, {Config.ALL, "Everything"}, {Config.SPOILERS, "Spoilers only"}};
+                for (int i = 0; i < o.length; i++) menu.getMenu().add(0, i, i, o[i][1]);
+                menu.setOnMenuItemClickListener(item -> {
+                    String v = o[item.getItemId()][0];
+                    writeAll(ids, "style", v.equals("default") ? JSONObject.NULL : v, "What to cover changed for " + works(ids.size()));
+                    return true;
+                });
+                menu.show();
+                return;
+            }
+            if (act.equals("remove")) {
+                Config c = store.get();
+                JSONArray keep = new JSONArray();
+                boolean customGone = false;
+                for (int i = 0; i < c.custom.length(); i++) {
+                    if (ids.contains(c.custom.optJSONObject(i).optString("id"))) customGone = true; else keep.put(c.custom.optJSONObject(i));
+                }
+                try {
+                    JSONObject w = new JSONObject();
+                    for (String id : ids) w.put(id, JSONObject.NULL);
+                    JSONObject patch = new JSONObject().put("works", w);
+                    if (customGone) patch.put("custom", keep);
+                    store.patch(patch);
+                } catch (org.json.JSONException e) { throw new IllegalStateException(e); }
+                selected.clear();
+                notice("Removed " + works(ids.size()));
+                return;
+            }
+            writeAll(ids, "state", act, (act.equals(Config.SEEN) ? "Marked as seen: " : "Blocked: ") + works(ids.size()));
+        }
+
+        private String works(int n) { return n == 1 ? "1 work" : n + " works"; }
+
+        /** One write for every selected work (one config change, as the extension's setWorks). */
+        private void writeAll(List<String> ids, String key, Object value, String message) {
+            try {
+                JSONObject w = new JSONObject();
+                for (String id : ids) w.put(id, withField(id, key, value));
+                store.patch(new JSONObject().put("works", w));
+            } catch (org.json.JSONException e) { throw new IllegalStateException(e); }
+            selected.clear();
+            notice(message);
         }
 
         void refresh() {
@@ -394,6 +527,10 @@ public final class SettingsActivity extends Activity {
             if (q.isEmpty()) rows.add(new Object[]{"section", "Your library · " + count + " (" + seen + " seen, " + blocked + " blocked)"});
             else if (!mine.isEmpty()) rows.add(new Object[]{"section", "In your library"});
             for (String id : mine) rows.add(new Object[]{"work", id});
+            shown.clear();
+            for (String id : mine) if (c.works.has(id) || id.startsWith("custom:")) shown.add(id);
+            selected.removeIf(id -> !c.works.has(id) && !id.startsWith("custom:")); // removed elsewhere
+            renderBulk();
             if (q.isEmpty() && mine.isEmpty()) rows.add(new Object[]{"empty", c.works.length() == 0
                 ? "Nothing here yet. Search above to add a work, or tap “I've seen it” on a cover."
                 : "No works with this state."});
@@ -469,11 +606,20 @@ public final class SettingsActivity extends Activity {
             LinearLayout row = new LinearLayout(SettingsActivity.this);
             row.setOrientation(LinearLayout.VERTICAL);
             row.setPadding(dp(16), dp(10), dp(16), dp(10));
-            boolean open = id.equals(expanded);
-            row.setBackground(Ui.ripple(p, open ? Ui.shape(p.surface, 0, 0, 0) : null));
+            boolean open = id.equals(expanded) && !selecting, picked = selecting && selected.contains(id);
+            row.setBackground(Ui.ripple(p, open || picked ? Ui.shape(picked ? p.accentContainer : p.surface, 0, 0, 0) : null));
             LinearLayout line = new LinearLayout(SettingsActivity.this);
             line.setGravity(Gravity.CENTER_VERTICAL);
             line.setMinimumHeight(dp(48));
+            if (selecting) {
+                CheckBox box = new CheckBox(SettingsActivity.this);
+                box.setChecked(picked);
+                box.setClickable(false);
+                box.setFocusable(false);
+                box.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO); // the row says it
+                box.setButtonTintList(android.content.res.ColorStateList.valueOf(p.accent));
+                line.addView(box, Ui.wrap());
+            }
             LinearLayout texts = new LinearLayout(SettingsActivity.this);
             texts.setOrientation(LinearLayout.VERTICAL);
             TextView t = Ui.text(SettingsActivity.this, Ui.BODY_LARGE, p.text, false);
@@ -492,8 +638,16 @@ public final class SettingsActivity extends Activity {
             badge.setBackground(Ui.shape(Config.BLOCKED.equals(state) ? p.accentContainer : 0, p.outline, Config.BLOCKED.equals(state) ? 0 : dp(1), dp(8)));
             line.addView(badge);
             row.addView(line);
-            row.setContentDescription(title(id) + ", " + badge.getText() + (meta.isEmpty() ? "" : ", " + meta) + (open ? ", expanded" : ", double-tap to change"));
-            row.setOnClickListener(v -> { expanded = open ? null : id; refresh(); });
+            row.setContentDescription(title(id) + ", " + badge.getText() + (meta.isEmpty() ? "" : ", " + meta) +
+                (selecting ? (picked ? ", selected" : ", not selected") : open ? ", expanded" : ", double-tap to change"));
+            if (selecting) row.setOnClickListener(v -> { if (!selected.remove(id)) selected.add(id); refresh(); });
+            else row.setOnClickListener(v -> { expanded = open ? null : id; refresh(); });
+            row.setOnLongClickListener(v -> {
+                if (!selecting) { selecting = true; selected.clear(); expanded = null; }
+                selected.add(id);
+                refresh();
+                return true;
+            });
             if (open) {
                 Ui.Segmented st = new Ui.Segmented(SettingsActivity.this, p, new String[]{"Seen", "Blocked"}, new String[]{Config.SEEN, Config.BLOCKED}, "State");
                 st.select(state == null ? "" : state);
