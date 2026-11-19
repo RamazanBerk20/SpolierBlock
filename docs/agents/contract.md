@@ -49,7 +49,17 @@ Unknown keys are ignored. A file with another `format` or a higher `version` is 
 
 ## Decision rule
 
-A text match names a group: every work that carries the matched name.
+A text match names a group: the works the matched name refers to. A bare name refers to the closest works only:
+
+- works whose title is exactly the name ("Half-Life" is the 1998 game; "Minecraft" is the game; "Assassin's Creed" is the
+  2007 game and the 2016 film);
+- if no title is exactly the name, works that list it as an alternative name;
+- if there are none of those either, the works of the series the name was derived from ("Resident Evil Revelations" has
+  no work titled "Revelations", so a derived series name falls back to its members).
+
+Sequels, spin-offs and adaptations that merely contain the name ("Half-Life: Alyx", "A Minecraft Movie", "Assassin's
+Creed Valhalla") are named only by their own titles and alternative names. A type word next to the name narrows the
+group to works of that type ("the Minecraft movie", "Assassin's Creed film").
 
 1. Group state: `seen` if every work is seen; `blocked` if any work is blocked; otherwise `unlisted`.
 2. `seen` never covers. `blocked` covers. `unlisted` covers only when `settings.blockUnlisted`.
@@ -93,7 +103,9 @@ Buttons: `Show once`, `I've seen it` (absent for the unidentified image) and a s
 `I've seen it` on a group with one work marks it seen at once. On a group with several works (a franchise name such as
 "Resident Evil", or an original and its remake) it opens a picker instead: title `Which have you seen?`, one row per work
 not yet seen (`{title}` and `{type} · {year}`) with a checkbox, nothing ticked, the buttons `All`, `Cancel` and `Mark seen`, and the
-note `Posts that only say "{t}" stay covered until every one is marked.` Only the ticked works are written.
+note `Posts that only say "{t}" stay covered until every one is marked.` When the cover names several groups, the picker
+lists the unseen works of all of them and the note is `This post names several works. It stays covered until each one is
+marked.` Only the ticked works are written.
 
 The cover and the pending-picture shade take their colours from the surface they sit on (the page or the host app's
 actual background), not from the system setting: dark on a dark surface, light on a light one, never a white flash on a
