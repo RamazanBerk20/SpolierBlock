@@ -1,6 +1,6 @@
 # UI rules
 
-For anyone changing what the user sees: the extension's settings page (`src/options/`), the popup (`src/popup/`), the in-page cover (`src/content/content.js` and `content.css`), and the Android screens (`SettingsActivity.java`, `Ui.java`, `Cover.java`). The values below were read from those files at version 0.2.2. If a file and this page disagree, the file is right; fix this page.
+For anyone changing what the user sees: the extension's settings page (`src/options/`), the popup (`src/popup/`), the in-page cover (`src/content/content.js` and `content.css`), and the Android screens (`SettingsActivity.java`, `Ui.java`, `Cover.java`). The values below were read from those files at version 0.2.3 (0.2.3 added the picker's second section, "More from this series", which was not re-measured against the styles listed here). If a file and this page disagree, the file is right; fix this page.
 
 ## The `design-taste-frontend` skill
 
@@ -68,7 +68,7 @@ Surfaces are told apart by tone steps, not by lines or shadows. The only shadow 
 Defined in the `OVERLAY_CSS` string in `content.js`. It lives in a shadow root, so page CSS cannot reach it.
 
 - 13 px on 1.35, the same system font stack.
-- The picker for "I've seen it" is a modal `<dialog class="pk">` in the cover's shadow root, using the same colour variables and 12 px radius.
+- The picker for "I've seen it" is a modal `<dialog class="pk">` in the cover's shadow root, using the same colour variables and 12 px radius. Since 0.2.3 it has a second section, "More from this series" (class `more`), with its own heading and "All N" button, six rows shown and a "Show N more" button; on Android the section is built in `SeenPicker.java` with the same palette (`p.accent` heading).
 - Light: background `#eef1f4`, text `#1f2328`, border `#b9c0c8`, focus ring `#0b57d0`. Dark (when the covered block is dark): `#22272e`, `#e6e8eb`, `#59616b`, `#8ab4f8`.
 - A flex row: the label on its own line, then the pill buttons (1 px border, 28 px minimum height, 12 px side padding, hover tint of the current colour). The ⋮ button has no border and a 16 px glyph.
 - Two compact layouts by container query: at 76 px of height or less everything sits on one row with the label truncated; at 34 px or less the buttons shrink to 22 px.

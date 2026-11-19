@@ -1,13 +1,13 @@
 # AGENTS.md
 
-Entry point for coding agents working on SpolierBlock 0.2.2. Humans: start with [README.md](README.md).
+Entry point for coding agents working on SpolierBlock 0.2.3. Humans: start with [README.md](README.md).
 
 ## The project in five lines
 
 - SpolierBlock covers spoilers about films, shows, games, books, manga, anime and comics. Everything runs on the device.
 - Browser extension (Manifest V3, Firefox-family and Chromium, one codebase): `src/`, `manifest.json`, `tools/build.mjs`.
 - Android: a Morphe patch bundle (`android/patches`, Java extension `android/extensions/blocker`) for YouTube, X and Instagram, plus a companion app (`android/companion`, package `dev.spoilerblock`) that owns the shared settings.
-- Text matching is a hash-index matcher over a Wikidata catalog (24,609 works); a fine-tuned MiniLM classifier tells spoilers from mentions; a SigLIP 2 model and PaddleOCR read images (the same models on Android).
+- Text matching is a hash-index matcher over a Wikidata catalog (24,609 works, each with its series for the picker); a fine-tuned MiniLM classifier tells spoilers from mentions; a SigLIP 2 model and PaddleOCR read images (the same models on Android).
 - JavaScript is the source of truth. The Java code is a port, held in parity by vector tests.
 
 ## Repo map
@@ -19,7 +19,7 @@ Entry point for coding agents working on SpolierBlock 0.2.2. Humans: start with 
 | `src/options/` | Settings page, `config.js` (pure config functions), `ui.js` helpers. `src/popup/` is the quick panel. |
 | `src/shared/` | Catalog rules and index builder, run by Node and by the extension. |
 | `data/catalog.json`, `models/` | The catalog; the spoiler classifier (`models/spoiler`) and the OCR character list. |
-| `tools/` | Build, catalog build, calibration, evaluation, training. `tools/catalog/` (including the common-word list `common-words.txt` and `words.mjs`, which builds it) and `tools/spoiler-train/` hold sub-tools. |
+| `tools/` | Build, catalog build, calibration, evaluation, training. `tools/catalog/` (including `series.mjs`, the series step of the catalog build, and the common-word list `common-words.txt` with `words.mjs`, which builds it) and `tools/spoiler-train/` hold sub-tools. |
 | `test/` | Unit tests (`*.test.js`), fixtures, the end-to-end runner `test/e2e/`. |
 | `android/` | `patches/` (Kotlin patch), `extensions/blocker/` (Java, tests), `companion/`, `demo/`, `tools/` (scripts, vector generators), `apply.sh`. |
 | `research/` | 0.1-era model research (`REPORT.md`, scripts). Mostly not in git. Not a source of truth. |
@@ -31,7 +31,7 @@ Hold the lock when two agents might be running. `H` = `flock ~/.cache/sb-heavy.l
 
 | Area | Command | Cost | Lock |
 |---|---|---|---|
-| Matcher, config, catalog update, OCR module | `npm test` | seconds | none |
+| Matcher, config, catalog update, OCR module, name groups, series, plain-sentence guard (`top-names.json`) | `npm test` | seconds | none |
 | Extension build | `npm run build` (first run downloads about 1 GB) | minutes | B |
 | Fixture build for e2e | `npm run build:fixture` (overwrites `dist/`) | minutes | B |
 | Content script, background, settings page | `npm run e2e -- firefox`, then `-- chrome` (needs the fixture build) | minutes, starts a browser | B |

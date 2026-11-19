@@ -58,7 +58,9 @@ A text match names a group: the works the matched name refers to. A bare name re
   no work titled "Revelations", so a derived series name falls back to its members).
 
 Sequels, spin-offs and adaptations that merely contain the name ("Half-Life: Alyx", "A Minecraft Movie", "Assassin's
-Creed Valhalla") are named only by their own titles and alternative names. A type word next to the name narrows the
+Creed Valhalla") are named only by their own titles and alternative names, with one exception: a franchise name also
+takes the works of its series when the closest works are themselves entries of that series, or when the series' best work
+is at least 1.5 times as popular as the closest one ("Halo", "Star Wars"). A type word next to the name narrows the
 group to works of that type ("the Minecraft movie", "Assassin's Creed film").
 
 1. Group state: `seen` if every work is seen; `blocked` if any work is blocked; otherwise `unlisted`.

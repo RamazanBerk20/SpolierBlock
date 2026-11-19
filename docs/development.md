@@ -1,6 +1,6 @@
 # Development
 
-Version 0.2.2. Run every command from the repository root unless stated.
+Version 0.2.3. Run every command from the repository root unless stated.
 
 ## Prerequisites
 
@@ -66,7 +66,7 @@ npm test
 
 - `test/matcher.test.js`: matcher rules on `test/fixtures/catalog.small.json`, including names that mean something else, type-fitting media words, same-sentence context, apostrophes and other languages.
 - `test/catalog-update.test.js`: the catalog update with a fake fetch, merging and rebuilding, the alarm plan, the narrative filter, the `other` lookup and its query limit.
-- `test/catalog.test.js`: groups and derived series on the real catalog. Skipped until `data/catalog.json` exists.
+- `test/catalog.test.js`: groups and derived series on the real catalog, and (0.2.3) the 0.2.3 phone cases, what each bare franchise name refers to (`test/fixtures/franchises.json`: 28 names, reviewed by hand), "More from this series" lists (`test/fixtures/series.json`: Resident Evil 42, Silent Hill 13 and God of War 9 works), the plain-sentence guard over the 300 most popular multi-word titles (`test/fixtures/top-names.json`: 1,200 sentences, at most 88 misses, 29 names expected to miss) and the YouTube rows (`test/fixtures/yt-rows.jsonl`: 91 rows of text the Android scanner passed, with the labels expected). Skipped until `data/catalog.json` exists.
 - `test/config.test.js`: the config (`src/options/config.js`): migration from 0.1, import and export, merge and replace, custom works in the index, and a catalog update keeping the custom works.
 - `test/ocr.test.js`: the PP-OCR module with a fake onnxruntime (boxes, reading order, decoding, the confidence cut).
 
@@ -87,7 +87,7 @@ npm run e2e -- chrome
 - It copies `dist/<target>` to `build/e2e-ext/<target>`, adds `data/update-config.json` pointing the catalog update at a local mock SPARQL server, and starts a temporary-profile browser. Firefox runs Zen headless through `web-ext` and WebDriver BiDi. Chrome runs Chrome for Testing with the extension enabled.
 - All traffic that is not loopback goes through a proxy that refuses it, and the report lists every attempt. The test fails if the mock SPARQL server sees a request before the update is switched on or pressed. Other refused requests are only listed.
 - Pages: `test/e2e/fixture.html` (the original flow: first paint, styles, popup search and "Add", the cover's buttons, the catalog update including 429 and malformed answers, pausing a site, OCR-only text), `feed.html` (a virtualised feed that recycles its nodes), `coverage.html` (direct messages, search suggestions, notifications, quote posts, a CSS background photo, short and dark blocks, open, closed and late shadow roots, an `about:srcdoc` frame, a cross-origin frame, the tab title) and `frame.html` (the embedded frame).
-- The cases check the [contract](agents/contract.md): the labels and their order, the buttons, `unknownImages`, `blockUnlisted`, both styles and per-work style, rule 7 (own text against picture titles and OCR text), "I've seen it" writing `works` and the picker for a group of several works, the dark-page colour fallback, the settings button, and the layout rule (no overlap, no height change, covers belong to their post). The 0.2.2 cases were added to `test/e2e/run.mjs` but not run for this page; the "27 cases" count of 0.2.0 is out of date. A fourth group measures the scan cost on a long page and prints memory figures.
+- The cases check the [contract](agents/contract.md): the labels and their order, the buttons, `unknownImages`, `blockUnlisted`, both styles and per-work style, rule 7 (own text against picture titles and OCR text), "I've seen it" writing `works` and the picker for a group of several works, the dark-page colour fallback, the settings button, and the layout rule (no overlap, no height change, covers belong to their post). The 0.2.2 and 0.2.3 cases were added to `test/e2e/run.mjs` but not run for this page (the 0.2.3 ones: the picker's "More from this series" section, with a test-only series written into the fixture build's `index.json` because the small fixture catalog has no series, the several-groups picker, and "Show once" per post in the recycled feed); the "27 cases" count of 0.2.0 is out of date. A fourth group measures the scan cost on a long page and prints memory figures.
 - The image cases do not name pictures in advance. The run asks the shipped engine (through the background, as the content script does) which `spoiler_*` and `pos_*` fixture pictures it titles with the fixture catalog, and which it calls generic media, keeping only pictures with no OCR text. It then uses those. `test/fixtures/catalog.small.json` holds Nosferatu (1922) so that `pos_nosferatu.jpg`, which has no text, is titled; if the engine titles no picture, the title cases are skipped and the report says so.
 - Output goes to `test/e2e/out/` (not in git): a report per target and screenshots.
 - The two targets use different ports, so they can run together. Do not do that on this machine (see the locks above).
@@ -113,6 +113,10 @@ npm run e2e -- chrome
 
 `tools/bench-clip.mjs` no longer exists. `tools/build-clip-text.mjs` (the title rows and the pinned model) and `tools/quantize-vision.mjs` are modules used by the build and `calibrate-clip.mjs`, not commands.
 
+### Debugging on Android
+
+To see what the Android scanner gives the matcher, raise the log tag on the device: `adb shell setprop log.tag.SpoilerBlock VERBOSE`, then `adb logcat -s SpoilerBlock:V`. Each evaluated item logs its class, the groups found and the full text (see [android.md](android.md#how-text-and-pixels-are-captured)). The log holds on-screen text, so treat it as personal data. Emulator only, as for all Android work here.
+
 ### Android unit tests
 
 Generate the vectors, then run Gradle. The steps are in [android.md](android.md#parity-tests):
@@ -136,7 +140,7 @@ node tools/catalog/build.mjs [minSitelinks=15]
 node tools/catalog/check.mjs
 ```
 
-- Queries Wikidata for seven work types, then what each work is (to keep only works told as a story), years, aliases and characters, then the "names that mean something else" lookup, and writes `data/catalog.json`. Set `CATALOG_OUT` to write elsewhere.
+- Queries Wikidata for seven work types, then what each work is (to keep only works told as a story), years, aliases and characters, then the "names that mean something else" lookup, then (step 6, `tools/catalog/series.mjs`) series membership, and writes `data/catalog.json`. Step 6 fetches each work's P179 and P8345 statements, the class, parents and label of those series items (up to four levels up), rolls them up to franchises (never into a series of more than 80 works), and gives the works with no series one by title. It adds the top-level `series` table and each work's `series` ids. `tools/catalog/check.mjs` also checks that every `series` id is in the table and that Resident Evil, Silent Hill and God of War have at least 40, 13 and 9 works. The queries are cached like the others. Set `CATALOG_OUT` to write elsewhere.
 - It is slow and polite: it waits between queries and backs off on 429 and 5xx. Results are cached by query text in `tools/catalog/cache/` (not in git), so a rerun is fast. The query text is the cache key: changing a query string in `src/shared/catalog-rules.js` invalidates that cache. The name lookup sends its names to 400 fixed buckets, so a changed name only invalidates its own bucket.
 - Then run `npm test` and `npm run build`.
 
@@ -146,7 +150,7 @@ node tools/catalog/check.mjs
 
 ### The index
 
-The matcher index is a build product. `npm run build` regenerates it from the catalog with `src/shared/build-index.js`. The extension's catalog update runs the same code, so both give identical bytes for the same catalog. `tools/fp-text.mjs` and `tools/fp-posts.mjs` measure the effect of rule changes. `SB_NO_COMMON_RULE=1` switches the "common word" rules off for a "before" figure. The rules were tuned while looking at `fp-posts.jsonl`, `headlines.jsonl` and `ocr-noise.jsonl`, so improving those numbers further is not evidence of a better matcher.
+The matcher index is a build product. `npm run build` regenerates it from the catalog with `src/shared/build-index.js`. The extension's catalog update runs the same code, so both give identical bytes for the same catalog. The index is format 3 and `index.json` carries a `series` column (about 1.78 MB; `index.bin` is 1,572,876 bytes). `tools/fp-text.mjs` and `tools/fp-posts.mjs` measure the effect of rule changes. `SB_NO_COMMON_RULE=1` switches the "common word" rules off for a "before" figure. The rules were tuned while looking at `fp-posts.jsonl`, `headlines.jsonl` and `ocr-noise.jsonl`, so improving those numbers further is not evidence of a better matcher.
 
 ### The title rows and the cut-offs
 

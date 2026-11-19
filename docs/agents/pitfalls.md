@@ -1,6 +1,6 @@
 # Pitfalls
 
-Traps specific to this repository, each checked against the code or the commit history at version 0.2.2. Read the section for the area you are about to change.
+Traps specific to this repository, each checked against the code or the commit history at version 0.2.3. Read the section for the area you are about to change.
 
 ## Models
 
@@ -20,7 +20,7 @@ Traps specific to this repository, each checked against the code or the commit h
 - **Firefox has one WASM thread and a lazy event page.** Extension pages in Firefox cannot be cross-origin isolated, so there is no `SharedArrayBuffer` and the models run on one thread (per image in a screenful, a title check took 426 ms against Chrome's 171 ms with four threads, in the 0.2.1 figures). The event page may not be running when a content script sends a request, so `ask()` in `content.js` retries a few times on "Receiving end does not exist" instead of failing open. Do not make a request failure reveal a picture without that retry. (Commit 431ace9.)
 - **A Chrome service worker cannot host the WASM runtime.** The engine runs in an offscreen document. `offscreen.js` registers its message listener before it loads the engine, because a message sent right after the document is created must find a receiver. `background.js` shares one promise for creating the document, because two early messages used to race. Keep `target: 'offscreen'` on forwarded messages.
 - **`img.currentSrc` updates late in Firefox.** It changes only once the new picture starts loading, so a recycled `<img>` with a new `src` looked unchanged and kept its old verdict. The content script decides on the attribute change (`src`, `srcset`, `poster`, with the mutation's old value). Do not go back to comparing `currentSrc` alone. (Commit 431ace9.)
-- **Every frame loads its own index.** The content script runs in all frames, so a page with several iframes pays the index size (about 3.3 MB) per frame. Counts and the toolbar badge come from the top frame only.
+- **Every frame loads its own index.** The content script runs in all frames, so a page with several iframes pays the index size (about 3.4 MB) per frame. Counts and the toolbar badge come from the top frame only.
 - **Closed shadow roots need an API.** `openOrClosedShadowRoot` is `element.openOrClosedShadowRoot` in Firefox and `chrome.dom.openOrClosedShadowRoot` in Chrome; both are used in `shadowOf`. A custom element that is not yet defined gets its root on upgrade, which no mutation reports, so it is retried for 30 seconds.
 
 ## Covers and layout
@@ -57,6 +57,14 @@ Traps specific to this repository, each checked against the code or the commit h
 - **XNNPACK is not used.** It was slower than the plain CPU session on the emulator and crashed on 1.22. Hardware acceleration is NNAPI only, behind the self-check and the crash marker in `Accel.java`. Never remove the marker logic: a native crash cannot be caught, and without the marker a crashing device would crash on every start.
 - **The emulator is x86_64.** arm64 builds run under translation (Android 11 and newer images). Timings from it say little about a phone.
 - **Only one emulator and one Gradle job at a time**, under the heavy lock.
+
+## State keys and visibility (0.2.3)
+
+- **A "Show once" key (or any state key) must not contain volatile text.** The 0.2.2 key on Android included the text of ticking counters (like counts), so a shown post was covered again each time a count moved. The key is now the post's own text with numbers blanked (`Scanner.shownKey`), and in the extension the text with whitespace collapsed (`showKey` in `content.js`); a post with no words is keyed by its pictures, minus video players, whose key changes with every sampled frame. The price: two posts with identical text share the choice. The demo's ticking counters and `--ei watchShown` check it.
+- **A cover's rectangle must be clipped to what is visible before it is used for shading, muting or touch.** An item scrolled partly under a pinned view still has its full bounds. Using them shaded and muted YouTube's pinned watch-page player and let covers take taps outside their list. `Scanner.visibleOnScreen` (`getGlobalVisibleRect`, which clips to every ancestor) is used by `shadeFloaters` and `coverAt`. There is still no "moves with the item" check. The demo's `watch` screen counts shades and taps on the pinned player.
+- **The benchmarks had no plain sentences about famous multi-word titles.** `fp-posts.jsonl`, `headlines.jsonl` and `ocr-noise.jsonl` never said "Resident Evil is scary", so the flag that made such names need a media word cost recall nobody saw (88 of 1,200 sentences still miss, 367 before the fix). `test/fixtures/top-names.json` and the plain-sentence test in `test/catalog.test.js` are the guard. Run `npm test` after any change to the `common`, `ambiguous` or `fame` rules, and read the benchmarks as tuned-on.
+- **Host apps put metadata in content descriptions.** A YouTube row's description is "title - duration - Go to channel C - C - views - age - play video" (localised), so "45 minutes" reached the matcher and matched a numeric title. `YouTubeText.strip` cuts it from the row's structure, not from phrase lists (a language that writes the number after the unit word would defeat it). Small tappable icons' descriptions are skipped in every app. Look at the verbose log (`adb shell setprop log.tag.SpoilerBlock VERBOSE`) before assuming a name was in the post.
+- **A bare name is its closest works, not every work that carries it.** A missing franchise entry is fixed where the group is built: `closest` in `build-index.js`, ported in `Catalog.java` (the on-device catalog update rebuilds the index with it). Change both and run the vectors. `test/fixtures/franchises.json` is reviewed by hand; change it only after looking at the new group.
 
 ## Stale comments you will meet
 

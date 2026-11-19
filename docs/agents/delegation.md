@@ -10,7 +10,7 @@ Two writers never touch the same files. These areas can be worked in parallel be
 
 | # | Area | Files it owns | Verification | Lock |
 |---|---|---|---|---|
-| 1 | Text matching, catalog, classifier, and their Java ports | `src/content/matcher.js`, `src/shared/`, `src/background/catalog-update.js`, `data/catalog.json`, `tools/catalog/`, `tools/build-index.mjs`, `tools/fp-*.mjs`, `tools/eval-spoiler.mjs`, `tools/train-spoiler.mjs`, `tools/spoiler-train/`, `models/spoiler/`, `test/matcher.test.js`, `test/catalog*.test.js`, `test/fixtures/{catalog.small.json,fp-posts.jsonl,spoiler-*}`; Java: `Matcher.java`, `Catalog.java`, `CatalogUpdate.java`, `Classifier.java`, `WordPiece.java`, `Json.java`, the matching tests, `android/tools/{vectors,catalog-vectors,spoiler-vectors,mock-sparql}.mjs` | `npm test`, `fp-posts`, `eval-spoiler` on both files, then the vectors and `testDebugUnitTest` | H |
+| 1 | Text matching, catalog, classifier, and their Java ports | `src/content/matcher.js`, `src/shared/`, `src/background/catalog-update.js`, `data/catalog.json`, `tools/catalog/`, `tools/build-index.mjs`, `tools/fp-*.mjs`, `tools/eval-spoiler.mjs`, `tools/train-spoiler.mjs`, `tools/spoiler-train/`, `models/spoiler/`, `test/matcher.test.js`, `test/catalog*.test.js`, `test/fixtures/{catalog.small.json,fp-posts.jsonl,spoiler-*,franchises.json,series.json,top-names.json,yt-rows.jsonl}`; Java: `Matcher.java`, `Catalog.java`, `CatalogUpdate.java`, `Classifier.java`, `WordPiece.java`, `Json.java`, the matching tests, `android/tools/{vectors,catalog-vectors,spoiler-vectors,mock-sparql}.mjs` | `npm test`, `fp-posts`, `eval-spoiler` on both files, then the vectors and `testDebugUnitTest` | H |
 | 2 | Image engine, OCR, build | `src/background/{engine.js,ocr.js,pixels.js,offscreen.*}`, `tools/build.mjs`, `tools/build-clip-text.mjs`, `tools/quantize-vision.mjs`, `tools/calibrate-clip.mjs`, `tools/clip-prompts.mjs`, `tools/bench-*.mjs`, `test/ocr.test.js`, `test/fixtures/images/`, `research/scripts/` | `npm test`, a build, `calibrate-clip`, `bench-engine`, then e2e | B (H for calibration) |
 | 3 | Content script and e2e | `src/content/{content.js,content.css}`, `test/e2e/` | e2e on both browsers | B |
 | 4 | Settings page, popup, background, manifest | `src/options/`, `src/popup/`, `src/background/background.js`, `manifest.json`, `test/config.test.js` | `npm test`, e2e | B |
@@ -65,7 +65,7 @@ Per area, add:
 | 2 | Which pinned files and shas apply, that the title model must not get int8 activations, the cut-offs' calibration status, and the memory budget. Ask for `bench-engine` figures in Chrome and Zen. |
 | 3 | The layout rule (a cover never changes a measured size), the e2e groups to run (`ONLY=...`), both browsers. |
 | 4 | The storage keys and messages that must not change, and that the 0.1 migration keeps working. |
-| 5 | Public Android APIs only, no resources or AndroidX in the library, the emulator rules (one at a time), and that agents never use a real phone: the owner ran 0.2.0 on one phone and the 0.2.2 changes have run only on the emulator and in the demo, nothing in X or Instagram. |
+| 5 | Public Android APIs only, no resources or AndroidX in the library, the emulator rules (one at a time), and that agents never use a real phone: the owner ran 0.2.0 and 0.2.2 on one phone and the 0.2.3 changes have run only on the emulator and in the demo, nothing in X or Instagram. |
 | 6 | Check every link and every statement against the code. Do not edit code. |
 
 ## Worktrees
