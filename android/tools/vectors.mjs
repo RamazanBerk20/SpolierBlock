@@ -155,6 +155,36 @@ assert.ok(D.run('TLOU2 broke me').some((l) => l.startsWith('The Last of Us')));
 assert.ok(D.run('Rocky 2 is underrated').includes('Rocky II'));
 assert.ok(D.run('Final Fantasy 7 remake').some((l) => l.startsWith('Final Fantasy VII')));
 for (const t of ['Chapter 6 of my thesis', 'Windows 11 update', 'top 5 tips', 'iPhone 16']) assert.deepEqual(D.run(t), [], t);
+const M = '\u0001';
+// the user's phone cases: own text + U+0001 + OCR text; [text, labels expected in order, seen titles (regex)]
+const PHONE = [
+  ['I Let an AI Teach Another AI for 5 Generations' + M + 'AI COPYING AI 5 GENERATIONS LATER\nGEN 0\nGEN 5', []],
+  ['Süzülerek\nGazapizm35' + M + 'ARGO', []],
+  ["What if we didn't allow bugs?" + M + '6\'4" 6\'2" 6\'0" 5\'10" 5\'8" 5\'6"\nBugs are\nILLEGAL', []],
+  ['[World Record] NEW SKIP! Speedrun Resident evil 4 Remake any% Standa' + M + 'NEW SKIP\nWR\nFASTER THAN THE NG+\nANY STANDARD NO INTRO\n01:22:38', []],
+  ['[World Record] NEW SKIP! Speedrun Resident evil 4 Remake any% Standa' + M + 'NEW SKIP\nWR\nFASTER THAN THE NG+\nANY STANDARD NO INTRO\n01:22:38', [], 'Resident Evil'],
+  ["If you are a fan of Assassin's Creed, and want to see the games and future conten\nThe Hidden One", [], "Assassin's Creed"],
+  ['25 - Resident Evil Village Soundtrack - Yearning For Dark Shadows' + M + 'VILLAGE\nRESIDENT EVIL', [], 'Resident Evil'],
+  ['Eurovision Song Contest 2026 results are in, what a night', []],
+  ['TÜRKİYE SİNEMASI DEĞİL, TÜRK SİNEMASI YAPALIM | KES #4\nFilmler ve Filmler' + M + 'SEN TÜRK DEĞİLSİN', []],
+  ["Grace Ashcroft's Voice Actress Reacts to Thirst Comments\nPARTYCHAT", []],
+  ['#39 - Halo Serisi' + M + 'HALO\nTHE MASTER CHIEF COLLECTION\nHALO: REACH\nHALO: COMBAT EVOLVED ANNIVERSARY\nHALO 2: ANNIVERSARY\nHALO 3', ['Halo']],
+  ['#59 - Battlefield Serisi 2' + M + 'BATTLEFIELD 3\nBATTLEFIELD 4\nBATTLEFIELD HARDLINE\nBATTLEFIELD 1\nBATTLEFIELD V\nBATTLEFIELD 2042', ['Battlefield']],
+  ['Video title' + M + 'RESIDENT EVIL REFERENCES', ['Resident Evil']],
+  ['reaction' + M + 'THE LAST OF US PART II ENDING', ['The Last of Us Part II']],
+  ['clip' + M + 'BREAKING BAD', ['Breaking Bad']],
+  ['clip' + M + 'Elden Ring', ['Elden Ring']],
+  ['you need to see this' + M + 'BATTLEFIELD 4', ['Battlefield 4']],
+  ['Lost season 6 was a mess', ['Lost']],
+  ['Watching 10.5 on TV tonight, a disaster miniseries', ['10.5']],
+  ['The height chart said 10.5 feet', []],
+];
+for (const [text, want, seen] of PHONE) {
+  const re = seen && new RegExp(seen), seenW = dmeta.titles.map((t, i) => (re && re.test(t) ? i : -1)).filter((i) => i >= 0);
+  const got = D.run(text, seenW);
+  if (want.length) assert.deepEqual(got.slice(0, want.length), want, text);
+  else assert.deepEqual(got, [], text);
+}
 // "<name> is a ... game", "beat <name>" (test/catalog.test.js)
 for (const [t, l] of [['Portal is a perfect game', 'Portal'], ['Us is such a creepy movie', 'Us'], ['Heat is the best heist movie ever made', 'Heat'],
   ['just beat Portal, GLaDOS is terrifying', 'Portal'], ['Dune is one of the best films ever', 'Dune'], ['Portal harika bir oyun', 'Portal'],

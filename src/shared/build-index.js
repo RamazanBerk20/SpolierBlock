@@ -11,9 +11,9 @@ export function sortWorks(catalog) {
   return [...catalog.works].sort((a, b) => (b.pop ?? 0) - (a.pop ?? 0));
 }
 
-let common = new Set(); // the catalog's common-word list (tools/catalog/20k.txt), used by the ambiguity rules
+let common = new Set(); // the catalog's common-word list (tools/catalog/common-words.txt), used by the ambiguity rules
 let everyday = null, top1k = null;
-// text: the contents of 20k.txt (one word per line, most frequent first)
+// text: the contents of common-words.txt (one word per line; the first 20k are English, most frequent first)
 export function setCommonWords(text) {
   common = new Set(text.split('\n').map((w) => w.trim().toLowerCase()));
   everyday = top1k = top3k = null;
@@ -49,14 +49,14 @@ const isSeq = (t, j) => j > 0 && (TO_ARABIC.has(t) || TO_ROMAN.has(t));
 // short word + number of at least 4 characters. Everything else keeps the usual case/corroboration rules.
 export function nameVariants(str, low) {
   const t = tokenize(String(str)).toks;
-  if (!t.some(isSeq)) return [{ text: t.join(' '), free: false }];
+  if (!t.some(isSeq)) return [{ text: t.join(' '), free: false, orig: true }];
   const base = t.filter((x, j) => !isSeq(x, j));
   const free = base.length >= 2 ? !low : base.length === 1 && !(RULES && isEveryday(base[0])) && base[0].length >= 3;
   // numbered: a sequel number after a word outside the 1k most frequent ("Rocky 2", "Final Fantasy 7") is evidence
   // enough not to need corroboration; "Chapter 6", "Windows 11", "Part 2" keep needing it.
   const numbered = !(RULES && base.every(isTop1k));
   const swapped = t.map((x, j) => (isSeq(x, j) ? TO_ARABIC.get(x) ?? TO_ROMAN.get(x) : x));
-  const out = [{ text: t.join(' '), free, numbered }, { text: swapped.join(' '), free, numbered }];
+  const out = [{ text: t.join(' '), free, numbered, orig: true }, { text: swapped.join(' '), free, numbered }];
   if (t.length === 2 && isSeq(t[1], 1)) for (const n of [t[1], swapped[1]]) out.push({ text: t[0] + n, free, numbered, joined: true });
   return out;
 }
@@ -64,6 +64,15 @@ export function nameVariants(str, low) {
 // The tokenizer splits words at an apostrophe ("Schindler's List" -> "schindler s list"); text written without it
 // ("Schindlers List") needs the joined form too.
 const possessive = (s) => (/['’]/.test(s) ? [s, s.replace(/['’]/g, '')] : [s]);
+
+// "Battlefield" of "Battlefield 4", "Battlefield V", "Battlefield 2042": the title without a final number, or null.
+export function numberedStem(title) {
+  const m = /^(.*\S)\s+(\d+|[IVXivx]+)$/u.exec(title.trim());
+  if (!m || (!/^\d+$/.test(m[2]) && !TO_ARABIC.has(m[2].toLowerCase()))) return null;
+  return tokenize(m[1]).toks.some((x) => x.length >= 4 && /^\p{L}+$/u.test(x)) ? m[1] : null;
+}
+// function words that do not make a name strong in text read from pictures ("THE MASTER" has one real word)
+const LIGHT = new Set('the and for you are was his her its our not but all any who how why what with from this that new one two'.split(' '));
 
 // Kind precedence when one name plays several roles: the most title-like wins.
 const RANK = { [KIND.TITLE]: 0, [KIND.SERIES]: 1, [KIND.ALIAS]: 2, [KIND.CHAR]: 3, [KIND.CHAR1]: 4, [KIND.PART]: 5, [KIND.TAG]: 6 };
@@ -73,7 +82,8 @@ export function buildIndex(catalog) {
   const keys = new Map(); // key -> { works: Set, kind, amb, label, labelRank }
   // oth: this name of work w mostly means something else in the world (work.other, see tools/catalog/build.mjs). A key
   // is "other" only when that holds for every work carrying it: a more popular work of the same name outweighs it.
-  const add = (str, w, kind, label, free = false, numbered = false, oth = false) => {
+  // orig: the name as written (not a sequel-number swap or a joined form, which never count in OCR text)
+  const add = (str, w, kind, label, free = false, numbered = false, oth = false, orig = true) => {
     const t = tokenize(String(str)).toks;
     if (!t.length || t.length > MAX_N || (t.length === 1 && t[0].length < 2)) return;
     if ((kind === KIND.CHAR || kind === KIND.PART) && t.length === 1) {
@@ -88,6 +98,7 @@ export function buildIndex(catalog) {
     if (kind !== KIND.PART && kind !== KIND.CHAR1) e.oth &&= oth;
     if (free) e.free = true;
     if (numbered) e.numbered = true;
+    if (orig) e.orig = true;
     if (RANK[kind] < RANK[e.kind]) e.kind = kind;
     if (RANK[kind] < e.labelRank) { e.label = label; e.labelRank = RANK[kind]; }
     if ((kind === KIND.TITLE || kind === KIND.ALIAS) && works[w].ambiguous) e.amb = 1;
@@ -95,21 +106,22 @@ export function buildIndex(catalog) {
 
   const prefixCount = new Map();
   for (const w of works) {
-    const p = seriesPrefix(w.title);
+    const p = seriesPrefix(w.title) ?? numberedStem(w.title);
     if (p) { const k = tokenize(p).toks.join(' '); prefixCount.set(k, (prefixCount.get(k) ?? 0) + 1); }
   }
   const seriesOf = new Map(); // workIdx -> series label
   works.forEach((w, i) => {
     const low = (w.pop ?? 0) < COMMON_POP, other = new Set(w.other ?? []);
     for (const v of possessive(w.title).flatMap((f) => nameVariants(f, low))) {
-      add(v.text, i, v.joined ? KIND.ALIAS : KIND.TITLE, w.title, v.free, v.numbered, other.has(w.title));
+      add(v.text, i, v.joined ? KIND.ALIAS : KIND.TITLE, w.title, v.free, v.numbered, other.has(w.title), !!v.orig);
       if (!v.joined && v.text.includes(' ')) add(v.text, i, KIND.TAG, w.title, false, false, other.has(w.title)); // #GrandTheftAuto6
     }
-    const p = seriesPrefix(w.title);
-    if (p && prefixCount.get(tokenize(p).toks.join(' ')) >= 2) {
+    // a series: the part before a colon shared by 2+ titles ("Star Wars"), or a name numbered in 3+ titles ("Battlefield")
+    const sp = seriesPrefix(w.title), p = sp ?? numberedStem(w.title);
+    if (p && prefixCount.get(tokenize(p).toks.join(' ')) >= (sp ? 2 : 3)) {
       add(p, i, KIND.SERIES, p, false, false, other.has(p)); add(p, i, KIND.TAG, p, false, false, other.has(p)); seriesOf.set(i, p);
     }
-    for (const a of w.aliases ?? []) for (const v of possessive(a).flatMap((f) => nameVariants(f, low))) add(v.text, i, KIND.ALIAS, w.title, v.free, v.numbered, other.has(a));
+    for (const a of w.aliases ?? []) for (const v of possessive(a).flatMap((f) => nameVariants(f, low))) add(v.text, i, KIND.ALIAS, w.title, v.free, v.numbered, other.has(a), !!v.orig);
     for (const c of w.characters ?? []) {
       add(c, i, KIND.CHAR, w.title, false, false, other.has(c));
       // "Snape", "Dumbledore": parts of full names are weak signals (need corroboration, see matcher)
@@ -149,7 +161,8 @@ export function buildIndex(catalog) {
     // single-word titles are already flagged by the catalog's own ambiguity rule; aliases/series are not
     // a character name made of everyday words only ("The Sheep", "Thing One") is treated like such a title
     const plainChar = RULES && e.kind === KIND.CHAR && t.every(isCommon) && (t[0] === 'the' || t.every(isTop3k));
-    const common = plainChar || (RULES && titleLike && !e.free && !e.numbered && (one ? /^\d+$/.test(t[0]) || (isCommon(t[0]) && (low || e.kind !== KIND.TITLE || isTop3k(t[0]))) : low && t.every(isCommon))) ? 1 : 0;
+    const numeric = t.every((x) => !/\p{L}/u.test(x)); // "10.5", "1917", "300": need a media word or quotes
+    const common = plainChar || (RULES && titleLike && (numeric || (!e.free && !e.numbered && (one ? isCommon(t[0]) && (low || e.kind !== KIND.TITLE || isTop3k(t[0])) : low && t.every(isCommon))))) ? 1 : 0;
     // "rare": a single uncommon word naming a less popular work ("Bloodborne", "Telefon"). Not an everyday word, but
     // weak: it needs a media word in its sentence. When it mostly names something else the "other" flag says so.
     const rare = RULES && titleLike && one && low && !common && !e.free ? 1 : 0;
@@ -157,7 +170,16 @@ export function buildIndex(catalog) {
     // may be written in lowercase
     const cap = plainChar || (RULES && titleLike && !e.free && (one || low || t.every(isCommon))) ? 1 : 0;
     const other = RULES && e.oth && e.kind !== KIND.PART && e.kind !== KIND.CHAR1 ? 1 : 0;
-    entries.set(key, (newIdx[e.g] << 8) | (rare << 7) | (cap << 6) | (common << 5) | (e.amb << 4) | (other << 3) | e.kind);
+    // "ocr": strong enough in text read from pictures, where case proves nothing. Two words or more as written, and:
+    // two real words ("RESIDENT EVIL"; for a less popular work not two very frequent ones), one rare word in a popular
+    // name ("THE MANDALORIAN"), or a numbered title whose name is not an everyday word ("BATTLEFIELD 4"; not "GEN 5",
+    // which only exists as the swapped form of "Gen V"). Never a name that mostly means something else.
+    const real = t.filter((x) => x.length >= 3 && /^\p{L}+$/u.test(x) && !LIGHT.has(x));
+    const num = t.length >= 2 && (/^\d+$/.test(t[t.length - 1]) || TO_ARABIC.has(t[t.length - 1]));
+    const ocr = RULES && e.orig && !other && t.length >= 2 && (titleLike || e.kind === KIND.CHAR) &&
+      ((real.length >= 2 && !(e.amb && low)) || (real.length === 1 && !low && !isCommon(real[0])) ||
+       (num && real.some((x) => x.length >= 4 && !isTop3k(x)))) ? 1 : 0;
+    entries.set(key, (newIdx[e.g] << 9) | (ocr << 8) | (rare << 7) | (cap << 6) | (common << 5) | (e.amb << 4) | (other << 3) | e.kind);
   }
   const sorted = order.map((i) => groups[i]);
   const meta = {

@@ -85,3 +85,36 @@ test('the sentence says what the work is, or that someone played, watched or fin
   for (const t of ['Turkey is a great place to shoot a movie', 'Switch 2 sales are huge', 'My Switch broke again', 'Palestine will be free',
   'Reading Proverbs this morning', 'It was a great movie']) assert.deepEqual(labels(t), [], t);
 });
+
+const M = '\u0001';
+// the user's phone cases: own text + U+0001 + OCR text; [text, labels expected in order, seen titles (regex)]
+const PHONE = [
+  ['I Let an AI Teach Another AI for 5 Generations' + M + 'AI COPYING AI 5 GENERATIONS LATER\nGEN 0\nGEN 5', []],
+  ['Süzülerek\nGazapizm35' + M + 'ARGO', []],
+  ["What if we didn't allow bugs?" + M + '6\'4" 6\'2" 6\'0" 5\'10" 5\'8" 5\'6"\nBugs are\nILLEGAL', []],
+  ['[World Record] NEW SKIP! Speedrun Resident evil 4 Remake any% Standa' + M + 'NEW SKIP\nWR\nFASTER THAN THE NG+\nANY STANDARD NO INTRO\n01:22:38', []],
+  ['[World Record] NEW SKIP! Speedrun Resident evil 4 Remake any% Standa' + M + 'NEW SKIP\nWR\nFASTER THAN THE NG+\nANY STANDARD NO INTRO\n01:22:38', [], 'Resident Evil'],
+  ["If you are a fan of Assassin's Creed, and want to see the games and future conten\nThe Hidden One", [], "Assassin's Creed"],
+  ['25 - Resident Evil Village Soundtrack - Yearning For Dark Shadows' + M + 'VILLAGE\nRESIDENT EVIL', [], 'Resident Evil'],
+  ['Eurovision Song Contest 2026 results are in, what a night', []],
+  ['TÜRKİYE SİNEMASI DEĞİL, TÜRK SİNEMASI YAPALIM | KES #4\nFilmler ve Filmler' + M + 'SEN TÜRK DEĞİLSİN', []],
+  ["Grace Ashcroft's Voice Actress Reacts to Thirst Comments\nPARTYCHAT", []],
+  ['#39 - Halo Serisi' + M + 'HALO\nTHE MASTER CHIEF COLLECTION\nHALO: REACH\nHALO: COMBAT EVOLVED ANNIVERSARY\nHALO 2: ANNIVERSARY\nHALO 3', ['Halo']],
+  ['#59 - Battlefield Serisi 2' + M + 'BATTLEFIELD 3\nBATTLEFIELD 4\nBATTLEFIELD HARDLINE\nBATTLEFIELD 1\nBATTLEFIELD V\nBATTLEFIELD 2042', ['Battlefield']],
+  ['Video title' + M + 'RESIDENT EVIL REFERENCES', ['Resident Evil']],
+  ['reaction' + M + 'THE LAST OF US PART II ENDING', ['The Last of Us Part II']],
+  ['clip' + M + 'BREAKING BAD', ['Breaking Bad']],
+  ['clip' + M + 'Elden Ring', ['Elden Ring']],
+  ['you need to see this' + M + 'BATTLEFIELD 4', ['Battlefield 4']],
+  ['Lost season 6 was a mess', ['Lost']],
+  ['Watching 10.5 on TV tonight, a disaster miniseries', ['10.5']],
+  ['The height chart said 10.5 feet', []],
+];
+test('phone cases: text read from pictures, all caps, headline case, seen names, label order', { skip: !has && 'no data/catalog.json' }, () => {
+  for (const [text, want, seen] of PHONE) {
+    const re = seen && new RegExp(seen), seenW = new Set(built.meta.titles.map((t, i) => (re && re.test(t) ? i : -1)).filter((i) => i >= 0));
+    const got = m.evaluate(text, (g) => built.meta.groups[g].slice(1).every((w) => seenW.has(w))).map((g) => built.meta.groups[g][0]);
+    if (want.length) assert.deepEqual(got.slice(0, want.length), want, text); // the label first
+    else assert.deepEqual(got, [], text);
+  }
+});

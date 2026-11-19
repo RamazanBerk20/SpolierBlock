@@ -31,16 +31,17 @@ public final class Matcher {
             {ALL, "ending endings finale spoiler spoilers sequel prequel remake reboot character characters plot adaptation franchise saga trilogy premiere"},
             {SCREEN | GAME, "trailer teaser scene scenes cast animation animated"},
             {SCREEN, "director cinema theater theatre netflix hbo disney pixar imdb tv watched watching rewatch rewatched " +
-                "rewatching binge imax actor actress acting oscar oscars emmy emmys blockbuster screenplay cine kino"},
+                "rewatching binge imax oscar oscars emmy emmys blockbuster screenplay cine kino"},
             {MOV, "movie movies film films"},
             {EPIS, "season seasons episode episodes ep eps show episodic showrunner sitcom miniseries"},
-            {EPIS | READ, "series"},
+            {ALL, "series"},
             {GAME, "game games dlc boss playthrough gameplay nintendo playstation xbox steam played playing replayed roguelike " +
                 "roguelite metroidvania platformer rpg jrpg mmo mmorpg fps soulslike speedrun multiplayer"},
             {READ, "chapter chapters volume book books novel read reading reread author comic comics webcomic"},
             {16 | 32, "anime manga shonen seinen isekai manhwa webtoon"},
             {SCREEN | GAME, "fragman fragmani"},
-            {EPIS | READ, "capitulo capitulos serie"},
+            {EPIS | READ, "capitulo capitulos"},
+            {ALL, "serie seri serien"},
             {EPIS, "finali temporada episodio episodios staffel folge folgen saison stagione puntata"},
             {MOV, "pelicula peliculas filme filmes"},
             {GAME, "juego videojuego jogo spiel jeu gioco"},
@@ -52,9 +53,9 @@ public final class Matcher {
     }
     // Turkish suffixes: these stems match any longer word they start
     private static final String[] STEMS = {"sezon", "bolum", "dizi", "fragman", "film", "izle", "izli", "oyun", "oyn", "kitap", "kitab",
-        "okudu", "okuyor", "okuma", "cizgi", "serisi", "manga", "anime", "sinema"};
+        "okudu", "okuyor", "okuma", "cizgi", "serisi", "serinin", "seriye", "manga", "anime", "sinema"};
     private static final int[] STEM_MASK = {EPIS, EPIS | READ, EPIS, SCREEN | GAME, MOV, SCREEN, SCREEN, GAME, GAME, READ, READ,
-        READ, READ, READ, READ, EPIS | READ, 16 | 32, 16 | 32, SCREEN};
+        READ, READ, READ, READ, ALL, ALL, ALL, 16 | 32, 16 | 32, SCREEN};
     private static final Pattern SXEX = Pattern.compile("^s\\d{1,2}e\\d{1,3}$");
     // shortcut: CJK/Thai text has no spaces (same limit as the JS matcher), add per-script segmentation when the JS side does.
     private static final Pattern WORD = Pattern.compile("&|[\\p{L}\\p{N}]+"); // an apostrophe splits words, as in the JS
@@ -68,7 +69,7 @@ public final class Matcher {
     final int[][] groups; // group -> work indices (the JSON's [label, w...] without the label)
     private final int[] u;
     private final int mask;
-    private final boolean v1; // index format 1 (see the JS): group << 8, rare and other bits
+    private final int fmt; // index format (see the JS): 2 = group << 9 with ocr, rare and other bits; 1 = group << 8; 0
     private final Map<Integer, Integer> masks = new HashMap<>();
 
     public Matcher(byte[] bin, String json) throws Exception {
@@ -77,7 +78,7 @@ public final class Matcher {
         bb.asIntBuffer().get(u);
         if (u[0] != MAGIC) throw new IllegalArgumentException("bad index");
         mask = (1 << u[1]) - 1;
-        v1 = u[2] >= 1;
+        fmt = u[2];
         JSONObject m = new JSONObject(json);
         ids = strings(m.getJSONArray("ids"));
         titles = strings(m.getJSONArray("titles"));
@@ -148,7 +149,7 @@ public final class Matcher {
                 boolean ordinal = gap.equals(". ") && ORDINAL.matcher(prev).matches();
                 for (int k = 0; k < gap.length() && !ordinal; k++) {
                     char c = gap.charAt(k);
-                    if (c == '.' || c == '!' || c == '?' || c == '\n') { n++; break; }
+                    if (c == '.' || c == '!' || c == '?' || c == '\n' || c == '\u0001') { n++; break; }
                 }
             }
             out[i] = n;
@@ -156,6 +157,43 @@ public final class Matcher {
         return out;
     }
     private static final Pattern ORDINAL = Pattern.compile("\\d{1,2}"), DIGITS = Pattern.compile("\\d+");
+
+    private static boolean lineBreak(String text, int from, int to) {
+        for (int k = from; k < to; k++) { char c = text.charAt(k); if (c == '\n' || c == '\u0001') return true; }
+        return false;
+    }
+
+    private static boolean caps(String text, Tokens tk, int i) {
+        String w = text.substring(tk.starts.get(i), tk.ends.get(i));
+        boolean letter = false;
+        for (int k = 0; k < w.length(); ) { int c = w.codePointAt(k); letter |= Character.isLetter(c); k += Character.charCount(c); }
+        return w.length() >= 2 && letter && w.equals(w.toUpperCase(java.util.Locale.ROOT)) && !w.equals(w.toLowerCase(java.util.Locale.ROOT));
+    }
+
+    /** Tokens [0, end) whose capitals prove nothing: ALL-CAPS runs and Headline Case lines (see the JS). */
+    private static boolean[] caseless(String text, Tokens tk, int end) {
+        boolean[] out = new boolean[end];
+        int[] line = new int[end];
+        int n = 0;
+        for (int i = 0; i < end; i++) { if (i > 0 && lineBreak(text, tk.ends.get(i - 1), tk.starts.get(i))) n++; line[i] = n; }
+        for (int i = 0; i < end; i++) {
+            out[i] = caps(text, tk, i) && (i > 0 && line[i - 1] == line[i] && caps(text, tk, i - 1) || i + 1 < end && line[i + 1] == line[i] && caps(text, tk, i + 1));
+        }
+        for (int a = 0, b; a < end; a = b) {
+            int words = 0, up = 0;
+            for (b = a; b < end && line[b] == line[a]; b++) {
+                String t = tk.toks.get(b);
+                if (t.length() >= 4 && hasLetter(t)) { words++; if (upperAt(text, tk.starts.get(b))) up++; }
+            }
+            if (words >= 4 && up >= 0.7 * words) for (int i = a; i < b; i++) out[i] = true;
+        }
+        return out;
+    }
+
+    private static boolean hasLetter(String s) {
+        for (int k = 0; k < s.length(); ) { int c = s.codePointAt(k); if (Character.isLetter(c)) return true; k += Character.charCount(c); }
+        return false;
+    }
 
     static int[] tokHash(String s) {
         int a = 0x811c9dc5, b = 0x01234567;
@@ -182,14 +220,22 @@ public final class Matcher {
     // ---------- evaluate ----------
 
     private static final class Cand {
-        int g, i, n, s, e; boolean common, other, rare, seen, weak, part, hashed; String key;
+        int g, i, n, s, e; boolean common, other, rare, caseOnly, weak, part, hashed, ocr; String key;
     }
 
-    /** Group indices (most popular first) the text is about. seenWork[w] marks works the user has seen. */
+    /**
+     * Group indices the text is about, in label order: groups named by the post's own text first, then groups named
+     * only by OCR text (after a U+0001 marker); within each, the longer matched name first, then the more popular.
+     * seenWork[w] marks works the user has seen.
+     */
     public int[] evaluate(String text, boolean[] seenWork) {
         Tokens tk = tokenize(text);
         int len = tk.size();
         if (len == 0) return new int[0];
+        int mark = text.indexOf('\u0001'), ocrFrom = len;
+        if (mark >= 0) for (int i = 0; i < len; i++) if (tk.starts.get(i) > mark) { ocrFrom = i; break; }
+        int shift = fmt >= 2 ? 9 : fmt >= 1 ? 8 : 7;
+        boolean[] loud = null;
         int[] ha = new int[len], hb = new int[len];
         for (int i = 0; i < len; i++) { int[] h = tokHash(tk.toks.get(i)); ha[i] = h[0]; hb[i] = h[1]; }
         List<Cand> cands = new ArrayList<>();
@@ -199,10 +245,19 @@ public final class Matcher {
                 A = mixA(A, ha[i + n - 1]); B = mixB(B, hb[i + n - 1]);
                 int v = lookup(A, B);
                 if (v < 0) continue;
-                int g = v >>> (v1 ? 8 : 7), kind = v & (v1 ? 7 : 15);
-                boolean rare = v1 && ((v >>> 7) & 1) != 0, cap = ((v >>> 6) & 1) != 0, common = ((v >>> 5) & 1) != 0;
-                boolean amb = ((v >>> 4) & 1) != 0, other = v1 && ((v >>> 3) & 1) != 0;
+                int g = v >>> shift, kind = v & (fmt >= 1 ? 7 : 15);
+                boolean ocrOk = fmt >= 2 && ((v >>> 8) & 1) != 0, rare = fmt >= 1 && ((v >>> 7) & 1) != 0, cap = ((v >>> 6) & 1) != 0;
+                boolean common = ((v >>> 5) & 1) != 0, amb = ((v >>> 4) & 1) != 0, other = fmt >= 1 && ((v >>> 3) & 1) != 0;
                 int s = tk.starts.get(i), e = tk.ends.get(i + n - 1);
+                if (i >= ocrFrom) { // text read from pictures: only names strong without help count
+                    if (ocrOk) {
+                        Cand c = new Cand();
+                        c.g = g; c.i = i; c.n = n; c.s = s; c.e = e; c.ocr = true; c.key = String.join(" ", tk.toks.subList(i, i + n));
+                        cands.add(c);
+                    }
+                    continue;
+                }
+                if (i + n > ocrFrom) continue; // never across the marker
                 boolean hashed = s > 0 && text.charAt(s - 1) == '#';
                 if (kind == TAG && !hashed) continue;
                 String firstTok = text.substring(s, tk.ends.get(i));
@@ -215,79 +270,109 @@ public final class Matcher {
                     }
                     if (bad) continue;
                 }
+                if (loud == null) loud = caseless(text, tk, ocrFrom);
+                boolean caseOnly = false; // a capital proves nothing in an ALL-CAPS run or a Headline Case line
+                if (cap && (n == 1 || common && n == 2)) for (int j = i; j < i + n && !caseOnly; j++) caseOnly = loud[j];
                 boolean titleLike = kind == TITLE || kind == ALIAS || kind == SERIES;
                 Cand c = new Cand();
                 c.g = g; c.i = i; c.n = n; c.s = s; c.e = e; c.common = common; c.other = other; c.rare = rare; c.hashed = hashed;
-                c.seen = groupSeen(g, seenWork);
-                c.weak = common || other || rare || kind == CHAR1 || kind == PART || (titleLike && ((amb && n <= 2) || (n == 1 && firstTok.length() <= 3)));
+                c.caseOnly = caseOnly;
+                c.weak = caseOnly || common || other || rare || kind == CHAR1 || kind == PART || (titleLike && ((amb && n <= 2) || (n == 1 && firstTok.length() <= 3)));
                 c.part = kind == PART;
                 c.key = String.join(" ", tk.toks.subList(i, i + n));
                 cands.add(c);
             }
         }
         if (cands.isEmpty()) return new int[0];
-        // Longest match wins: "Us" and "Last" inside "The Last of Us".
+        // Longest match wins, seen or not: "Us" inside "The Last of Us", "Assassin" inside "Assassin's Creed".
         boolean[] drop = new boolean[cands.size()];
         for (int k = 0; k < cands.size(); k++) {
             Cand c = cands.get(k);
-            drop[k] = c.seen;
             for (Cand o : cands) if (!drop[k] && o != c && o.i <= c.i && o.i + o.n >= c.i + c.n && o.n > c.n) drop[k] = true;
         }
         List<Cand> kept = new ArrayList<>();
         for (int k = 0; k < cands.size(); k++) if (!drop[k]) kept.add(cands.get(k));
 
-        LinkedHashSet<Integer> out = new LinkedHashSet<>();
+        LinkedHashSet<Integer> own = new LinkedHashSet<>(), pics = new LinkedHashSet<>();
+        Map<Integer, Integer> longest = new HashMap<>();
         int[] sent = null;
         for (Cand c : kept) {
-            if (out.contains(c.g)) continue;
-            boolean strong = !c.weak || (!c.other && (c.hashed || isQuoted(text, c.s, c.e))); // #Palestine is no evidence
-            for (int k = 0; k < kept.size() && !strong; k++) {
-                Cand o = kept.get(k);
-                strong = !o.key.equals(c.key) && shares(o.g, c.g);
+            boolean ok;
+            if (c.ocr) ok = true;
+            else {
+                ok = !c.weak || (!c.other && (c.hashed || isQuoted(text, c.s, c.e))); // #Palestine is no evidence
+                for (int k = 0; k < kept.size() && !ok; k++) {
+                    Cand o = kept.get(k);
+                    ok = !o.ocr && !o.key.equals(c.key) && shares(o.g, c.g);
+                }
+                if (!ok) ok = corroborated(c, text, tk, sent == null ? (sent = sentences(text, tk)) : sent, len);
             }
-            if (strong) { out.add(c.g); continue; }
-            if (c.part || !upperAt(text, c.s)) continue; // remaining rules need a capitalized form
-            if (sent == null) sent = sentences(text, tk);
-            int si = sent[c.i], mask = typeMask(c.g);
-            // the sentence says what it is ("Portal is a perfect game") or that someone consumed it ("just beat Portal")
-            Integer verb = c.i > 0 && sent[c.i - 1] == si ? VERBS.get(tk.toks.get(c.i - 1)) : null;
-            boolean said = (c.n > 1 || !SUBJECT.contains(c.key)) && described(tk, sent, c.i + c.n, si, mask) || verb != null && (verb & mask) != 0;
-            boolean near = said;
-            for (int j = Math.max(0, c.i - 3), hi = Math.min(len, c.i + c.n + 3); j < hi && !near; j++) near = fits(c, j, si, mask, sent, tk);
-            int after = c.i + c.n + (c.i + c.n < len && DIGITS.matcher(tk.toks.get(c.i + c.n)).matches() ? 1 : 0); // "Lost 2. sezon"
-            boolean adjacent = said || fits(c, c.i - 1, si, mask, sent, tk) || fits(c, after, si, mask, sent, tk);
-            // a name that mostly means something else: a media word near it, right next to it for an everyday word
-            // at the start of a sentence ("Go to channel TV")
-            if (c.other) { if (c.common && sentenceStart(text, c.s) ? adjacent : near) out.add(c.g); continue; }
-            boolean ok = false; // a release year of one of its works in the same sentence
-            for (int j = 0; j < len && !ok; j++) {
-                if (sent[j] != si) continue;
-                for (int w : groups[c.g]) if (years[w] != 0 && tk.toks.get(j).equals(String.valueOf(years[w]))) { ok = true; break; }
+            if (ok) {
+                (c.ocr ? pics : own).add(c.g);
+                Integer l = longest.get(c.g);
+                longest.put(c.g, l == null ? c.n : Math.max(l, c.n));
             }
-            // at the start of a sentence everyday words need a second capitalised word of 3+ letters
-            boolean capped = !c.common || !sentenceStart(text, c.s);
-            for (int j = c.i + 1; j < c.i + c.n && !capped; j++) capped = tk.toks.get(j).length() >= 3 && upperAt(text, tk.starts.get(j));
-            if (!ok && !capped) ok = adjacent;
-            else if (!ok && c.common && c.n == 1) ok = near;
-            else for (int j = 0; j < len && !ok; j++) ok = fits(c, j, si, mask, sent, tk);
-            if (ok) out.add(c.g);
         }
-        // A group whose works are all inside another matched group adds nothing ("Potter" inside "Harry Potter").
+        // The post's own text outranks its pictures: when it names a seen work and no other, OCR names do not count.
+        List<Integer> ownOpen = new ArrayList<>(), picOnly = new ArrayList<>(), all = new ArrayList<>();
+        for (int g : own) if (!groupSeen(g, seenWork)) ownOpen.add(g);
+        if (own.isEmpty() || !ownOpen.isEmpty()) for (int g : pics) if (!own.contains(g) && !groupSeen(g, seenWork)) picOnly.add(g);
+        all.addAll(ownOpen);
+        all.addAll(picOnly);
+        java.util.Comparator<Integer> order = (a1, b1) -> {
+            int d = longest.get(b1) - longest.get(a1);
+            return d != 0 ? d : Integer.compare(a1, b1);
+        };
         List<Integer> res = new ArrayList<>();
-        for (int g : out) {
-            boolean inside = false;
-            for (int o : out) {
-                if (o == g || groups[g].length >= groups[o].length) continue;
-                boolean all = true;
-                for (int w : groups[g]) if (!contains(groups[o], w)) { all = false; break; }
-                if (all) { inside = true; break; }
-            }
-            if (!inside) res.add(g);
+        for (List<Integer> tier : Arrays.asList(ownOpen, picOnly)) {
+            List<Integer> t = new ArrayList<>();
+            for (int g : tier) if (!insideOther(g, all)) t.add(g);
+            t.sort(order);
+            res.addAll(t);
         }
         int[] r = new int[res.size()];
         for (int k = 0; k < r.length; k++) r[k] = res.get(k);
-        Arrays.sort(r);
         return r;
+    }
+
+    // A group whose works are all inside another matched group adds nothing ("Potter" inside "Harry Potter").
+    private boolean insideOther(int g, List<Integer> all) {
+        for (int o : all) {
+            if (o == g || groups[g].length >= groups[o].length) continue;
+            boolean every = true;
+            for (int w : groups[g]) if (!contains(groups[o], w)) { every = false; break; }
+            if (every) return true;
+        }
+        return false;
+    }
+
+    /** The rules for a weak name of the post's own text: media words of its type in its sentence, a year... */
+    private boolean corroborated(Cand c, String text, Tokens tk, int[] sent, int len) {
+        if (c.part || !upperOrDigitAt(text, c.s)) return false; // the remaining rules need a capitalized form (or a number)
+        int si = sent[c.i], mask = typeMask(c.g);
+        // the sentence says what it is ("Portal is a perfect game") or that someone consumed it ("just beat Portal")
+        Integer verb = c.i > 0 && sent[c.i - 1] == si ? VERBS.get(tk.toks.get(c.i - 1)) : null;
+        boolean said = (c.n > 1 || !SUBJECT.contains(c.key)) && described(tk, sent, c.i + c.n, si, mask) || verb != null && (verb & mask) != 0;
+        boolean near = said;
+        for (int j = Math.max(0, c.i - 3), hi = Math.min(len, c.i + c.n + 3); j < hi && !near; j++) near = fits(c, j, si, mask, sent, tk);
+        int after = c.i + c.n + (c.i + c.n < len && DIGITS.matcher(tk.toks.get(c.i + c.n)).matches() ? 1 : 0); // "Lost 2. sezon"
+        boolean adjacent = said || fits(c, c.i - 1, si, mask, sent, tk) || fits(c, after, si, mask, sent, tk);
+        if (c.caseOnly) return adjacent;
+        // a name that mostly means something else: a media word near it; as an everyday word at the start of a
+        // sentence ("Go to channel TV"), right next to it
+        if (c.other) return c.common && sentenceStart(text, c.s) ? adjacent : near;
+        boolean ok = false; // a release year of one of its works in the same sentence
+        for (int j = 0; j < len && !ok; j++) {
+            if (sent[j] != si) continue;
+            for (int w : groups[c.g]) if (years[w] != 0 && tk.toks.get(j).equals(String.valueOf(years[w]))) { ok = true; break; }
+        }
+        // at the start of a sentence everyday words need a second capitalised word of 3+ letters
+        boolean capped = !c.common || !sentenceStart(text, c.s);
+        for (int j = c.i + 1; j < c.i + c.n && !capped; j++) capped = tk.toks.get(j).length() >= 3 && upperAt(text, tk.starts.get(j));
+        if (!ok && !capped) ok = adjacent;
+        else if (!ok && c.common && c.n == 1) ok = near;
+        else for (int j = 0; j < len && !ok; j++) ok = fits(c, j, si, mask, sent, tk);
+        return ok;
     }
 
     public boolean groupSeen(int g, boolean[] seenWork) {
@@ -373,7 +458,7 @@ public final class Matcher {
     private static boolean sentenceStart(String text, int s) {
         for (int i = s - 1; i >= 0; i--) {
             char c = text.charAt(i);
-            if (c == '\n') return true; // a line break separates texts (UI labels such as YouTube's "Go to channel X" lines)
+            if (c == '\n' || c == '\u0001') return true; // a line break separates texts (UI labels such as YouTube's "Go to channel X" lines)
             if (jsSpace(c)) continue;
             return ".!?:;\n•|-–—([".indexOf(c) >= 0;
         }
