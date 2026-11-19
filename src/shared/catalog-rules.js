@@ -48,11 +48,15 @@ export const NOT_NARRATIVE = new Set((
   // documentaries, news, talk and factual shows
   'Q93204 Q7603925 Q133731271 Q133731263 Q1760864 Q110593123 Q1800833 Q3648909 Q4765076 Q430525 Q1358344 ' +
   'Q139850703 Q5401282 Q622812 Q986699 Q131762936 Q6645282 Q3546572 Q7257679 Q5428822 Q10676514 Q2670855 Q7832972 ' +
-  'Q126914943 Q7551149 Q4677832 Q2096046 Q1371394 Q116763393 Q34682961').split(' '));
+  'Q126914943 Q7551149 Q4677832 Q2096046 Q1371394 Q116763393 Q34682961 ' +
+  // live events and non-story programmes: contests, award ceremonies, game and quiz shows, variety and sketch shows,
+  // albums and music videos. Reality competitions, talent shows and wrestling stay: their results are spoilers.
+  'Q1955280 Q4504495 Q846662 Q2123557 Q336181 Q743934 Q5778915 Q482994 Q209939 Q10590726 Q20089094 Q193977 Q20135338').split(' '));
 // ...unless it is also told as a story: novel, novella, short story, play, light novel, novel series, fiction, or a
 // fiction film genre (drama, comedy, comedy-drama, crime, thriller, action, romance, horror, science fiction)
+// ...or a reality competition or talent show, whose results are spoilers
 const NARRATIVE = new Set(('Q8261 Q149537 Q49084 Q25379 Q1279564 Q104213567 Q1667921 Q8253 ' +
-  'Q130232 Q157443 Q859369 Q959790 Q2484376 Q188473 Q1054574 Q200092 Q471839').split(' '));
+  'Q130232 Q157443 Q859369 Q959790 Q2484376 Q188473 Q1054574 Q200092 Q471839 Q182415 Q1484397 Q106603795').split(' '));
 export const isNarrative = (vals) => !vals.some((v) => NOT_NARRATIVE.has(v)) || vals.some((v) => NARRATIVE.has(v));
 
 // ---- names that mostly mean something else (catalog build and update) ----
@@ -75,7 +79,8 @@ export const senseNames = (w, prefix) => [w.title, ...(w.aliases ?? []), ...(w.c
 export function addSenses(otherPop, rows, inCatalog, sameSense) {
   for (const r of rows) {
     const cs = r.cs?.value ? r.cs.value.split(' ').map(qid) : [];
-    if (inCatalog.has(qid(r.e.value)) || cs.some((c) => NOT_A_SENSE.has(c) || sameSense.has(c))) continue;
+    // a work left out of the catalog (a contest, scripture) is a sense of its own
+    if (inCatalog.has(qid(r.e.value)) || cs.some((c) => NOT_A_SENSE.has(c)) || (cs.some((c) => sameSense.has(c)) && isNarrative(cs))) continue;
     otherPop.set(r.l.value, Math.max(otherPop.get(r.l.value) ?? 0, Number(r.sl.value)));
   }
 }
@@ -86,7 +91,7 @@ export function otherNames(w, names, otherPop, looked = () => true) {
 }
 export const CHAR_MIN_POP = 40; // characters are only fetched for works this popular
 
-// text: contents of tools/catalog/20k.txt
+// text: contents of tools/catalog/common-words.txt (20k.txt plus subtitle words of seven languages, see words.mjs)
 export function makeAmbiguous(text) {
   const lines = text.split(/\s+/).filter(Boolean);
   const common = new Set(lines), top1k = new Set(lines.slice(0, 1000));

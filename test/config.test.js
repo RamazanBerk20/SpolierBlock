@@ -93,7 +93,7 @@ test('small helpers', () => {
 
 // ---------- custom works are indexed like catalog works ----------
 const catalog = JSON.parse(fs.readFileSync(new URL('./fixtures/catalog.small.json', import.meta.url)));
-const words = fs.readFileSync(new URL('../tools/catalog/20k.txt', import.meta.url), 'utf8');
+const words = fs.readFileSync(new URL('../tools/catalog/common-words.txt', import.meta.url), 'utf8');
 const bundle = { catalog, words, meta: buildIndex(catalog).meta, info: { builtAt: '2026-11-18T00:00:00Z' }, classes: {} };
 const matcher = ({ bin, meta }) => new Matcher(bin, meta);
 const CUSTOM = [{ id: 'custom:1', title: 'Hollow Pines', aliases: ['HPX'], type: 'game' }, { id: 'custom:2', title: 'Rain', aliases: [], type: 'book' }];

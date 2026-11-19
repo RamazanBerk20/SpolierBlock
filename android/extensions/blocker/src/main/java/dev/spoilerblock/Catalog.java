@@ -255,7 +255,7 @@ final class Catalog {
         RANK[Matcher.CHAR1] = 4; RANK[Matcher.PART] = 5; RANK[Matcher.TAG] = 6;
     }
 
-    /** The common-word list (tools/catalog/20k.txt), in first-occurrence order like the JS Set. */
+    /** The common-word list (tools/catalog/common-words.txt), in first-occurrence order like the JS Set. */
     static final class Words {
         final Set<String> common = new LinkedHashSet<>(), everyday = new HashSet<>(), top1k = new HashSet<>(), top3k = new HashSet<>();
 
@@ -291,8 +291,8 @@ final class Catalog {
     }
 
     private static final class Variant {
-        final String text; final boolean free, numbered, joined;
-        Variant(String text, boolean free, boolean numbered, boolean joined) { this.text = text; this.free = free; this.numbered = numbered; this.joined = joined; }
+        final String text; final boolean free, numbered, joined, orig;
+        Variant(String text, boolean free, boolean numbered, boolean joined, boolean orig) { this.text = text; this.free = free; this.numbered = numbered; this.joined = joined; this.orig = orig; }
     }
 
     private static boolean isSeq(String t, int j) { return j > 0 && (TO_ARABIC.containsKey(t) || TO_ROMAN.containsKey(t)); }
@@ -302,7 +302,7 @@ final class Catalog {
         boolean any = false;
         for (int j = 0; j < t.size() && !any; j++) any = isSeq(t.get(j), j);
         List<Variant> out = new ArrayList<>();
-        if (!any) { out.add(new Variant(join(t, " "), false, false, false)); return out; }
+        if (!any) { out.add(new Variant(join(t, " "), false, false, false, true)); return out; }
         List<String> base = new ArrayList<>(), swapped = new ArrayList<>();
         for (int j = 0; j < t.size(); j++) {
             String x = t.get(j);
@@ -312,11 +312,11 @@ final class Catalog {
         boolean free = base.size() >= 2 ? !low : base.size() == 1 && !words.everyday.contains(base.get(0)) && base.get(0).length() >= 3;
         boolean numbered = false;
         for (String b : base) if (!words.top1k.contains(b)) { numbered = true; break; }
-        out.add(new Variant(join(t, " "), free, numbered, false));
-        out.add(new Variant(join(swapped, " "), free, numbered, false));
+        out.add(new Variant(join(t, " "), free, numbered, false, true));
+        out.add(new Variant(join(swapped, " "), free, numbered, false, false));
         if (t.size() == 2 && isSeq(t.get(1), 1)) {
-            out.add(new Variant(t.get(0) + t.get(1), free, numbered, true));
-            out.add(new Variant(t.get(0) + swapped.get(1), free, numbered, true));
+            out.add(new Variant(t.get(0) + t.get(1), free, numbered, true, false));
+            out.add(new Variant(t.get(0) + swapped.get(1), free, numbered, true, false));
         }
         return out;
     }
@@ -325,7 +325,7 @@ final class Catalog {
         int[] works = new int[2]; int n;
         int kind, amb, labelRank, g;
         String label;
-        boolean free, numbered, oth = true;
+        boolean free, numbered, oth = true, orig;
 
         void add(int w) {
             for (int i = 0; i < n; i++) if (works[i] == w) return;
@@ -352,8 +352,12 @@ final class Catalog {
 
         Map<String, Integer> prefixCount = new HashMap<>();
         String[] prefix = new String[works.size()];
+        boolean[] colon = new boolean[works.size()];
         for (int i = 0; i < works.size(); i++) {
-            String p = prefix[i] = seriesPrefix(works.get(i).title, words);
+            String p = seriesPrefix(works.get(i).title, words);
+            colon[i] = p != null;
+            if (p == null) p = numberedStem(works.get(i).title);
+            prefix[i] = p;
             if (p != null) prefixCount.merge(join(Matcher.tokenize(p).toks, " "), 1, Integer::sum);
         }
         String[] seriesOf = new String[works.size()];
@@ -363,16 +367,16 @@ final class Catalog {
             Set<String> other = new HashSet<>(Arrays.asList(w.other));
             boolean ot = other.contains(w.title);
             for (String f : possessive(w.title)) for (Variant v : nameVariants(f, low, words)) {
-                add(keys, works, words, v.text, i, v.joined ? Matcher.ALIAS : Matcher.TITLE, w.title, v.free, v.numbered, ot);
+                add(keys, works, words, v.text, i, v.joined ? Matcher.ALIAS : Matcher.TITLE, w.title, v.free, v.numbered, ot, v.orig);
                 if (!v.joined && v.text.contains(" ")) add(keys, works, words, v.text, i, Matcher.TAG, w.title, false, false, ot);
             }
-            String p = prefix[i];
-            if (p != null && prefixCount.get(join(Matcher.tokenize(p).toks, " ")) >= 2) {
+            String p = prefix[i]; // a colon prefix shared by 2+ titles, or a name numbered in 3+ titles ("Battlefield")
+            if (p != null && prefixCount.get(join(Matcher.tokenize(p).toks, " ")) >= (colon[i] ? 2 : 3)) {
                 add(keys, works, words, p, i, Matcher.SERIES, p, false, false, other.contains(p));
                 add(keys, works, words, p, i, Matcher.TAG, p, false, false, other.contains(p));
                 seriesOf[i] = p;
             }
-            for (String a : w.aliases) for (String f : possessive(a)) for (Variant v : nameVariants(f, low, words)) add(keys, works, words, v.text, i, Matcher.ALIAS, w.title, v.free, v.numbered, other.contains(a));
+            for (String a : w.aliases) for (String f : possessive(a)) for (Variant v : nameVariants(f, low, words)) add(keys, works, words, v.text, i, Matcher.ALIAS, w.title, v.free, v.numbered, other.contains(a), v.orig);
             for (String c : w.characters) {
                 add(keys, works, words, c, i, Matcher.CHAR, w.title, false, false, other.contains(c));
                 List<String> parts = Matcher.tokenize(c).toks;
@@ -411,7 +415,7 @@ final class Catalog {
         while ((1 << bits) < n * 1.6) bits++;
         int slots = 1 << bits, mask = slots - 1;
         int[] u = new int[3 + slots * 3];
-        u[0] = Matcher.MAGIC; u[1] = bits; u[2] = 1; // index format 1
+        u[0] = Matcher.MAGIC; u[1] = bits; u[2] = 2; // index format 2
         for (Map.Entry<String, Key> en : keys.entrySet()) {
             Key e = en.getValue();
             String[] t = en.getKey().split(" ", -1);
@@ -423,12 +427,22 @@ final class Catalog {
             boolean top3 = true;
             for (String x : t) if (!words.top3k.contains(x)) { top3 = false; break; }
             boolean plainChar = e.kind == Matcher.CHAR && allCommon && (t[0].equals("the") || top3);
-            boolean common = plainChar || titleLike && !e.free && !e.numbered &&
-                (one ? digits(t[0]) || (words.isCommon(t[0]) && (low || e.kind != Matcher.TITLE || words.top3k.contains(t[0]))) : low && allCommon);
+            boolean numeric = true; // "10.5", "1917": need a media word or quotes
+            for (String x : t) if (hasLetter(x)) { numeric = false; break; }
+            boolean common = plainChar || titleLike && (numeric || !e.free && !e.numbered &&
+                (one ? words.isCommon(t[0]) && (low || e.kind != Matcher.TITLE || words.top3k.contains(t[0])) : low && allCommon));
             boolean cap = plainChar || titleLike && !e.free && (one || low || allCommon);
             boolean rare = titleLike && one && low && !common && !e.free;
             boolean other = e.oth && e.kind != Matcher.PART && e.kind != Matcher.CHAR1;
-            int v = (newIdx[e.g] << 8) | (rare ? 1 << 7 : 0) | (cap ? 1 << 6 : 0) | (common ? 1 << 5 : 0) | (e.amb << 4) | (other ? 1 << 3 : 0) | e.kind;
+            // strong enough in text read from pictures (see build-index.js)
+            List<String> real = new ArrayList<>();
+            for (String x : t) if (x.length() >= 3 && allLetters(x) && !LIGHT.contains(x)) real.add(x);
+            String last = t[t.length - 1];
+            boolean num = t.length >= 2 && (digits(last) || TO_ARABIC.containsKey(last)), numOk = false;
+            if (num) for (String x : real) if (x.length() >= 4 && !words.top3k.contains(x)) { numOk = true; break; }
+            boolean ocr = e.orig && !other && t.length >= 2 && (titleLike || e.kind == Matcher.CHAR) &&
+                (real.size() >= 2 && !(e.amb == 1 && low) || real.size() == 1 && !low && !words.isCommon(real.get(0)) || numOk);
+            int v = (newIdx[e.g] << 9) | (ocr ? 1 << 8 : 0) | (rare ? 1 << 7 : 0) | (cap ? 1 << 6 : 0) | (common ? 1 << 5 : 0) | (e.amb << 4) | (other ? 1 << 3 : 0) | e.kind;
             // buildIndexBinary: linear probing in insertion order
             int A = Matcher.SEED_A, B = Matcher.SEED_B;
             for (String tok : t) { int[] h = Matcher.tokHash(tok); A = Matcher.mixA(A, h[0]); B = Matcher.mixB(B, h[1]); }
@@ -472,6 +486,10 @@ final class Catalog {
     }
 
     private static void add(Map<String, Key> keys, List<Work> works, Words words, String str, int w, int kind, String label, boolean free, boolean numbered, boolean oth) {
+        add(keys, works, words, str, w, kind, label, free, numbered, oth, true);
+    }
+
+    private static void add(Map<String, Key> keys, List<Work> works, Words words, String str, int w, int kind, String label, boolean free, boolean numbered, boolean oth, boolean orig) {
         List<String> t = Matcher.tokenize(str).toks;
         if (t.isEmpty() || t.size() > Matcher.MAX_N || (t.size() == 1 && t.get(0).length() < 2)) return;
         if ((kind == Matcher.CHAR || kind == Matcher.PART) && t.size() == 1) {
@@ -489,10 +507,43 @@ final class Catalog {
         if (kind != Matcher.PART && kind != Matcher.CHAR1) e.oth &= oth;
         if (free) e.free = true;
         if (numbered) e.numbered = true;
+        if (orig) e.orig = true;
         if (RANK[kind] < RANK[e.kind]) e.kind = kind;
         if (RANK[kind] < e.labelRank) { e.label = label; e.labelRank = RANK[kind]; }
         if ((kind == Matcher.TITLE || kind == Matcher.ALIAS) && works.get(w).ambiguous) e.amb = 1;
     }
 
     static byte[] utf8(String s) { return s.getBytes(StandardCharsets.UTF_8); }
+
+    // function words that do not make a name strong in text read from pictures
+    private static final Set<String> LIGHT = new HashSet<>(Arrays.asList(
+        "the and for you are was his her its our not but all any who how why what with from this that new one two".split(" ")));
+
+    private static boolean allLetters(String s) {
+        if (s.isEmpty()) return false;
+        for (int i = 0; i < s.length(); ) { int c = s.codePointAt(i); if (!Character.isLetter(c)) return false; i += Character.charCount(c); }
+        return true;
+    }
+
+    private static boolean hasLetter(String s) {
+        for (int i = 0; i < s.length(); ) { int c = s.codePointAt(i); if (Character.isLetter(c)) return true; i += Character.charCount(c); }
+        return false;
+    }
+
+    /** "Battlefield" of "Battlefield 4" or "Battlefield V": the title without a final number, or null (see the JS). */
+    static String numberedStem(String title) {
+        String t = jsTrim(title);
+        int k = t.length();
+        while (k > 0 && !Matcher.jsSpace(t.charAt(k - 1))) k--;
+        if (k == 0) return null;
+        String n = t.substring(k);
+        int j = k;
+        while (j > 0 && Matcher.jsSpace(t.charAt(j - 1))) j--;
+        if (j == 0 || n.isEmpty()) return null;
+        boolean ok = digits(n) || n.matches("[IVXivx]+") && TO_ARABIC.containsKey(n.toLowerCase(java.util.Locale.ROOT));
+        if (!ok) return null;
+        String stem = t.substring(0, j);
+        for (String x : Matcher.tokenize(stem).toks) if (x.length() >= 4 && allLetters(x)) return stem;
+        return null;
+    }
 }

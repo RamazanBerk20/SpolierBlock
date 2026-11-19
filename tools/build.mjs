@@ -53,7 +53,7 @@ console.log(`image title matrix: ${clip.meta.n} names`);
 // common-word list of the ambiguity rules, the class list of the seven work types (same roots/subclasses as
 // tools/catalog/build.mjs), and the bundled catalog's date, from which the update's delta window is computed.
 fs.copyFileSync(catalogPath, `${data}/catalog.json`);
-fs.copyFileSync('tools/catalog/20k.txt', `${data}/common-words.txt`);
+fs.copyFileSync('tools/catalog/common-words.txt', `${data}/common-words.txt`);
 fs.writeFileSync(`${data}/catalog-classes.json`, JSON.stringify(await catalogClasses()));
 fs.writeFileSync(`${data}/catalog-info.json`, JSON.stringify({ builtAt: fs.statSync(catalogPath).mtime.toISOString(), works: catalog.works.length }));
 
