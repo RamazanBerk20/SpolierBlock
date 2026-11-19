@@ -16,6 +16,7 @@ import android.os.Build;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.View;
+import android.view.TextureView;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 
@@ -84,6 +85,7 @@ final class Images {
 
     private static final class Job {
         final View view; final State state; final Bitmap bmp;
+        byte[] rgb; long key; // the model's input and its hash, when already made on the capture thread
         Job(View view, State state, Bitmap bmp) { this.view = view; this.state = state; this.bmp = bmp; }
     }
 
@@ -97,6 +99,11 @@ final class Images {
     void candidates(View v, Scanner sc, List<View> out, boolean root) {
         if (v.getVisibility() != View.VISIBLE) return;
         if (!root && v instanceof ViewGroup && sc.isList((ViewGroup) v)) return;
+        if (isVideo(v)) {
+            if (v.getWidth() >= MIN_DP * density && v.getHeight() >= MIN_DP * density && v.getGlobalVisibleRect(visible)
+                && !(v instanceof TextureView && !((TextureView) v).isAvailable())) out.add(v);
+            return;
+        }
         if (v instanceof ImageView && v.getWidth() >= MIN_DP * density && v.getHeight() >= MIN_DP * density) {
             Drawable d = ((ImageView) v).getDrawable();
             if (d != null && !(d instanceof ColorDrawable)) { out.add(v); return; }
@@ -107,9 +114,43 @@ final class Images {
         }
     }
 
+    // ---------- video: a frame now and then (as the extension samples playing video) ----------
+    // A TextureView's frame is read back with getBitmap, a SurfaceView's with PixelCopy: neither draws or lays out the
+    // host's views. Only on-screen players, one frame of at most VIDEO_MAX px every VIDEO_MS; the last frame's verdict
+    // holds until the next one is in, and a player stays shaded until its first frame has one. A frame that cannot be
+    // read (a protected surface) gives no verdict and no shade: the post's text and pictures still count.
+    // shortcut: a player floating over a list (YouTube's inline player) is not inside the item and is not sampled.
+    static final int VIDEO_MAX = 448;
+    static final long VIDEO_MS = 5000;
+    private final android.graphics.Rect visible = new android.graphics.Rect();
+
+    static boolean isVideo(View v) { return v instanceof TextureView || v instanceof android.view.SurfaceView; }
+
+    private void captureVideo(View v, State st, java.util.function.Consumer<Bitmap> done) {
+        int w = v.getWidth(), h = v.getHeight();
+        float s = Math.min(1f, VIDEO_MAX / (float) Math.max(w, h));
+        int bw = Math.max(1, Math.round(w * s)), bh = Math.max(1, Math.round(h * s));
+        if (v instanceof TextureView) {
+            Bitmap b = ((TextureView) v).getBitmap(bw, bh);
+            if (b == null) unreadable(st); else done.accept(b);
+            return;
+        }
+        Bitmap b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
+        android.view.PixelCopy.request((android.view.SurfaceView) v, b, r -> {
+            if (r == android.view.PixelCopy.SUCCESS) done.accept(b); else unreadable(st);
+        }, sb.main);
+    }
+
+    private void unreadable(State st) { // main thread
+        st.done = true;
+        st.failed = false;
+        sb.verdictsChanged();
+    }
+
     /** What the view shows: its drawable (and the bitmap inside one) and size. Also part of the item fingerprint. */
     static long key(View v) {
         long h = v.getWidth() * 8191L + v.getHeight();
+        if (isVideo(v)) return (h * 31 + System.identityHashCode(v)) * 31 + SystemClock.uptimeMillis() / VIDEO_MS; // a new frame every VIDEO_MS
         if (v instanceof ImageView) {
             Drawable d = ((ImageView) v).getDrawable();
             if (d != null) {
@@ -134,6 +175,8 @@ final class Images {
         State s = states.get(v);
         if (s != null && s.key == k) return s;
         State st = new State(k);
+        boolean video = isVideo(v);
+        if (video && s != null && s.done) { st.done = true; st.failed = s.failed; st.hits = s.hits; st.ocr = s.ocr; } // until the new frame's verdict
         if (capturedThisFrame) { // one capture per frame (a second one would be dropped by the renderer): the rest next frame
             if (!retryPosted) { retryPosted = true; sb.main.postDelayed(this::retry, 16); }
             return st; // pending, not stored: requested again on the next judge
@@ -142,13 +185,15 @@ final class Images {
         states.put(v, st);
         long t0 = SystemClock.uptimeMillis();
         try {
-            capture(v, b -> enqueue(new Job(v, st, b)));
+            if (video) captureVideo(v, st, b -> enqueue(new Job(v, st, b)));
+            else capture(v, b -> enqueue(new Job(v, st, b)));
         } catch (FrameDropped e) {
             states.remove(v);
             if (!retryPosted) { retryPosted = true; sb.main.postDelayed(this::retry, 16); }
         } catch (Throwable t) {
-            Log.w(TAG, "capture of " + v.getClass().getName() + " failed, item stays covered", t);
-            st.done = st.failed = true;
+            Log.w(TAG, "capture of " + v.getClass().getName() + " failed" + (video ? "" : ", item stays covered"), t);
+            st.done = true;
+            st.failed = !video;
         }
         long dt = SystemClock.uptimeMillis() - t0;
         stCapture += dt; stCaptureN++; stCaptureMax = Math.max(stCaptureMax, dt);
@@ -165,7 +210,22 @@ final class Images {
 
     private void retry() { retryPosted = false; sb.invalidateAll(); } // a new frame: only items with pending images are judged again
 
-    private void enqueue(Job j) { // any thread
+    private void enqueue(Job j) { // any thread (the capture thread, mostly)
+        // a picture seen before (in this run or a saved one) is answered here, without waiting for the worker (which may
+        // still be loading the models at a cold start)
+        int S = clipSize;
+        if (S > 0 && savedReady && android.os.Looper.myLooper() != sb.main.getLooper()) { // never on the main thread
+            try {
+                j.rgb = visionPixels(j.bmp, S);
+                j.key = hash(j.rgb);
+                Object[] c;
+                synchronized (byPixels) { c = byPixels.get(j.key); }
+                @SuppressWarnings("unchecked") List<double[]> raw = c == null ? null : (List<double[]>) c[0];
+                if (c != null) { cacheHits++; post(j, new Object[]{map(raw), c[1]}); return; }
+            } catch (Throwable t) {
+                Log.w(TAG, "verdict cache: " + t);
+            }
+        }
         synchronized (jobs) {
             jobs.addFirst(j);
             while (jobs.size() > QUEUE) { // a fling: forget the oldest; still on screen, it is captured again on its next judge
@@ -344,9 +404,11 @@ final class Images {
             List<byte[]> todo = new ArrayList<>();
             List<Integer> at = new ArrayList<>();
             for (int i = 0; i < live.size(); i++) {
-                rgb[i] = visionPixels(live.get(i).bmp, clip.size);
-                keys[i] = hash(rgb[i]);
-                Object[] c = byPixels.get(keys[i]);
+                Job j = live.get(i);
+                rgb[i] = j.rgb != null ? j.rgb : visionPixels(j.bmp, clip.size);
+                keys[i] = j.rgb != null ? j.key : hash(rgb[i]);
+                Object[] c;
+                synchronized (byPixels) { c = byPixels.get(keys[i]); }
                 if (c != null) { res[i] = new Object[]{map((List<double[]>) c[0]), c[1]}; cacheHits++; post(live.get(i), res[i]); }
                 else { todo.add(rgb[i]); at.add(i); }
             }
@@ -363,7 +425,7 @@ final class Images {
                     long t2 = SystemClock.uptimeMillis();
                     String text = ocr(live.get(i).bmp);
                     stOcr += SystemClock.uptimeMillis() - t2; stOcrN++;
-                    byPixels.put(keys[i], new Object[]{raw, text});
+                    synchronized (byPixels) { byPixels.put(keys[i], new Object[]{raw, text}); }
                     unsaved++;
                     res[i] = new Object[]{map(raw), text};
                     post(live.get(i), res[i]);
@@ -418,6 +480,7 @@ final class Images {
     /** The title rows and the input size (1.5 MB, no model): enough to answer pictures from the saved verdicts. */
     private void loadClip() throws Exception {
         if (clip == null) clip = new Clip(sb.asset("spoilerblock/vision/clip-text.bin"), new String(sb.asset("spoilerblock/vision/clip-meta.json"), StandardCharsets.UTF_8));
+        clipSize = clip.size;
     }
 
     private boolean sessionsLoaded() { return (visionCpu != null || visionAccel != null) && ocr != null; }
@@ -440,9 +503,16 @@ final class Images {
         return pi.lastUpdateTime;
     }
 
+    private volatile int clipSize; // the model's input side, once the title rows are loaded
+    private volatile boolean savedReady; // the saved verdicts are in (or there were none)
+
     private void readSaved() {
         if (savedRead) return;
         savedRead = true;
+        try { readSavedFile(); } finally { savedReady = true; }
+    }
+
+    private void readSavedFile() {
         File f = savedFile();
         if (!f.exists()) return;
         long t0 = SystemClock.uptimeMillis();
@@ -455,12 +525,13 @@ final class Images {
                 int h = in.readInt();
                 List<double[]> hits = new ArrayList<>();
                 for (int k = 0; k < h; k++) hits.add(new double[]{in.readInt(), in.readDouble()});
-                byPixels.put(key, new Object[]{hits, in.readUTF()});
+                Object[] v = {hits, in.readUTF()};
+                synchronized (byPixels) { byPixels.put(key, v); }
             }
             Log.i(TAG, "saved image verdicts: " + n + " read in " + (SystemClock.uptimeMillis() - t0) + " ms");
         } catch (Throwable t) {
             Log.w(TAG, "saved image verdicts unreadable, starting afresh: " + t);
-            byPixels.clear();
+            synchronized (byPixels) { byPixels.clear(); }
         }
     }
 
@@ -471,8 +542,10 @@ final class Images {
         try (java.io.DataOutputStream out = new java.io.DataOutputStream(new java.io.BufferedOutputStream(new java.io.FileOutputStream(tmp)))) {
             out.writeInt(SAVED_VERSION);
             out.writeLong(build());
-            out.writeInt(byPixels.size());
-            for (Map.Entry<Long, Object[]> e : byPixels.entrySet()) { // least recently used first: read back in the same order
+            List<Map.Entry<Long, Object[]>> entries;
+            synchronized (byPixels) { entries = new ArrayList<>(byPixels.entrySet()); }
+            out.writeInt(entries.size());
+            for (Map.Entry<Long, Object[]> e : entries) { // least recently used first: read back in the same order
                 out.writeLong(e.getKey());
                 @SuppressWarnings("unchecked") List<double[]> hits = (List<double[]>) e.getValue()[0];
                 out.writeInt(hits.size());
@@ -554,16 +627,17 @@ final class Images {
     private void closeModels() {
         for (AutoCloseable c : new AutoCloseable[]{visionCpu, visionAccel, ocr}) try { if (c != null) c.close(); } catch (Throwable ignored) { }
         if (watchdog != null) watchdog.shutdownNow();
-        clip = null; ocr = null; watchdog = null; visionCpu = null; visionAccel = null;
+        clip = null; clipSize = 0; ocr = null; watchdog = null; visionCpu = null; visionAccel = null;
         loadFailed = false;
-        byPixels.clear();
+        savedReady = false;
+        synchronized (byPixels) { byPixels.clear(); }
         savedRead = false; // switched on again: read back from the file
     }
 
     final Accel accel;
 
     /** Title-check groups of the bundled index -> groups of the index in use (the same unless it was rebuilt). */
-    private List<double[]> map(List<double[]> raw) throws Exception {
+    private synchronized List<double[]> map(List<double[]> raw) throws Exception { // worker and capture threads
         Matcher m = sb.matcher;
         if (!sb.updatedIndex || raw.isEmpty() || raw.get(0)[0] == Clip.UNKNOWN) return raw;
         if (mappedFor != m) {

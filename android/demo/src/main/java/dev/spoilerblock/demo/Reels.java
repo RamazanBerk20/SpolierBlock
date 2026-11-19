@@ -57,6 +57,31 @@ final class Reels {
             }
         });
         rv.getViewTreeObserver().addOnDrawListener(() -> { MainActivity.frames++; a.checkChildren(rv); Sound.check(rv, "reels"); });
+        rv.post(() -> tapWrapper(a)); // after the activity resumed, as Instagram's viewer does when it opens
         return rv;
+    }
+
+    /**
+     * Instagram's Reels viewer wraps the activity window's callback (after SpoilerBlock's gate) with a gesture handler
+     * that passes moves on but keeps a plain tap to itself (static reading of 452.1: X.0qQM installs X.0qe2). This one
+     * does the same: a tap (no move past the slop) is "pause/play" and never reaches the views or the callbacks within.
+     */
+    static void tapWrapper(android.app.Activity a) {
+        android.view.Window w = a.getWindow();
+        android.view.Window.Callback inner = w.getCallback();
+        int slop = android.view.ViewConfiguration.get(a).getScaledTouchSlop();
+        float[] down = new float[2];
+        boolean[] moved = new boolean[1];
+        w.setCallback((android.view.Window.Callback) java.lang.reflect.Proxy.newProxyInstance(Reels.class.getClassLoader(),
+            new Class<?>[]{android.view.Window.Callback.class}, (proxy, m, args) -> {
+                if (m.getName().equals("dispatchTouchEvent")) {
+                    android.view.MotionEvent e = (android.view.MotionEvent) args[0];
+                    int act = e.getActionMasked();
+                    if (act == android.view.MotionEvent.ACTION_DOWN) { down[0] = e.getRawX(); down[1] = e.getRawY(); moved[0] = false; }
+                    else if (act == android.view.MotionEvent.ACTION_MOVE && Math.hypot(e.getRawX() - down[0], e.getRawY() - down[1]) > slop) moved[0] = true;
+                    if (act == android.view.MotionEvent.ACTION_UP && !moved[0]) { Log.i(MainActivity.TAG, "reels: tap kept by the app's window wrapper"); return true; }
+                }
+                try { return m.invoke(inner, args); } catch (java.lang.reflect.InvocationTargetException x) { throw x.getCause(); }
+            }));
     }
 }

@@ -76,8 +76,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         covers.clear();
         for (Map.Entry<View, Shade> e : shades.entrySet()) e.getKey().getOverlay().remove(e.getValue());
         shades.clear();
-        for (Map.Entry<View, android.graphics.drawable.ColorDrawable> e : pictureShades.entrySet()) e.getKey().getOverlay().remove(e.getValue());
-        pictureShades.clear();
+        for (View v : new ArrayList<>(pictureShades.keySet())) unshade(v);
         items.clear();
     }
 
@@ -94,11 +93,14 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         for (View v : new ArrayList<>(pictureShades.keySet())) if (!now.contains(v) && inside(v, item)) unshade(v);
         for (View v : now) {
             android.graphics.drawable.ColorDrawable d = pictureShades.get(v);
+            boolean inParent = v instanceof android.view.TextureView && v.getParent() instanceof ViewGroup;
             if (d == null) {
                 pictureShades.put(v, d = new android.graphics.drawable.ColorDrawable(Ui.on(v).shade));
-                v.getOverlay().add(d);
+                // a TextureView draws only its layer, never its overlay: its shade goes in the parent's, over it
+                (inParent ? ((ViewGroup) v.getParent()).getOverlay() : v.getOverlay()).add(d);
             }
-            d.setBounds(0, 0, v.getWidth(), v.getHeight());
+            if (inParent) d.setBounds(v.getLeft(), v.getTop(), v.getRight(), v.getBottom());
+            else d.setBounds(0, 0, v.getWidth(), v.getHeight());
         }
     }
 
@@ -109,7 +111,9 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
 
     private void unshade(View v) {
         android.graphics.drawable.ColorDrawable d = pictureShades.remove(v);
-        if (d != null) v.getOverlay().remove(d);
+        if (d == null) return;
+        v.getOverlay().remove(d);
+        if (v.getParent() instanceof ViewGroup) ((ViewGroup) v.getParent()).getOverlay().remove(d);
     }
 
     @Override public void onGlobalLayout() { layoutDirty = true; }
@@ -136,9 +140,16 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         return true;
     }
 
+    android.view.Window window; // an activity window's, for its TouchGate
+
+    /** Puts a TouchGate on top of the window's callback when something else (the app) wrapped it since. */
+    void gate() {
+        if (window != null && !(window.getCallback() instanceof TouchGate)) window.setCallback(new TouchGate(window.getCallback(), this));
+    }
+
     private void scan() {
         // a popup opened by what changed in this frame (typing -> suggestions) is found before its own first traversal
-        if (activityWindow) sb.checkWindows();
+        if (activityWindow) { sb.checkWindows(); gate(); }
         if (!sb.enabled) { if (!covers.isEmpty()) clear(); sb.silence(this, false); return; }
         long now = SystemClock.uptimeMillis();
         if (layoutDirty || now - lastDiscover > REDISCOVER_MS) {
@@ -179,7 +190,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     // ---------- cold start timings, once per process (logcat) ----------
 
     private static boolean coldLog = true;
-    private long firstFrame, firstShade, firstJudged;
+    private long firstFrame, firstShade;
 
     private void coldStart(long now) {
         long start = android.os.Process.getStartUptimeMillis();
@@ -273,8 +284,20 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         }
     }
 
-    // A ScrollView-like container holds one child whose children are the items.
+    private static final Map<Class<?>, Boolean> scrollViews = new HashMap<>();
+
+    /**
+     * A ScrollView-like container holds one child whose children are the items. A list or pager showing one page (a
+     * full-screen pager at rest: Reels, Shorts) holds one child too, but that child is the item itself.
+     */
     private static ViewGroup itemParent(ViewGroup c) {
+        Boolean sv = scrollViews.get(c.getClass());
+        if (sv == null) {
+            sv = false;
+            for (Class<?> k = c.getClass(); k != null && k != ViewGroup.class && !sv; k = k.getSuperclass()) sv = k.getName().endsWith("ScrollView");
+            scrollViews.put(c.getClass(), sv);
+        }
+        if (!sv) return c;
         for (int d = 0; d < 3 && c.getChildCount() == 1 && c.getChildAt(0) instanceof ViewGroup; d++) c = (ViewGroup) c.getChildAt(0);
         return c;
     }
@@ -478,7 +501,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         h = h * 31 + v.getWidth() * 8191L + v.getHeight();
         h = h * 31 + System.identityHashCode(v.getContentDescription());
         if (v instanceof TextView) h = h * 31 + System.identityHashCode(((TextView) v).getText());
-        else if (v instanceof android.widget.ImageView) h = h * 31 + Images.key(v); // a new picture is judged before it is drawn
+        else if (v instanceof android.widget.ImageView || Images.isVideo(v)) h = h * 31 + Images.key(v); // a new picture is judged before it is drawn
         else h = h * 31 + System.identityHashCode(SpoilerBlock.hookedText.get(v));
         if (v instanceof ViewGroup && !containers.contains(v)) { // nested lists are judged item by item
             ViewGroup g = (ViewGroup) v;
@@ -554,9 +577,9 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         }
         if (a == MotionEvent.ACTION_UP) {
             sb.main.removeCallbacks(preventLongPress);
-            cancelApp();
             Cover t = target;
             target = null;
+            cancelApp();
             t.tap(ev.getRawX(), ev.getRawY());
             return true;
         }
