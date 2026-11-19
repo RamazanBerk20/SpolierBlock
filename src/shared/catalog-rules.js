@@ -115,3 +115,52 @@ export function finalizeWork(w, aliasPairs, charPairs, ambiguous) {
   return { id: w.id, title: w.title, type: w.type, year: w.years.length ? Math.min(...w.years) : null, aliases, characters, pop: w.pop, ambiguous: ambiguous(w.title) };
 }
 export const compareWorks = (a, b) => b.pop - a.pop || a.id.localeCompare(b.id, 'en', { numeric: true });
+
+// ---- series membership ("More from this series", docs/agents/contract.md) ----
+// Wikidata "part of the series" (P179) and "media franchise" (P8345) of works. tools/catalog/series.mjs rolls them up
+// to one series per franchise and writes the catalog's `series` table: { seriesId: [label, ...the Wikidata series ids
+// that map to it] }. Works keep the series ids in `series`.
+export const seriesQuery = (b) => `SELECT ?w ?p ?s WHERE { VALUES ?w { ${values(b)} } VALUES ?p { wdt:P179 wdt:P8345 } ?w ?p ?s }`;
+const WORDCH = /[\p{L}\p{N}]/u;
+// A work Wikidata links to no series joins one by its title. A name of two words or more (not counting a leading
+// article) joins when the title starts with it followed by the end, a space, a digit, a colon or a dash ("Resident
+// Evil: Vendetta"), or ends with it after a word boundary, with no colon or dash before it ("Return to Silent Hill";
+// not "Ivan Vasilievich: Back to the Future"). shortcut: a title equal to a series name joins it whatever its type
+// ("The House of the Dead", the novel, joins the game series); add a year or type check if such joins show up. A one-word name is weak
+// ("Red", "Taxi", "Sherlock Holmes: A Game of Shadows" against BBC's "Sherlock"): it must not be an everyday word, the
+// series must hold a work of the same type, and the title must be the name alone or the name followed by a number, a
+// colon or a dash ("Underworld: Rise of the Lycans"). cands: [{ id, label, size, types: Set }] of series with 2+
+// works; common(word) -> true for everyday words. -> series id or null; the longest name wins, then the bigger series.
+export function titleSeries(title, type, cands, common = () => false) {
+  const t = title.toLowerCase();
+  let best = null;
+  for (const c of cands) {
+    const l = c.label.toLowerCase(), words = l.trim().split(/\s+/), n = words.length - (/^(the|a|an)$/.test(words[0]) ? 1 : 0);
+    if (!l || (n < 2 && (!c.types.has(type) || common(words[words.length - 1])))) continue;
+    let ok = t.startsWith(l) && (n >= 2 ? t.length === l.length || /[ 0-9:\-–—]/.test(t[l.length]) : /^( *[:\-–—]| *[0-9]|$)/.test(t.slice(l.length)));
+    const i = t.length - l.length; // "Return to Silent Hill": the name ends the title and no subtitle comes before it
+    if (n >= 2 && !ok && i > 0 && t.endsWith(l) && !WORDCH.test(t[i - 1]) && !/[:\-–—]/u.test(t.slice(0, i))) ok = true;
+    if (ok && (!best || l.length > best.label.length || (l.length === best.label.length && c.size > best.size))) best = c;
+  }
+  return best?.id ?? null;
+}
+// The title-fallback candidates of a catalog: its series with 2+ works.
+export function seriesCandidates(table, works) {
+  const size = new Map(), types = new Map();
+  for (const w of works) for (const s of w.series ?? []) {
+    size.set(s, (size.get(s) ?? 0) + 1);
+    (types.get(s) ?? types.set(s, new Set()).get(s)).add(w.type);
+  }
+  return Object.keys(table ?? {}).filter((s) => size.get(s) >= 2).map((s) => ({ id: s, label: table[s][0], size: size.get(s), types: types.get(s) }));
+}
+// New works (catalog update): Wikidata series ids (links: id -> raw ids) -> the catalog's series via its table, else
+// the title fallback. Sets work.series.
+export function assignSeries(works, links, table, cands, common) {
+  const toSeries = new Map();
+  for (const [s, [, ...raw]] of Object.entries(table ?? {})) for (const r of [s, ...raw]) (toSeries.get(r) ?? toSeries.set(r, []).get(r)).push(s);
+  for (const w of works) {
+    const ss = [...new Set((links.get(w.id) ?? []).flatMap((r) => toSeries.get(r) ?? []))];
+    const t = ss.length ? null : titleSeries(w.title, w.type, cands, common);
+    if (ss.length) w.series = ss; else if (t) w.series = [t];
+  }
+}

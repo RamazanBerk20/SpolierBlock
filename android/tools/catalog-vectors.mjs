@@ -34,7 +34,8 @@ const fetch = async (url, init) => {
 const stats = { queries: 0, bytes: 0 };
 const sinceYear = new Date(info.builtAt).getUTCFullYear() - 1;
 const known = new Set(catalog.works.map((w) => w.id));
-const fresh = await fetchDelta({ classes, sinceYear, known, ambiguous: makeAmbiguous(words), words, fetch, endpoint: 'mock', stats });
+const series = { table: catalog.series, works: catalog.works };
+const fresh = await fetchDelta({ classes, sinceYear, known, ambiguous: makeAmbiguous(words), words, series, fetch, endpoint: 'mock', stats });
 
 setCommonWords(words);
 const bundledBuilt = buildIndex(catalog);
@@ -53,6 +54,13 @@ assert.deepEqual(other.Q900000001, ['Zorblax']);
 assert.ok(other.Q900000009.includes('Hollow Crown'));
 assert.deepEqual(other.Q900000007, []);
 assert.deepEqual(other.Q900000008, []);
+
+// series: the sequel through Wikidata's Q462, GTA VII by its title; both are listed with their series in the index
+const seriesOf = Object.fromEntries(fresh.map((w) => [w.id, w.series ?? []]));
+const label = (id) => catalog.series[id]?.[0];
+assert.deepEqual(seriesOf.Q900000002.map(label), ['Star Wars']);
+assert.deepEqual(seriesOf.Q900000003.map(label), ['Grand Theft Auto']);
+assert.ok(built.meta.series.some((l) => l.includes(sw) && l.length > 20), 'sequel not listed with Star Wars');
 
 fs.writeFileSync(path.join(out, 'delta-http.json'), JSON.stringify({ sinceYear, exchanges }));
 fs.writeFileSync(path.join(out, 'delta-works.json'), JSON.stringify(fresh));

@@ -34,8 +34,15 @@ public class MatcherTest {
             JSONArray s = c.getJSONArray("seen");
             for (int j = 0; j < s.length(); j++) seen[s.getInt(j)] = true;
             List<String> got = new ArrayList<>();
-            for (int g : m.evaluate(c.getString("text"), seen)) got.add(m.labels[g]);
+            int[] gs = m.evaluate(c.getString("text"), seen);
+            for (int g : gs) got.add(m.labels[g]);
             List<String> want = strs(c.getJSONArray("expect"));
+            // "More from this series" of those groups (Matcher.moreFromSeries == matcher.js moreFromSeries)
+            got.add("more=" + java.util.Arrays.toString(m.moreFromSeries(gs)));
+            JSONArray mo = c.getJSONArray("more");
+            int[] wm = new int[mo.length()];
+            for (int j = 0; j < wm.length; j++) wm[j] = mo.getInt(j);
+            want.add("more=" + java.util.Arrays.toString(wm));
             if (!got.equals(want)) {
                 if (++failures <= 20) System.err.println("MISMATCH " + c.getString("text") + " seen=" + s + " js=" + want + " java=" + got);
             }

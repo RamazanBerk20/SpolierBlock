@@ -5,8 +5,8 @@
 // but catalogMeta.lastError is written, so the working index is never damaged.
 import { PRIORITY, MIN_SITELINKS, qid, yearOf, cleanTitle, batches, yearsQuery, aliasQuery, charQuery, charFallbackQuery,
   CHAR_MIN_POP, makeAmbiguous, finalizeWork, compareWorks, kindQuery, isNarrative, NOT_NARRATIVE, senseQuery, SENSE_BATCH,
-  shortName, senseNames, addSenses, otherNames } from '../shared/catalog-rules.js';
-import { buildIndex, setCommonWords, seriesPrefix } from '../shared/build-index.js';
+  shortName, senseNames, addSenses, otherNames, seriesQuery, seriesCandidates, assignSeries } from '../shared/catalog-rules.js';
+import { buildIndex, setCommonWords, seriesPrefix, isCommon } from '../shared/build-index.js';
 
 export const ENDPOINT = 'https://query.wikidata.org/sparql';
 export const INTERVALS = { daily: 1440, weekly: 10080, monthly: 43200 }; // minutes
@@ -70,9 +70,14 @@ export async function sparql(query, { fetch, endpoint, stats, sleep = wait }) {
 // of SENSE_BATCH names each); names beyond it, or all of them when Wikidata fails, get the fail-safe rule of otherNames.
 export const MAX_SENSE_QUERIES = 20;
 
-// -> new works (catalog schema) not in `known`, told as a story (isNarrative), with their "other" names.
-// words: the common-word list (series prefixes, as in the index builder).
-export async function fetchDelta({ classes, sinceYear, known, ambiguous, words, ...net }) {
+// The series lookup of new works sends at most this many queries (200 works each); works beyond it, or all of them when
+// Wikidata fails, get the title fallback (titleSeries).
+export const MAX_SERIES_QUERIES = 5;
+
+// -> new works (catalog schema) not in `known`, told as a story (isNarrative), with their "other" names and series.
+// words: the common-word list (series prefixes, as in the index builder). series: { table, works } of the catalog
+// (its `series` table and the works already in it, bundled and added).
+export async function fetchDelta({ classes, sinceYear, known, ambiguous, words, series = { table: {}, works: [] }, ...net }) {
   setCommonWords(words);
   const typeOf = new Map(); // class -> highest-priority type containing it
   for (const type of [...PRIORITY].reverse()) for (const c of classes[type] ?? []) typeOf.set(c, type);
@@ -108,7 +113,20 @@ export async function fetchDelta({ classes, sinceYear, known, ambiguous, words, 
   for (const b of batches(missing)) for (const r of await sparql(charFallbackQuery(b), net)) addTo(chars, qid(r.w.value), [r.cl.value, Number(r.cs?.value ?? 0)]);
   const fresh = list.map((w) => finalizeWork(w, aliases.get(w.id), chars.get(w.id), ambiguous));
   await markOther(fresh, new Set([...known, ...ids]), classes, net);
+  await markSeries(fresh, series, net);
   return fresh;
+}
+
+// Sets work.series like the catalog build (tools/catalog/series.mjs), within MAX_SERIES_QUERIES: Wikidata's series
+// ids mapped through the catalog's table; a series the catalog does not know is not added.
+async function markSeries(works, { table, works: inCatalog }, net) {
+  const links = new Map();
+  try {
+    for (const b of batches(works.map((w) => w.id)).slice(0, MAX_SERIES_QUERIES)) {
+      for (const r of await sparql(seriesQuery(b), net)) (links.get(qid(r.w.value)) ?? links.set(qid(r.w.value), []).get(qid(r.w.value))).push(qid(r.s.value));
+    }
+  } catch { /* busy, refused or an odd answer: the title fallback */ }
+  assignSeries(works, links, table, seriesCandidates(table, inCatalog), isCommon);
 }
 
 // Sets work.other like the catalog build does (tools/catalog/build.mjs step 5), within MAX_SENSE_QUERIES.
@@ -185,7 +203,8 @@ export async function runUpdate({ storage, loadBundle, now = Date.now(), ...net 
     const bundle = await loadBundle();
     const sinceYear = new Date(bundle.info.builtAt).getUTCFullYear() - 1;
     const known = new Set([...bundle.catalog.works.map((w) => w.id), ...prev.map((w) => w.id)]);
-    const fresh = await fetchDelta({ classes: bundle.classes, sinceYear, known, ambiguous: makeAmbiguous(bundle.words), words: bundle.words, stats, ...net });
+    const series = { table: bundle.catalog.series ?? {}, works: [...bundle.catalog.works, ...prev] };
+    const fresh = await fetchDelta({ classes: bundle.classes, sinceYear, known, ambiguous: makeAmbiguous(bundle.words), words: bundle.words, series, stats, ...net });
     if (fresh.length) {
       const added = [...prev, ...fresh];
       const { bin, meta: indexMeta } = rebuild(bundle, added, custom);

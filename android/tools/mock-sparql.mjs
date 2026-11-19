@@ -6,14 +6,16 @@
 import http from 'node:http';
 
 const D = (y, m = '01', d = '01') => `${y}-${m}-${d}T00:00:00Z`;
-// id, labels, classes (P31), sitelinks, dates per property, aliases [label, lang], characters (P674) / fallback (P1441)
+// id, labels, classes (P31), sitelinks, dates per property, aliases [label, lang], characters (P674) / fallback (P1441),
+// series (P179/P8345)
 export const WORLD = [
   { id: 'Q900000001', en: 'Zorblax Chronicles', cls: ['Q11424'], sl: 42, dates: { P577: [D(2026, '03')] },
     aliases: [['Zorblax', 'en'], ['Zorblax Chronicles', 'mul']], chars: [['Captain Vexa Morn', 12], ['Doctor Ilo Brask', 5], ['Zed', 50]] },
   // a sequel: must join the bundled "Star Wars" series group, so "I've seen Star Wars" covers it too
-  { id: 'Q900000002', en: 'Star Wars: Episode X – Dawn of Echoes', cls: ['Q11424'], sl: 60, dates: { P577: [D(2027, '12', '17')] },
+  // and the Star Wars series of the catalog (Wikidata's "Star Wars" franchise, Q462)
+  { id: 'Q900000002', en: 'Star Wars: Episode X – Dawn of Echoes', cls: ['Q11424'], sl: 60, dates: { P577: [D(2027, '12', '17')] }, series: ['Q462'],
     fallbackChars: [['Rey Skywalker', 30]] },
-  // label only in "mul"; numbered aliases
+  // label only in "mul"; numbered aliases; no series on Wikidata yet: joins "Grand Theft Auto" by its title
   { id: 'Q900000003', mul: 'Grand Theft Auto VII', cls: ['Q7889'], sl: 30, dates: { P577: [D(2028)] }, aliases: [['GTA VII', 'en'], ['GTA 7', 'mul']] },
   { id: 'Q900000004', en: 'Some Person', cls: ['Q5'], sl: 100, dates: { P577: [D(2026)] } }, // not a media type
   { id: 'Q1079', en: 'Breaking Bad', cls: ['Q5398426'], sl: 187, dates: { P580: [D(2025)] } }, // already bundled
@@ -59,6 +61,8 @@ export function rows(q) {
       .filter((s) => !!s.alias === alias)
       .map((s) => ({ l: lit(l, { 'xml:lang': 'en' }), e: { type: 'uri', value: uri(s.e) }, sl: lit(s.sl), cs: lit(s.cs.map(uri).join(' ')) })));
   }
+  if (q.includes('wdt:P8345')) return pick().flatMap((w) => (w.series ?? []).map((s) => ({ w: { type: 'uri', value: uri(w.id) },
+    p: { type: 'uri', value: 'http://www.wikidata.org/prop/direct/P179' }, s: { type: 'uri', value: uri(s) } })));
   if (q.includes('wdt:P7937')) return pick().flatMap((w) => [...w.cls, ...(w.kinds ?? [])].map((c) => ({ w: { type: 'uri', value: uri(w.id) }, v: { type: 'uri', value: uri(c) } })));
   if (q.includes('rdfs:label ?en')) return pick().map((w) => ({ w: { type: 'uri', value: uri(w.id) },
     ...(w.en ? { en: lit(w.en, { 'xml:lang': 'en' }) } : {}), ...(w.mul ? { mul: lit(w.mul, { 'xml:lang': 'mul' }) } : {}) }));
