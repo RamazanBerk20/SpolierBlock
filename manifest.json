@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SpolierBlock",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Blacks out spoilers about movies, shows, games and books you have not seen. Runs fully offline.",
   "browser_specific_settings": {
     "gecko": {
