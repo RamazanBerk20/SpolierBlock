@@ -59,6 +59,12 @@ A text match names a group: every work that carries the matched name.
 5. An image identified as a covered group's work covers regardless of style.
 6. An image that looks like film/show/game media but has no title covers only when `settings.unknownImages`, and never
    when the post's text names a seen work and no covered one.
+7. The post's own text outranks its pictures. When the post's own text names a seen work and no covered one, a title put
+   on its picture (rule 5) and names found only in text read from its pictures (OCR) do not cover.
+8. Text read from pictures is weaker evidence than text the author typed: it is often all capitals, so capital letters
+   prove nothing in it, and it is full of stray words. The caller passes it to the matcher after the post's own text,
+   separated by one U+0001 character (`own text` + `\u0001` + `OCR text`). The matcher's rules for the part after the
+   marker are in docs/how-it-works.md.
 
 ## Cover wording
 
@@ -78,3 +84,12 @@ whose check fails stays shaded.
 
 Buttons: `Show once`, `I've seen it` (absent for the unidentified image) and a settings button (`⋮`, accessible name
 `SpolierBlock settings`).
+
+`I've seen it` on a group with one work marks it seen at once. On a group with several works (a franchise name such as
+"Resident Evil", or an original and its remake) it opens a picker instead: title `Which have you seen?`, one row per work
+(`{title}` and `{type} · {year}`) with a checkbox, nothing ticked, the buttons `All`, `Cancel` and `Mark seen`, and the
+note `Posts that only say "{t}" stay covered until every one is marked.` Only the ticked works are written.
+
+The cover and the pending-picture shade take their colours from the surface they sit on (the page or the host app's
+actual background), not from the system setting: dark on a dark surface, light on a light one, never a white flash on a
+dark app.
