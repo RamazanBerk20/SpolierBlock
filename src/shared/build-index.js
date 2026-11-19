@@ -22,7 +22,7 @@ const commonWords = () => common;
 export const COMMON_POP = 60; // measured with tools/fp-text.mjs
 export const DISTINCT_POP = 45;
 const RULES = !globalThis.process?.env?.SB_NO_COMMON_RULE; // measurement switch for tools/fp-text.mjs "before" numbers
-const isCommon = (t) => /^\d+$/.test(t) || commonWords().has(t);
+export const isCommon = (t) => /^\d+$/.test(t) || commonWords().has(t);
 // "everyday word" for numbered short names: the 10k most frequent words (the 20k list also holds "gta", "halo")
 const isEveryday = (t) => (everyday ??= new Set([...commonWords()].slice(0, 10000))).has(t);
 // the most frequent words ("it", "lost", "home"): as a single-word name always "common", however popular the work
@@ -228,12 +228,18 @@ export function buildIndex(catalog) {
   }
   for (const [key, g] of typed) entries.set(key, (newIdx[g] << 9) | KIND.TITLE); // looked up only next to a type word
   const sorted = order.map((i) => groups[i]);
+  // Series (catalog `series` ids, not name groups): the works of each series with 2+ works, oldest first (no year
+  // last), in order of each series' most popular work. Read by Matcher.moreFromSeries.
+  const bySeries = new Map();
+  works.forEach((w, i) => { for (const s of w.series ?? []) (bySeries.get(s) ?? bySeries.set(s, []).get(s)).push(i); });
+  const older = (a, b) => (works[a].year || 1e4) - (works[b].year || 1e4) || a - b;
   const meta = {
     ids: works.map((w) => w.id),
     titles: works.map((w) => w.title),
     types: works.map((w) => w.type),
     years: works.map((w) => w.year ?? 0),
     groups: sorted.map((g) => [g.label, ...g.ws]),
+    series: [...bySeries.values()].filter((l) => l.length > 1).map((l) => l.sort(older)),
   };
   // Groups that name a work or series (not characters/aliases), most popular first: the CLIP row candidates.
   const titleGroups = sorted.map((g, i) => (g.titleLike ? i : -1)).filter((i) => i >= 0);

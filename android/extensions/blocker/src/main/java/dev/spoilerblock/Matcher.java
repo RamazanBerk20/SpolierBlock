@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -70,6 +71,8 @@ public final class Matcher {
     public final String[] ids, titles, types, labels;
     final int[] years;
     final int[][] groups; // group -> work indices (the JSON's [label, w...] without the label)
+    final int[][] series; // catalog series -> work indices, oldest first (index.json `series`)
+    private final Map<Integer, List<Integer>> seriesOf = new HashMap<>(); // work -> series indices
     private final int[] u;
     private final int mask;
     private final int fmt; // index format (see the JS): 2 = group << 9 with ocr, rare and other bits; 1 = group << 8; 0
@@ -98,6 +101,38 @@ public final class Matcher {
             groups[i] = new int[a.length() - 1];
             for (int j = 1; j < a.length(); j++) groups[i][j - 1] = a.getInt(j);
         }
+        JSONArray sr = m.optJSONArray("series"); // absent in indexes built before series
+        series = new int[sr == null ? 0 : sr.length()][];
+        for (int i = 0; i < series.length; i++) {
+            JSONArray a = sr.getJSONArray(i);
+            series[i] = new int[a.length()];
+            for (int j = 0; j < a.length(); j++) {
+                series[i][j] = a.getInt(j);
+                List<Integer> l = seriesOf.get(series[i][j]);
+                if (l == null) seriesOf.put(series[i][j], l = new ArrayList<>());
+                l.add(i);
+            }
+        }
+    }
+
+    /**
+     * matcher.js moreFromSeries: the works sharing a catalog series with any work of the groups gs, minus the groups'
+     * own works, oldest first (no year last). Seen works are the caller's to drop. (docs/agents/contract.md)
+     */
+    public int[] moreFromSeries(int[] gs) {
+        Set<Integer> own = new LinkedHashSet<>();
+        for (int g : gs) for (int w : groups[g]) own.add(w);
+        Set<Integer> ss = new LinkedHashSet<>(), out = new LinkedHashSet<>();
+        for (int w : own) { List<Integer> l = seriesOf.get(w); if (l != null) ss.addAll(l); }
+        for (int s : ss) for (int w : series[s]) if (!own.contains(w)) out.add(w);
+        Integer[] r = out.toArray(new Integer[0]);
+        Arrays.sort(r, (a, b) -> {
+            int c = (years[a] != 0 ? years[a] : 10000) - (years[b] != 0 ? years[b] : 10000);
+            return c != 0 ? c : a - b;
+        });
+        int[] x = new int[r.length];
+        for (int i = 0; i < x.length; i++) x[i] = r[i];
+        return x;
     }
 
     private static String[] strings(JSONArray a) throws Exception {

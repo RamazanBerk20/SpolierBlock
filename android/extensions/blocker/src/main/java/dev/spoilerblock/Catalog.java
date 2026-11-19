@@ -24,28 +24,41 @@ import java.util.regex.Pattern;
  * Node build. Any rule change must be made in the JS first.
  */
 final class Catalog {
-    /** One work in the catalog schema: { id, title, type, year, aliases, characters, pop, ambiguous, other? }. */
+    /** One work in the catalog schema: { id, title, type, year, aliases, characters, pop, ambiguous, other?, series? }. */
     static final class Work {
         String id, title, type;
         int year; // 0 = null
         String[] aliases = new String[0], characters = new String[0];
         String[] other = new String[0]; // names that mostly mean something else (tools/catalog/build.mjs)
+        String[] series = new String[0]; // the catalog series it belongs to (tools/catalog/series.mjs)
         double pop;
         boolean ambiguous;
     }
 
     // ---------- catalog.json (streamed) ----------
 
-    static List<Work> readWorks(Reader r) throws IOException {
+    /** The catalog's works, plus its `series` table: { seriesId: [label, ...ids mapped to it] } (series.mjs). */
+    static final class Works extends ArrayList<Work> {
+        final LinkedHashMap<String, String[]> series = new LinkedHashMap<>();
+    }
+
+    static Works readWorks(Reader r) throws IOException {
         Json j = new Json(r);
-        List<Work> works = null;
+        Works works = null;
+        LinkedHashMap<String, String[]> series = new LinkedHashMap<>();
         j.beginObject();
         while (j.hasNext()) {
-            if (j.nextName().equals("works")) works = readWorkArray(j);
-            else j.skipValue();
+            String k = j.nextName();
+            if (k.equals("works")) { works = new Works(); works.addAll(readWorkArray(j)); }
+            else if (k.equals("series")) {
+                j.beginObject();
+                while (j.hasNext()) { String id = j.nextName(); series.put(id, strings(j)); }
+                j.endObject();
+            } else j.skipValue();
         }
         j.endObject();
         if (works == null) throw new IOException("catalog has no works");
+        works.series.putAll(series);
         return works;
     }
 
@@ -68,6 +81,7 @@ final class Catalog {
                     case "aliases": w.aliases = strings(j); break;
                     case "characters": w.characters = strings(j); break;
                     case "other": w.other = strings(j); break;
+                    case "series": w.series = strings(j); break;
                     default: j.skipValue();
                 }
             }
@@ -100,6 +114,7 @@ final class Catalog {
             o.append(",\"pop\":").append(num(w.pop));
             o.append(",\"ambiguous\":").append(w.ambiguous);
             if (w.other.length > 0) { o.append(",\"other\":"); strs(o, w.other); }
+            if (w.series.length > 0) { o.append(",\"series\":"); strs(o, w.series); }
             o.append('}');
         }
         o.append(']');
@@ -509,6 +524,24 @@ final class Catalog {
             o.append('[');
             Json.quote(o, g.label);
             for (int w : g.ws) o.append(',').append(w);
+            o.append(']');
+        }
+        // series (build-index.js): the works of each series with 2+ works, oldest first (no year last), in order of
+        // each series' most popular work
+        LinkedHashMap<String, List<Integer>> bySeries = new LinkedHashMap<>();
+        for (int i = 0; i < works.size(); i++) for (String s : works.get(i).series) bySeries.computeIfAbsent(s, x -> new ArrayList<>()).add(i);
+        o.append("],\"series\":[");
+        boolean first = true;
+        for (List<Integer> l : bySeries.values()) {
+            if (l.size() < 2) continue;
+            l.sort((a, b) -> {
+                int ya = works.get(a).year != 0 ? works.get(a).year : 10000, yb = works.get(b).year != 0 ? works.get(b).year : 10000;
+                return ya != yb ? ya - yb : a - b;
+            });
+            if (!first) o.append(',');
+            first = false;
+            o.append('[');
+            for (int k = 0; k < l.size(); k++) { if (k > 0) o.append(','); o.append(l.get(k)); }
             o.append(']');
         }
         o.append("]}");

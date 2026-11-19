@@ -161,13 +161,27 @@
   const TITLE_LIKE = (k) => k === KIND.TITLE || k === KIND.ALIAS || k === KIND.SERIES;
 
   class Matcher {
-    // meta: { ids, titles, types, years, groups: [[label, workIdx...]...] } from data/index.json
+    // meta: { ids, titles, types, years, groups: [[label, workIdx...]...], series: [[workIdx...]...] } from data/index.json
     constructor(buf, meta) {
       this.u = new Uint32Array(buf);
       if (this.u[0] !== MAGIC) throw new Error('bad index');
       this.mask = (1 << this.u[1]) - 1;
       this.fmt = this.u[2];
       this.meta = meta;
+    }
+
+    // "More from this series" (docs/agents/contract.md): the works sharing a catalog series with any work of the
+    // groups gs, minus the groups' own works, oldest first (no year last). Seen works are the caller's to drop.
+    moreFromSeries(gs) {
+      const { groups, years, series = [] } = this.meta;
+      if (!this.seriesOf) {
+        this.seriesOf = new Map(); // workIdx -> series indices
+        series.forEach((l, s) => { for (const w of l) (this.seriesOf.get(w) ?? this.seriesOf.set(w, []).get(w)).push(s); });
+      }
+      const own = new Set(gs.flatMap((g) => groups[g].slice(1)));
+      const out = new Set();
+      for (const s of new Set([...own].flatMap((w) => this.seriesOf.get(w) ?? []))) for (const w of series[s]) if (!own.has(w)) out.add(w);
+      return [...out].sort((a, b) => (years[a] || 1e4) - (years[b] || 1e4) || a - b);
     }
 
     lookup(A, B) {

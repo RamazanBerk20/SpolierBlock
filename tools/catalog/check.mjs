@@ -7,7 +7,8 @@ const W = cat.works;
 const types = new Set(['movie', 'tv', 'game', 'book', 'anime', 'manga', 'comic']);
 const keys = 'id title type year aliases characters pop ambiguous'.split(' ').sort().join();
 W.forEach((w, i) => {
-  assert.equal(Object.keys(w).filter((k) => k !== 'other').sort().join(), keys, `keys ${w.id}`);
+  assert.equal(Object.keys(w).filter((k) => k !== 'other' && k !== 'series').sort().join(), keys, `keys ${w.id}`);
+  assert.ok(w.series === undefined || (w.series.length && w.series.every((s) => cat.series[s])), `series ${w.id}`);
   assert.ok(w.other === undefined || (w.other.length && w.other.every((n) => typeof n === 'string')), `other ${w.id}`);
   assert.match(w.id, /^Q\d+$/); assert.ok(w.title && typeof w.title === 'string');
   assert.ok(types.has(w.type), 'type ' + w.id);
@@ -30,4 +31,6 @@ const al = (t) => (find(t)?.aliases ?? []).map((a) => a.toLowerCase());
 assert.ok(al('Grand Theft Auto VI').some((a) => a === 'gta vi' || a === 'gta 6'), 'GTA VI alias');
 assert.ok(al('Grand Theft Auto V').some((a) => a === 'gta v' || a === 'gta 5'), 'GTA V alias');
 if (!al('The Last of Us Part II').some((a) => a.includes('tlou'))) console.warn('WARN: no TLOU alias for The Last of Us Part II');
-console.log('OK', W.length, 'works');
+const inSeries = (t, n) => { const w = find(t); assert.ok(w?.series, t); assert.ok(W.filter((x) => x.series?.includes(w.series[0])).length >= n, t + ' series'); };
+inSeries('Resident Evil Village', 40); inSeries('Silent Hill f', 13); inSeries('God of War Ragnarök', 9);
+console.log('OK', W.length, 'works,', W.filter((w) => w.series).length, 'in a series');

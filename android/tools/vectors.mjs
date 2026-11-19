@@ -21,8 +21,8 @@ function vectorsFor(m, meta) {
   const v = [];
   const run = (text, seen = []) => {
     const s = new Set(seen);
-    const labels = m.evaluate(text, (g) => meta.groups[g].slice(1).every((w) => s.has(w))).map((g) => meta.groups[g][0]);
-    v.push({ text, seen, expect: labels });
+    const gs = m.evaluate(text, (g) => meta.groups[g].slice(1).every((w) => s.has(w))), labels = gs.map((g) => meta.groups[g][0]);
+    v.push({ text, seen, expect: labels, more: m.moreFromSeries(gs) }); // more: "More from this series" (work indices)
     return labels;
   };
   return { v, run };

@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { buildIndex } from '../tools/build-index.mjs';
-import { runUpdate, rebuild, mergeCatalog, alarmPlan, deltaQuery, fetchDelta, customWorks, MAX_SENSE_QUERIES } from '../src/background/catalog-update.js';
+import { runUpdate, rebuild, mergeCatalog, alarmPlan, deltaQuery, fetchDelta, customWorks, MAX_SENSE_QUERIES,
+  MAX_SERIES_QUERIES } from '../src/background/catalog-update.js';
 const { Matcher } = globalThis.SBMatcher;
 
 const catalog = JSON.parse(fs.readFileSync(new URL('./fixtures/catalog.small.json', import.meta.url)));
@@ -47,7 +48,7 @@ test('delta query: dated on or after the window start, sitelinks bar, P31 return
 // fake SPARQL endpoint: answers the query kinds runUpdate sends. senses: label -> [{ e, sl, cs }]; kinds: id -> classes
 const json = (rows) => new Response(JSON.stringify({ results: { bindings: rows } }), { status: 200 });
 const wd = (id) => ({ value: 'http://www.wikidata.org/entity/' + id });
-function mockFetch(mode, { senses = {}, kinds = {}, senseMode = 'ok' } = {}) {
+function mockFetch(mode, { senses = {}, kinds = {}, senseMode = 'ok', seriesRows = [], seriesMode = 'ok' } = {}) {
   const calls = [];
   return Object.assign(async (url, init) => {
     const q = new URLSearchParams(init.body).get('query');
@@ -59,6 +60,10 @@ function mockFetch(mode, { senses = {}, kinds = {}, senseMode = 'ok' } = {}) {
       const labels = [...q.matchAll(/("(?:[^"\\]|\\.)*")@en/g)].map((m) => JSON.parse(m[1]));
       return json(labels.flatMap((l) => (senses[l] ?? []).filter((s) => !s.alias === q.includes('rdfs:label ?l'))
         .map((s) => ({ l: { value: l }, e: wd(s.e), sl: { value: String(s.sl) }, cs: { value: (s.cs ?? []).map((c) => wd(c).value).join(' ') } }))));
+    }
+    if (q.includes('wdt:P8345')) {
+      if (seriesMode === '429') return new Response('slow down', { status: 429, headers: { 'retry-after': '1' } });
+      return json(seriesRows.map(([w, s]) => ({ w: wd(w), s: wd(s) })));
     }
     if (q.includes('wdt:P7937')) return json(Object.entries(kinds).flatMap(([id, cs]) => cs.map((c) => ({ w: wd(id), v: wd(c) }))));
     if (q.includes('hint:rangeSafe')) return json(q.includes('P577') ? [{ item: wd(NEW.id), cls: wd('Q7889'), sl: { value: '22' } }, { item: wd(NEW.id), cls: wd('Q5'), sl: { value: '22' } },
@@ -79,7 +84,7 @@ test('successful update stores a rebuilt index in one write; the new work matche
   const meta = await runUpdate({ storage, loadBundle: async () => bundle, fetch, endpoint: 'http://mock/sparql', now: 1000, sleep: async () => {} });
   assert.equal(meta.lastError, null);
   assert.equal(meta.added, 1);
-  assert.equal(meta.stats.queries, 9); // 3 date windows, labels, kinds, years, aliases, 2 senses (no characters below popularity 40)
+  assert.equal(meta.stats.queries, 10); // 3 date windows, labels, kinds, years, aliases, 2 senses, series (no characters below popularity 40)
   const idx = storage.data.catalogIndex, bin = Buffer.from(idx.bin, 'base64');
   const m = new Matcher(bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.length), idx.meta);
   assert.deepEqual(m.evaluate('Moonfall Protocol has a wild ending').map((g) => idx.meta.groups[g][0]), ['Moonfall Protocol']);
@@ -145,6 +150,38 @@ test('update: the sense lookup sends at most MAX_SENSE_QUERIES queries', async (
   assert.equal(senseCalls.length, MAX_SENSE_QUERIES);
   // 10 batches of 150 names were looked up (no other sense); the rest, unconfirmed two-word titles, fail safe
   assert.equal(works.filter((w) => w.other).length, 4000 - (MAX_SENSE_QUERIES / 2) * 150);
+});
+
+test('update: new works join the catalog series, from Wikidata or else by title', async () => {
+  // the catalog knows "Moonfall" (Q10, also reached through Wikidata's Q11) and "Moonfall Protocol" (Q20)
+  const series = { table: { Q10: ['Moonfall', 'Q11'], Q20: ['Moonfall Protocol'] },
+    works: [{ type: 'game', series: ['Q10'] }, { type: 'game', series: ['Q10'] }, { type: 'movie', series: ['Q20'] }, { type: 'movie', series: ['Q20'] }] };
+  const run = (opts) => fetchDelta({ classes: bundle.classes, sinceYear: 2025, known: new Set(), ambiguous: () => false, words, series, ...net(mockFetch('ok', opts)) });
+  // Wikidata's answer wins over the title (Q999 is unknown to the catalog and left out)
+  assert.deepEqual((await run({ seriesRows: [[NEW.id, 'Q11'], [NEW.id, 'Q999']] }))[0].series, ['Q10']);
+  assert.deepEqual((await run({ seriesMode: '429' }))[0].series, ['Q20']); // lookup failed: the title names "Moonfall Protocol"
+  assert.deepEqual((await run({ seriesRows: [[NEW.id, 'Q999']] }))[0].series, ['Q20']); // only unknown series: by title
+  // the update stores them, and the rebuilt index lists the new work in the series
+  const storage = memStorage(), cat = { ...catalog, series: { Q10: ['Some Saga', 'Q11'] }, works: catalog.works.map((w, i) => (i < 2 ? { ...w, series: ['Q10'] } : w)) };
+  const b = { ...bundle, catalog: cat, meta: buildIndex(cat).meta };
+  const meta = await runUpdate({ storage, loadBundle: async () => b, fetch: mockFetch('ok', { seriesRows: [[NEW.id, 'Q11']] }), endpoint: 'x', now: 1, sleep: async () => {} });
+  assert.equal(meta.lastError, null);
+  const im = storage.data.catalogIndex.meta, at = (id) => im.ids.indexOf(id);
+  assert.deepEqual(im.series, [[at(cat.works[0].id), at(cat.works[1].id), at(NEW.id)].sort((x, y) => (im.years[x] || 1e4) - (im.years[y] || 1e4) || x - y)]);
+});
+
+test('update: the series lookup sends at most MAX_SERIES_QUERIES queries', async () => {
+  const many = Array.from({ length: 2000 }, (_, i) => `Q${990000000 + i}`);
+  const calls = [];
+  const fetch = async (url, init) => {
+    const q = new URLSearchParams(init.body).get('query');
+    if (q.includes('wdt:P8345')) calls.push(1);
+    if (q.includes('hint:rangeSafe')) return json(q.includes('P577') ? many.map((id) => ({ item: wd(id), cls: wd('Q7889'), sl: { value: '20' } })) : []);
+    if (q.includes('rdfs:label ?en')) return json([...q.matchAll(/wd:(Q\d+)/g)].map((m) => ({ w: wd(m[1]), en: { value: `Title ${m[1]}` } })));
+    return json([]);
+  };
+  await fetchDelta({ classes: bundle.classes, sinceYear: 2025, known: new Set(), ambiguous: () => false, words, ...net(fetch) });
+  assert.equal(calls.length, MAX_SERIES_QUERIES);
 });
 
 test('hand-entered works are never flagged', () => {

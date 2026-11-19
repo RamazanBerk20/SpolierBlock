@@ -7,6 +7,8 @@ import { TYPES, EXCLUDE, PRIORITY, qid, yearOf, cleanTitle, batches, subclassQue
   charFallbackQuery, CHAR_MIN_POP, makeAmbiguous, finalizeWork, compareWorks, kindQuery, isNarrative, NOT_NARRATIVE, senseQuery,
   SAME_SENSE_ROOTS, shortName, senseNames, addSenses, otherNames } from '../../src/shared/catalog-rules.js';
 import { seriesPrefix } from '../build-index.mjs';
+import { isCommon, setCommonWords } from '../../src/shared/build-index.js';
+import { fetchSeries, resolveSeries } from './series.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CACHE = join(here, 'cache');
@@ -173,5 +175,11 @@ for (const w of result) {
 }
 console.log('works with names that mostly mean something else', result.filter((w) => w.other).length);
 
-writeFileSync(OUT, '{"version":1,"works":[\n' + result.map((w) => JSON.stringify(w)).join(',\n') + '\n]}\n');
+// 6. series membership ("More from this series"), see series.mjs
+setCommonWords(readFileSync(join(here, 'common-words.txt'), 'utf8'));
+const { links, info } = await fetchSeries(result.map((w) => w.id), sparql);
+const seriesTable = resolveSeries(result, links, info, isCommon);
+console.log('works in a series', result.filter((w) => w.series).length, 'series', Object.keys(seriesTable).length);
+
+writeFileSync(OUT, '{"version":1,"series":' + JSON.stringify(seriesTable) + ',\n"works":[\n' + result.map((w) => JSON.stringify(w)).join(',\n') + '\n]}\n');
 console.log('wrote', result.length, 'works to', OUT);

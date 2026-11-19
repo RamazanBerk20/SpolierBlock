@@ -25,6 +25,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Port of src/background/catalog-update.js: the opt-in catalog refresh and the ONLY network use of the blocker.
@@ -84,6 +85,9 @@ final class CatalogUpdate {
     static String kindQuery(List<String> b) {
         return "SELECT ?w ?p ?v WHERE { VALUES ?w { " + values(b) + " } VALUES ?p { wdt:P31 wdt:P136 wdt:P7937 } ?w ?p ?v }";
     }
+    static String seriesQuery(List<String> b) {
+        return "SELECT ?w ?p ?s WHERE { VALUES ?w { " + values(b) + " } VALUES ?p { wdt:P179 wdt:P8345 } ?w ?p ?s }";
+    }
     static String senseQuery(List<String> names, String prop) {
         StringBuilder v = new StringBuilder();
         for (String n : names) {
@@ -94,6 +98,74 @@ final class CatalogUpdate {
         }
         return "SELECT ?l ?e ?sl (GROUP_CONCAT(DISTINCT ?c) AS ?cs) WHERE { VALUES ?l { " + v + " } ?e " + prop +
             " ?l ; wikibase:sitelinks ?sl . FILTER(?sl >= " + Catalog.MIN_SITELINKS + ") OPTIONAL { ?e wdt:P31 ?c } } GROUP BY ?l ?e ?sl";
+    }
+
+    // ---------- catalog-rules.js: series membership ----------
+
+    /** The series lookup of new works sends at most this many queries (200 works each); the rest get titleSeries. */
+    static final int MAX_SERIES_QUERIES = 5;
+    private static final Pattern WORDCH = Pattern.compile("[\\p{L}\\p{N}]"), SERIES_AFTER = Pattern.compile("[ 0-9:\\-–—]"),
+        SERIES_AFTER1 = Pattern.compile("^( *[:\\-–—]| *[0-9]|$)"), SUBTITLE = Pattern.compile("[:\\-–—]"),
+        ARTICLE = Pattern.compile("^(the|a|an)$");
+
+    static final class SeriesCand {
+        final String id, label; final int size; final Set<String> types;
+        SeriesCand(String id, String label, int size, Set<String> types) { this.id = id; this.label = label; this.size = size; this.types = types; }
+    }
+
+    private static boolean wordCh(char c) { return WORDCH.matcher(String.valueOf(c)).matches(); }
+
+    /** catalog-rules.js titleSeries: the series a work Wikidata links to none joins by its title, or null. */
+    static String titleSeries(String title, String type, List<SeriesCand> cands, Catalog.Words words) {
+        String t = title.toLowerCase(java.util.Locale.ROOT);
+        SeriesCand best = null;
+        for (SeriesCand c : cands) {
+            String l = c.label.toLowerCase(java.util.Locale.ROOT);
+            List<String> ws = Catalog.splitSpace(Catalog.jsTrim(l));
+            int n = ws.size() - (ARTICLE.matcher(ws.get(0)).matches() ? 1 : 0);
+            if (l.isEmpty() || (n < 2 && (!c.types.contains(type) || words.isCommon(ws.get(ws.size() - 1))))) continue;
+            boolean ok = t.startsWith(l) && (n >= 2 ? t.length() == l.length() || SERIES_AFTER.matcher(String.valueOf(t.charAt(l.length()))).matches()
+                : SERIES_AFTER1.matcher(t.substring(l.length())).find());
+            int i = t.length() - l.length();
+            if (n >= 2 && !ok && i > 0 && t.endsWith(l) && !wordCh(t.charAt(i - 1)) && !SUBTITLE.matcher(t.substring(0, i)).find()) ok = true;
+            if (ok && (best == null || l.length() > best.label.length() || (l.length() == best.label.length() && c.size > best.size))) best = c;
+        }
+        return best == null ? null : best.id;
+    }
+
+    /** catalog-rules.js seriesCandidates: the catalog's series with 2+ works. */
+    static List<SeriesCand> seriesCandidates(Map<String, String[]> table, List<Catalog.Work> works) {
+        Map<String, Integer> size = new HashMap<>();
+        Map<String, Set<String>> types = new HashMap<>();
+        for (Catalog.Work w : works) for (String s : w.series) {
+            size.merge(s, 1, Integer::sum);
+            types.computeIfAbsent(s, x -> new HashSet<>()).add(w.type);
+        }
+        List<SeriesCand> out = new ArrayList<>();
+        for (Map.Entry<String, String[]> e : table.entrySet()) {
+            Integer n = size.get(e.getKey());
+            if (n != null && n >= 2) out.add(new SeriesCand(e.getKey(), e.getValue()[0], n, types.get(e.getKey())));
+        }
+        return out;
+    }
+
+    /** catalog-rules.js assignSeries: Wikidata series ids (links) -> the catalog's series via its table, else by title. */
+    static void assignSeries(List<Catalog.Work> works, Map<String, List<String>> links, Map<String, String[]> table, List<SeriesCand> cands,
+                             Catalog.Words words) {
+        Map<String, List<String>> toSeries = new HashMap<>();
+        for (Map.Entry<String, String[]> e : table.entrySet()) {
+            String[] v = e.getValue();
+            toSeries.computeIfAbsent(e.getKey(), x -> new ArrayList<>()).add(e.getKey());
+            for (int k = 1; k < v.length; k++) toSeries.computeIfAbsent(v[k], x -> new ArrayList<>()).add(e.getKey());
+        }
+        for (Catalog.Work w : works) {
+            LinkedHashSet<String> ss = new LinkedHashSet<>();
+            List<String> raw = links.get(w.id);
+            if (raw != null) for (String r : raw) { List<String> m = toSeries.get(r); if (m != null) ss.addAll(m); }
+            if (!ss.isEmpty()) { w.series = ss.toArray(new String[0]); continue; }
+            String t = titleSeries(w.title, w.type, cands, words);
+            if (t != null) w.series = new String[]{t};
+        }
     }
 
     // ---------- catalog-rules.js: narrative works and names that mostly mean something else ----------
@@ -233,7 +305,8 @@ final class CatalogUpdate {
 
     /** New works (catalog schema) dated since sinceYear that are not in `known`; types from the bundled class list. */
     List<Catalog.Work> fetchDelta(Map<String, List<String>> classes, int sinceYear, Set<String> known, Catalog.Ambiguity amb,
-                                  Catalog.Words words) throws Failure, InterruptedException {
+                                  Catalog.Words words, Map<String, String[]> seriesTable, List<Catalog.Work> seriesWorks)
+        throws Failure, InterruptedException {
         Map<String, String> typeOf = new HashMap<>(); // class -> highest-priority type containing it
         for (int p = Catalog.PRIORITY.length - 1; p >= 0; p--) {
             List<String> cs = classes.get(Catalog.PRIORITY[p]);
@@ -299,6 +372,7 @@ final class CatalogUpdate {
             Set<String> inCatalog = new HashSet<>(known);
             inCatalog.addAll(ids);
             markOther(out, inCatalog, classes, words);
+            markSeries(out, seriesTable, seriesWorks, words);
             return out;
         } catch (RuntimeException e) { // a well-formed answer of the wrong shape
             throw new Failure("Wikidata sent an unreadable answer");
@@ -355,6 +429,23 @@ final class CatalogUpdate {
             }
             if (!other.isEmpty()) w.other = other.toArray(new String[0]);
         }
+    }
+
+    /** Sets work.series like the catalog build, with at most MAX_SERIES_QUERIES queries; title fallback as in the JS. */
+    private void markSeries(List<Catalog.Work> works, Map<String, String[]> table, List<Catalog.Work> inCatalog, Catalog.Words words)
+        throws InterruptedException {
+        Map<String, List<String>> links = new HashMap<>();
+        List<String> ids = new ArrayList<>();
+        for (Catalog.Work w : works) ids.add(w.id);
+        try {
+            List<List<String>> bs = batches(ids);
+            for (List<String> b : bs.subList(0, Math.min(bs.size(), MAX_SERIES_QUERIES))) for (Map<String, String[]> r : sparql(seriesQuery(b))) {
+                links.computeIfAbsent(Catalog.qid(val(r, "w")), x -> new ArrayList<>()).add(Catalog.qid(val(r, "s")));
+            }
+        } catch (Failure | RuntimeException e) {
+            // busy, refused or an odd answer: the title fallback
+        }
+        assignSeries(works, links, table, seriesCandidates(table, inCatalog), words);
     }
 
     private static Object[] charPair(Map<String, String[]> r) {
@@ -473,8 +564,10 @@ final class CatalogUpdate {
     /** Bundled data the update needs, read from the APK's assets (or test files). */
     static final class Bundle {
         final List<Catalog.Work> catalog; final String words; final Map<String, List<String>> classes; final String builtAt;
+        final Map<String, String[]> series; // the catalog's series table (Catalog.Works), empty for a plain list
         Bundle(List<Catalog.Work> catalog, String words, Map<String, List<String>> classes, String builtAt) {
             this.catalog = catalog; this.words = words; this.classes = classes; this.builtAt = builtAt;
+            this.series = catalog instanceof Catalog.Works ? ((Catalog.Works) catalog).series : new LinkedHashMap<>();
         }
         int sinceYear() { return Integer.parseInt(builtAt.substring(0, 4)) - 1; } // builtAt is ISO UTC
     }
@@ -501,7 +594,9 @@ final class CatalogUpdate {
         for (Catalog.Work w : prev) known.add(w.id);
         Result r = new Result();
         Catalog.Words words = new Catalog.Words(bundle.words);
-        r.fresh = fetchDelta(bundle.classes, bundle.sinceYear(), known, new Catalog.Ambiguity(bundle.words), words);
+        List<Catalog.Work> inCatalog = new ArrayList<>(bundle.catalog);
+        inCatalog.addAll(prev);
+        r.fresh = fetchDelta(bundle.classes, bundle.sinceYear(), known, new Catalog.Ambiguity(bundle.words), words, bundle.series, inCatalog);
         r.added = new ArrayList<>(prev);
         r.added.addAll(r.fresh);
         if (!r.fresh.isEmpty()) r.built = Catalog.buildIndex(Catalog.merge(bundle.catalog, r.added), words);

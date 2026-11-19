@@ -155,7 +155,29 @@ test('a bare franchise name refers to its closest works; a type word narrows the
   assert.deepEqual(members('Dune book club tonight'), ['Dune|book|0', 'Dune|book|1965']);
 });
 
-test('rows the Android Scanner passed on YouTube search results (0.2.2 logs): labels as reviewed', { skip: !has && 'no data/catalog.json' }, () => {
+test('"More from this series": a late entry lists the rest of its franchise, oldest first', { skip: !has && 'no data/catalog.json' }, () => {
+  // test/fixtures/series.json: every catalog work titled with the franchise's name (42, 13 and 9 works)
+  const want = JSON.parse(fs.readFileSync(new URL('./fixtures/series.json', import.meta.url), 'utf8'));
+  const row = (w) => `${built.meta.titles[w]}|${built.meta.types[w]}|${built.meta.years[w]}`;
+  for (const [name, late, text] of [['Resident Evil', 'Resident Evil Requiem', 'Resident Evil Requiem ending'],
+    ['Silent Hill', 'Silent Hill f', 'Silent Hill f ending'], ['God of War', 'God of War Ragnarök', 'God of War Ragnarök ending']]) {
+    const gs = m.evaluate(text);
+    assert.deepEqual(gs.map((g) => built.meta.groups[g][0]), [late], text);
+    const own = built.meta.groups[gs[0]].slice(1), more = m.moreFromSeries(gs);
+    const all = new Set([...own, ...more].map(row));
+    for (const r of want[name]) assert.ok(all.has(r), `${name}: ${r} missing`);
+    assert.ok(!more.some((w) => own.includes(w)), 'the first section is not repeated');
+    const ys = more.map((w) => built.meta.years[w] || 1e4);
+    assert.deepEqual(ys, [...ys].sort((a, b) => a - b), 'oldest first');
+  }
+  // the bare franchise name: its works first, the rest of the series below (films, games, anime and shows together)
+  const gs = m.evaluate('Resident Evil ending'), own = built.meta.groups[gs[0]].slice(1);
+  assert.equal(new Set([...own, ...m.moreFromSeries(gs)].map(row).filter((r) => r.includes('Resident Evil'))).size, want['Resident Evil'].length);
+  assert.deepEqual(m.moreFromSeries(m.evaluate('Breaking Bad finale')).map(row), ['Better Call Saul|tv|2015', 'El Camino: A Breaking Bad Movie|movie|2019']);
+  assert.deepEqual(m.moreFromSeries(m.evaluate('Inception ending')), []); // in no series: nothing more
+});
+
+test('rows the Android Scanner passed on YouTube search results (0.2.2 logs): labels as reviewed',{ skip: !has && 'no data/catalog.json' }, () => {
   const rows = fs.readFileSync(new URL('./fixtures/yt-rows.jsonl', import.meta.url), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   for (const r of rows) assert.deepEqual(m.evaluate(r.text).map((g) => built.meta.groups[g][0]), r.expect, r.text.slice(0, 80));
 });
