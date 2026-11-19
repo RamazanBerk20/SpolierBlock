@@ -141,7 +141,7 @@ for (const b of batches(missing)) {
 }
 
 // 4. assemble: no scripture, reference works, documentaries... (isNarrative)
-const ambiguous = makeAmbiguous(readFileSync(join(here, '20k.txt'), 'utf8'));
+const ambiguous = makeAmbiguous(readFileSync(join(here, 'common-words.txt'), 'utf8'));
 const result = list.filter((w) => isNarrative(kinds.get(w.id) ?? []))
   .map((w) => finalizeWork(w, aliasSets.get(w.id), chars.get(w.id), ambiguous)).sort(compareWorks);
 console.log('told as a story', result.length, 'of', list.length);

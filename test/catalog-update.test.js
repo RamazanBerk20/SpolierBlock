@@ -6,7 +6,7 @@ import { runUpdate, rebuild, mergeCatalog, alarmPlan, deltaQuery, fetchDelta, cu
 const { Matcher } = globalThis.SBMatcher;
 
 const catalog = JSON.parse(fs.readFileSync(new URL('./fixtures/catalog.small.json', import.meta.url)));
-const words = fs.readFileSync(new URL('../tools/catalog/20k.txt', import.meta.url), 'utf8');
+const words = fs.readFileSync(new URL('../tools/catalog/common-words.txt', import.meta.url), 'utf8');
 const bundle = { catalog, words, meta: buildIndex(catalog).meta, info: { builtAt: '2026-11-18T00:00:00Z' }, classes: { game: ['Q7889'], movie: ['Q11424'] } };
 const NEW = { id: 'Q999000001', title: 'Moonfall Protocol', type: 'game', year: 2026, aliases: ['MFP'], characters: [], pop: 22, ambiguous: false };
 

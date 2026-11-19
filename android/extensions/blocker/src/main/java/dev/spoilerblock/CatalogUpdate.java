@@ -108,9 +108,10 @@ final class CatalogUpdate {
         "Q112983 Q5891 Q13408937 Q1683266 Q995600 Q1129795 Q11826511 Q193495 Q6498453 Q58854 Q1748756 Q190399 " +
         "Q93204 Q7603925 Q133731271 Q133731263 Q1760864 Q110593123 Q1800833 Q3648909 Q4765076 Q430525 Q1358344 " +
         "Q139850703 Q5401282 Q622812 Q986699 Q131762936 Q6645282 Q3546572 Q7257679 Q5428822 Q10676514 Q2670855 Q7832972 " +
-        "Q126914943 Q7551149 Q4677832 Q2096046 Q1371394 Q116763393 Q34682961");
+        "Q126914943 Q7551149 Q4677832 Q2096046 Q1371394 Q116763393 Q34682961 " +
+        "Q1955280 Q4504495 Q846662 Q2123557 Q336181 Q743934 Q5778915 Q482994 Q209939 Q10590726 Q20089094 Q193977 Q20135338");
     private static final Set<String> NARRATIVE = set("Q8261 Q149537 Q49084 Q25379 Q1279564 Q104213567 Q1667921 Q8253 " +
-        "Q130232 Q157443 Q859369 Q959790 Q2484376 Q188473 Q1054574 Q200092 Q471839");
+        "Q130232 Q157443 Q859369 Q959790 Q2484376 Q188473 Q1054574 Q200092 Q471839 Q182415 Q1484397 Q106603795");
     private static final Set<String> NOT_A_SENSE = set("Q4167410 Q13406463 Q4167836 Q11266439 Q15407973 Q22808320 Q17362920");
     static final int SENSE_BATCH = 150, MAX_SENSE_QUERIES = 20;
 
@@ -330,10 +331,11 @@ final class CatalogUpdate {
                 if (!shortOnes.isEmpty()) rows.addAll(sparql(senseQuery(shortOnes, "skos:altLabel")));
                 for (Map<String, String[]> r : rows) {
                     String[] cv = r.get("cs");
-                    boolean skip = inCatalog.contains(Catalog.qid(val(r, "e")));
-                    if (cv != null && cv[0] != null && !cv[0].isEmpty()) {
-                        for (String c : cv[0].split(" ", -1)) { String q = Catalog.qid(c); skip |= NOT_A_SENSE.contains(q) || same.contains(q); }
-                    }
+                    boolean skip = inCatalog.contains(Catalog.qid(val(r, "e"))), sameHit = false;
+                    List<String> cs = new ArrayList<>();
+                    if (cv != null && cv[0] != null && !cv[0].isEmpty()) for (String c : cv[0].split(" ", -1)) cs.add(Catalog.qid(c));
+                    for (String q : cs) { skip |= NOT_A_SENSE.contains(q); sameHit |= same.contains(q); }
+                    skip |= sameHit && isNarrative(cs); // a work left out of the catalog is a sense of its own
                     if (skip) continue;
                     String l = val(r, "l");
                     double sl = Double.parseDouble(val(r, "sl"));
