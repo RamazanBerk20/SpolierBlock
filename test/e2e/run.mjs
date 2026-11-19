@@ -388,7 +388,10 @@ const skip = (name, why) => report.push(`SKIP ${name} :: ${why}`);
 // Which pictures get a title or the generic "film/show/game media" verdict depends on the image model and the catalog,
 // so the image cases ask the shipped engine (through the background, like the content script, with the same cache key)
 // and use pictures it really judges that way. OCR text must be empty, so the text path cannot decide the cover instead.
-let TITLED = null, GENERIC = null;
+let TITLED = null, GENERIC = null, OCRTITLED = null;
+// the shipped matcher on this build's index, for preconditions (what does a picture's OCR text name?)
+await import(path.join(ROOT, 'src/content/matcher.js'));
+const nodeMatcher = new globalThis.SBMatcher.Matcher(new Uint8Array(fs.readFileSync(path.join(EXT, 'data/index.bin'))).buffer, META);
 if (want('states') || want('feed') || want('coverage')) {
   const ask = (msg) => extEval(async (m) => {
     for (let i = 0; ; i++) {
@@ -413,7 +416,18 @@ if (want('states') || want('feed') || want('coverage')) {
   GENERIC = await pick((h) => h.length > 0 && h.every(([g]) => g === -1));
   if (TITLED) {
     const gs = TITLED.hits.map(([g]) => g).filter((g) => g >= 0);
-    TITLED.label = `Image from ${META.groups[gs[0]][0]}${gs.length > 1 ? ` and ${gs.length - 1} more` : ''}`;
+    TITLED.group = META.groups[gs[0]][0];
+    TITLED.label = `Image from ${TITLED.group}${gs.length > 1 ? ` and ${gs.length - 1} more` : ''}`;
+  }
+  // rule 7, OCR half: a picture the model titles whose own text names a work (ocrtitle_fightclub.jpg: the Nosferatu still
+  // with "FIGHT CLUB" printed on it; checked here, since a caption can change the model's verdict)
+  {
+    const url = `http://127.0.0.1:${IMG}/ocrtitle_fightclub.jpg`;
+    const h = (await ask({ type: 'img.check', key: url, url, prio: 0 }))?.hits ?? [];
+    const text = (await ask({ type: 'img.ocr', key: url, url, prio: 0 }))?.text ?? '';
+    const named = nodeMatcher.evaluate('\u0001' + text).map((g) => META.groups[g][0]);
+    if (h.some(([g]) => g >= 0) && named.length) OCRTITLED = { url, named };
+    report.push(`## ocrtitle_fightclub.jpg: hits ${JSON.stringify(h)}, OCR ${JSON.stringify(text)} names ${JSON.stringify(named)}`);
   }
   if (GENERIC) GENERIC.label = 'Possible film, show or game image';
   const a = TITLED ?? GENERIC;
@@ -423,16 +437,25 @@ if (want('states') || want('feed') || want('coverage')) {
 }
 const NO_TITLE = 'the engine titles no media fixture with the fixture catalog (no OCR text), so nothing can prove this with a real verdict';
 const NO_GENERIC = 'the engine gives no media fixture the generic verdict without OCR text';
+// a post added to the fixture page; mediaDone waits for its pictures' verdicts
+const addPost = (id, text, img) => page.evaluate(([id, text, img]) => {
+  if (document.getElementById(id)) return;
+  const a = document.createElement('article');
+  a.className = 'post'; a.id = id;
+  a.innerHTML = `<div class="who">@pic</div><p></p>${img ? `<img alt="" src="${img}">` : ''}`;
+  a.querySelector('p').textContent = text;
+  document.getElementById('feed').append(a);
+}, [id, text, img ?? null]);
+const mediaDone = async (id) => {
+  await page.evaluate((id) => document.getElementById(id)?.scrollIntoView({ block: 'center' }), id);
+  await page.waitForFunction((id) => document.documentElement.getAttribute('data-sb-busy') === '0' &&
+    [...document.querySelectorAll(`#${id} img`)].every((m) => m.hasAttribute('data-sb-ok')), { timeout: 180000 }, id);
+};
 // the chosen pictures as posts on the fixture page (after each load)
-const addPicPosts = () => page.evaluate((ps) => {
-  for (const [id, f] of ps) {
-    if (!f || document.getElementById(id)) continue;
-    const a = document.createElement('article');
-    a.className = 'post'; a.id = id;
-    a.innerHTML = `<div class="who">@pic</div><p>Look at this.</p><img alt="" src="${f}">`;
-    document.getElementById('feed').append(a);
-  }
-}, [['x-titled', TITLED?.url], ['x-generic', GENERIC?.url]]);
+const addPicPosts = async () => {
+  if (TITLED) await addPost('x-titled', 'Look at this.', TITLED.url);
+  if (GENERIC) await addPost('x-generic', 'Look at this.', GENERIC.url);
+};
 
 let c;
 if (want('states')) {
@@ -449,6 +472,13 @@ if (TITLED) check('image identified: "Image from {t}"', lab(c['x-titled']) === T
 else skip('image identified: "Image from {t}"', NO_TITLE);
 if (GENERIC) check('unknownImages off: unidentified media image not covered', c['x-generic'] === null, c['x-generic']);
 else skip('unknownImages off', NO_GENERIC);
+// rule 7, label order: a group the post's own text names comes before one named only by its picture's OCR text
+// (Harry Potter sorts before Game of Thrones in the index)
+await addPost('x-order', 'Game of Thrones: the Red Wedding where Robb Stark gets murdered.', `http://127.0.0.1:${IMG}/ocr_spoiler_snape.png`);
+await mediaDone('x-order');
+c = await covered(['x-order', 'i-ocr']);
+check('label: own-text group first, then the OCR-only one', lab(c['i-ocr']) === 'Mentions Harry Potter'
+  ? lab(c['x-order']) === 'Mentions Game of Thrones and 1 more' : lab(c['x-order']) === 'Mentions Game of Thrones', c);
 
 // B) unknownImages on (live)
 await setConfig({}, { unknownImages: true });
@@ -460,6 +490,29 @@ else skip('unknownImages on', NO_GENERIC);
 await setConfig(worksOf('Breaking Bad', { state: 'seen' }));
 c = await covered(POSTS);
 check('seen work not covered', c['t-breaking'] === null && lab(c['t-spoiler']) === 'Mentions Star Wars', c);
+// rule 7: the post's own text names a seen work and no covered one, so the title on its picture does not cover it
+if (TITLED) {
+  await addPost('x-rule7', 'Walter White was great. Look at this poster.', TITLED.url);
+  await mediaDone('x-rule7');
+  c = await covered(['x-rule7', 'x-titled']);
+  check('rule 7: own text names a seen work -> its picture\'s title does not cover', c['x-rule7'] === null && lab(c['x-titled']) === TITLED.label, c);
+} else skip('rule 7', NO_TITLE);
+// rule 7: the picture's title is dropped when its own (OCR) text names a work, here a seen one
+if (OCRTITLED && TITLED) {
+  await setConfig(worksOf(OCRTITLED.named[0], { state: 'seen' })); // the work its text names does not cover by itself
+  await addPost('x-7a-ocr', 'Look at this.', OCRTITLED.url);
+  await mediaDone('x-7a-ocr');
+  c = await covered(['x-7a-ocr', 'x-titled']);
+  check('rule 7: the picture\'s OCR text names a work -> no title from the model', c['x-7a-ocr'] === null && lab(c['x-titled']) === TITLED.label, c);
+} else skip('rule 7, picture text', 'the engine does not title ocrtitle_fightclub.jpg, or its OCR text names no work');
+// ... and when the post's own text names any work, even one that does not cover (unlisted, blockUnlisted off)
+if (TITLED) {
+  await setConfig(worksOf(TITLED.group, { state: 'blocked' }), { blockUnlisted: false });
+  await addPost('x-7a-own', 'Breaking Bad was great, honestly.', TITLED.url);
+  await mediaDone('x-7a-own');
+  c = await covered(['x-7a-own', 'x-titled']);
+  check('rule 7: own text names any work -> no title from the model', c['x-7a-own'] === null && lab(c['x-titled']) === TITLED.label, c);
+} else skip('rule 7, own text', NO_TITLE);
 await setConfig(worksOf('Game of Thrones', { state: 'blocked' }), { blockUnlisted: false });
 c = await covered(POSTS);
 check('blockUnlisted off: only the blocked work is covered', lab(c['t-got-neutral']) === 'Mentions Game of Thrones' &&
@@ -496,7 +549,43 @@ await page.evaluate(() => document.querySelector('#t-breaking > sb-overlay').sha
 await sleep(1200);
 const w = await storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('works')).works);
 c = await covered(['t-breaking']);
-check('"I\'ve seen it" writes works[id].state = "seen"', Object.values(w ?? {}).some((x) => x.title === 'Breaking Bad' && x.state === 'seen') && c['t-breaking'] === null, w);
+check('"I\'ve seen it" on a one-work group writes works[id].state = "seen" at once (no picker)', Object.values(w ?? {}).some((x) => x.title === 'Breaking Bad' && x.state === 'seen') && c['t-breaking'] === null, w);
+
+// the picker: "I've seen it" on a group with several works (Dune: the 2021 film and the 1965 book)
+await setConfig({});
+await addPost('x-dune', 'Paul Atreides rides the sandworm at the end.');
+await sleep(500);
+const pkState = () => page.evaluate(() => {
+  const sr = document.querySelector('#x-dune > sb-overlay').shadowRoot, d = sr.querySelector('dialog'), f = sr.activeElement;
+  return { open: d.open, rows: [...d.querySelectorAll('li')].map((li) => li.textContent), checked: d.querySelectorAll('input:checked').length,
+    focus: f?.localName === 'input' ? 'input' : f?.dataset?.a ?? null, title: d.querySelector('.h').textContent,
+    note: d.querySelector('.note').textContent, label: sr.querySelector('p').textContent };
+});
+const clickIn = (sel) => page.evaluate((sel) => document.querySelector('#x-dune > sb-overlay').shadowRoot.querySelector(sel).click(), sel);
+const worksNow = () => storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('works')).works ?? {});
+await clickIn('[data-a="seen"]');
+const pk1 = await pkState();
+check('picker opens for a group with several works: title, a row per work, nothing ticked, focus inside, note',
+  pk1.open && pk1.rows.length === 2 && pk1.checked === 0 && pk1.focus === 'input' && pk1.title === 'Which have you seen?' &&
+  pk1.note === 'Posts that only say "Dune" stay covered until every one is marked.', pk1);
+await clickIn('[data-a="pk-all"]');
+const pk2 = await pkState();
+await clickIn('[data-a="pk-cancel"]');
+const pk3 = await pkState();
+check('picker: All ticks every row; Cancel writes nothing and returns focus', pk2.checked === 2 && !pk3.open && pk3.focus === 'seen' &&
+  !Object.keys(await worksNow()).length, { pk2, pk3 });
+await clickIn('[data-a="seen"]');
+await page.keyboard.press('Escape');
+await sleep(300);
+const pk4 = await pkState();
+check('picker: Escape closes it and returns focus', !pk4.open && pk4.focus === 'seen', pk4);
+await clickIn('[data-a="seen"]');
+await clickIn('.pk li:first-child input');
+await clickIn('[data-a="pk-ok"]');
+await sleep(1500);
+const w2 = await worksNow(), pk5 = await pkState(), duneIds = Object.keys(worksOf('Dune', {}));
+check('picker: only the ticked work is written, the cover stays (focus kept)', Object.keys(w2).length === 1 && duneIds.includes(Object.keys(w2)[0]) &&
+  Object.values(w2)[0].state === 'seen' && pk5.label === 'Mentions Dune' && !pk5.open && pk5.focus === 'seen', { w2, pk5 });
 
 }
 
@@ -541,6 +630,7 @@ check('recycled feed: no overlap, no height change, covers belong to their post,
 if (want('coverage')) {
 // G) coverage: DMs, typeahead, notifications, quote post, background image, shadow DOM, frames, title, height, theme
 await setConfig({}, { unknownImages: true });
+await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]).catch(() => {});
 await open('/coverage');
 await sleep(3000); // sb-late-card is defined after 1.2 s
 for (let k = 0; k < 120 && !(await page.evaluate(() => document.documentElement.getAttribute('data-sb-busy') === '0' && document.querySelector('.pic')?.hasAttribute('data-sb-ok'))); k++) await sleep(500);
@@ -562,6 +652,8 @@ const shadow = await page.evaluate(`({
   closed: (${INFO})(window.__closedRoot.querySelector('article')),
   late: (${INFO})(document.getElementById('sh-late').shadowRoot?.querySelector('article')),
   srcdoc: (${INFO})(document.getElementById('fr-srcdoc').contentDocument?.getElementById('f1')),
+  darkScheme: (${INFO})(document.getElementById('fr-dark').contentDocument?.getElementById('f3')),
+  systemDark: matchMedia('(prefers-color-scheme: dark)').matches,
   title: document.title })`);
 const cross = page.frames().find((f) => f.url().includes('frame.html'));
 const crossC = cross ? (await covered(['f2'], cross)).f2 : 'no frame';
@@ -570,6 +662,8 @@ check('open shadow root covered', lab(shadow.open) === 'Mentions Star Wars', sha
 check('closed shadow root covered', lab(shadow.closed) === 'Mentions Harry Potter', shadow.closed);
 check('shadow root attached after the element was seen', lab(shadow.late) === 'Mentions Game of Thrones', shadow.late);
 check('about:srcdoc iframe covered', lab(shadow.srcdoc) === 'Mentions Harry Potter', shadow.srcdoc);
+check('dark page (color-scheme: dark, no backgrounds) under a light system scheme: dark cover', shadow.darkScheme?.dark === true && shadow.systemDark === false,
+  { cover: shadow.darkScheme, systemDark: shadow.systemDark });
 check('cross-origin iframe covered', lab(crossC) === 'Mentions Star Wars', crossC);
 check('document.title replaced', shadow.title === 'Mentions Breaking Bad', shadow.title);
 // a covered post's video is silent (the page started it with sound), stays silent when the page un-mutes and plays it
