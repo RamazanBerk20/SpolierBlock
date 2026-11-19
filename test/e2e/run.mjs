@@ -555,13 +555,13 @@ check('"I\'ve seen it" on a one-work group writes works[id].state = "seen" at on
 await setConfig({});
 await addPost('x-dune', 'Paul Atreides rides the sandworm at the end.');
 await sleep(500);
-const pkState = () => page.evaluate(() => {
-  const sr = document.querySelector('#x-dune > sb-overlay').shadowRoot, d = sr.querySelector('dialog'), f = sr.activeElement;
+const pkState = (id = 'x-dune') => page.evaluate((id) => {
+  const sr = document.querySelector(`#${id} > sb-overlay`).shadowRoot, d = sr.querySelector('dialog'), f = sr.activeElement;
   return { open: d.open, rows: [...d.querySelectorAll('li')].map((li) => li.textContent), checked: d.querySelectorAll('input:checked').length,
     focus: f?.localName === 'input' ? 'input' : f?.dataset?.a ?? null, title: d.querySelector('.h').textContent,
     note: d.querySelector('.note').textContent, label: sr.querySelector('p').textContent };
-});
-const clickIn = (sel) => page.evaluate((sel) => document.querySelector('#x-dune > sb-overlay').shadowRoot.querySelector(sel).click(), sel);
+}, id);
+const clickIn = (sel, id = 'x-dune') => page.evaluate((sel, id) => document.querySelector(`#${id} > sb-overlay`).shadowRoot.querySelector(sel).click(), sel, id);
 const worksNow = () => storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('works')).works ?? {});
 await clickIn('[data-a="seen"]');
 const pk1 = await pkState();
@@ -586,6 +586,16 @@ await sleep(1500);
 const w2 = await worksNow(), pk5 = await pkState(), duneIds = Object.keys(worksOf('Dune', {}));
 check('picker: only the ticked work is written, the cover stays (focus kept)', Object.keys(w2).length === 1 && duneIds.includes(Object.keys(w2)[0]) &&
   Object.values(w2)[0].state === 'seen' && pk5.label === 'Mentions Dune' && !pk5.open && pk5.focus === 'seen', { w2, pk5 });
+// a cover naming several groups (Breaking Bad: one work; Dune: two): every unseen work of all of them, and the other note
+await setConfig({});
+await addPost('x-multi', 'Paul Atreides and Walter White both end badly.');
+await sleep(500);
+await clickIn('[data-a="seen"]', 'x-multi');
+const pk6 = await pkState('x-multi');
+await clickIn('[data-a="pk-cancel"]', 'x-multi');
+check('picker for a cover naming several groups: the unseen works of all of them, the several-works note',
+  pk6.open && pk6.rows.length === 3 && /and 1 more$/.test(pk6.label) &&
+  pk6.note === 'This post names several works. It stays covered until each one is marked.', pk6);
 
 }
 
