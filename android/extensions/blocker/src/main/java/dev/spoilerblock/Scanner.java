@@ -371,6 +371,11 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             long e0 = System.nanoTime();
             st.groups = m.evaluate(full, v.seen);
             statEvals++; statEvalNs += System.nanoTime() - e0;
+            if (Log.isLoggable(SpoilerBlock.TAG, Log.VERBOSE)) { // what the matcher was given and what it found (adb shell setprop log.tag.SpoilerBlock VERBOSE)
+                StringBuilder gs = new StringBuilder();
+                for (int g : st.groups) gs.append(gs.length() > 0 ? ", " : "").append(m.labels[g]);
+                Log.v(SpoilerBlock.TAG, "evaluate " + it.getClass().getName() + " groups=[" + gs + "] text=" + full.replace("\n", "\\n").replace("\u0001", "<U+0001>"));
+            }
         }
         // rule 7: own text naming a seen work and no covered one outranks the pictures (their titles and their OCR names)
         int[] groups = st.ownSeenOnly ? new int[0] : st.groups;
