@@ -1,6 +1,7 @@
 package dev.spoilerblock.patches
 
 import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
 import app.morphe.patcher.extensions.InstructionExtensions.replaceInstruction
 import app.morphe.patcher.patch.classDefForEach
 import com.android.tools.smali.dexlib2.Opcode
@@ -62,7 +63,12 @@ private fun bundled(name: String) = object {}.javaClass.getResourceAsStream("/sp
     ?: throw PatchException("bundle lacks spoilerblock/$name")
 
 /** A host view that draws its text itself: its setter (one CharSequence or Layout parameter) reports the text. */
-private class TextHook(val type: String, val method: String, val param: String)
+/**
+ * A host method that gets a call to SpoilerBlock.text(this, text) at its start: a setter's first argument ([param]), or,
+ * with [field], the view's own CharSequence field (for a view that keeps the text it draws in a field, read when it is
+ * measured, before the scanner's pre-draw pass). [param] is the method's parameter types joined, e.g. "II".
+ */
+private class TextHook(val type: String, val method: String, val param: String, val field: String? = null)
 
 /**
  * A row in the host's own settings screen, added to a preference XML. [file]: the screen. The
@@ -168,9 +174,17 @@ private fun spoilerBlockPatch(
         // Optional: a missing hook (renamed in a future app version) only loses that view's text, it does not fail the patch.
         for (h in textHooks) {
             val m = classDefByOrNull(h.type)?.let { mutableClassDefBy(h.type) }?.methods
-                ?.firstOrNull { it.name == h.method && it.parameterTypes == listOf(h.param) && it.implementation != null }
-            if (m == null) Logger.getLogger("SpoilerBlock").warning("text hook not found: ${h.type}->${h.method}(${h.param})")
-            else m.addInstruction(0, "invoke-static/range { p0 .. p1 }, $TEXT")
+                ?.firstOrNull { it.name == h.method && it.parameterTypes.joinToString("") == h.param && it.implementation != null }
+            // a field hook uses v0 and v1 at the method's start: it needs two registers below the parameters
+            val locals = m?.implementation?.let { it.registerCount - 1 - m.parameterTypes.sumOf { t -> if (t == "J" || t == "D") 2 else 1 } } ?: 0
+            val fieldOk = h.field == null || classDefByOrNull(h.type)?.fields?.any { "${h.type}->${it.name}:${it.type}" == h.field } == true
+            if (m == null || !fieldOk || (h.field != null && locals < 2)) {
+                Logger.getLogger("SpoilerBlock").warning("text hook not found: ${h.type}->${h.method}(${h.param}) ${h.field ?: ""}")
+            } else if (h.field == null) {
+                m.addInstruction(0, "invoke-static/range { p0 .. p1 }, $TEXT")
+            } else {
+                m.addInstructions(0, "move-object/from16 v0, p0\niget-object v1, v0, ${h.field}\ninvoke-static { v0, v1 }, $TEXT")
+            }
         }
 
         // Push notifications and sound: the app's own NotificationManager.notify, AudioTrack.play/setVolume/setStereoVolume
@@ -251,6 +265,10 @@ val xPatch = spoilerBlockPatch(
     listOf(
         TextHook("Lcom/twitter/ui/widget/TextContentView;", "setText", "Ljava/lang/CharSequence;"),
         TextHook("Lcom/twitter/ui/widget/TextLayoutView;", "setText", "Ljava/lang/CharSequence;"),
+        // A quoted post's text is drawn by QuoteView itself (a StaticLayout made in onMeasure from this field), and its
+        // content description is set only for accessibility services. (Static reading of 12.19.1; the reply-context
+        // line inside a quote is a TextLayoutView, hooked above.)
+        TextHook("Lcom/twitter/tweetview/core/QuoteView;", "onMeasure", "II", "Lcom/twitter/tweetview/core/QuoteView;->O:Ljava/lang/CharSequence;"),
     ),
     // "Settings and privacy" is a preference XML; its rows are ordered by android:order (10 to 100 in 12.19).
     listOf(SettingsRow("res/xml/settings_root.xml", order = "105")),
@@ -275,7 +293,8 @@ val instagramPatch = spoilerBlockPatch(
 /** Test app in android/demo, patched exactly like the real apps; a second package tests the shared config. */
 private fun demoPatch(pkg: String) = spoilerBlockPatch(
     Compatibility(packageName = pkg, name = "SpoilerBlock demo"),
-    listOf(TextHook("Ldev/spoilerblock/demo/DrawnText;", "setText", "Ljava/lang/CharSequence;")),
+    listOf(TextHook("Ldev/spoilerblock/demo/DrawnText;", "setText", "Ljava/lang/CharSequence;"),
+        TextHook("Ldev/spoilerblock/demo/QuoteBox;", "onMeasure", "II", "Ldev/spoilerblock/demo/QuoteBox;->quoted:Ljava/lang/CharSequence;")),
     listOf(SettingsRow("res/xml/demo_settings.xml")),
     testEndpoint = "http://10.0.2.2:8765/sparql", // the emulator's host: android/tools/mock-sparql.mjs
 )

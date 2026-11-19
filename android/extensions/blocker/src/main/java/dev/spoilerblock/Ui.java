@@ -4,12 +4,15 @@ import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.text.TextUtils;
@@ -27,7 +30,8 @@ import android.widget.TextView;
  */
 final class Ui {
     static final class Palette {
-        final int bg, surface, surfaceHigh, text, muted, outline, accent, onAccent, accentContainer, onAccentContainer, cover, error;
+        final int bg, surface, surfaceHigh, text, muted, outline, accent, onAccent, accentContainer, onAccentContainer, error;
+        int cover, shade; // a cover, and a picture still being judged (a placeholder tone)
         final boolean dark;
 
         Palette(boolean dark) {
@@ -39,7 +43,57 @@ final class Ui {
                 bg = 0xFFFBF8F2; surface = 0xFFF4F0E8; surfaceHigh = 0xFFEAE5DB; text = 0xFF1D1B20; muted = 0xFF57545E; outline = 0xFFC9C3B8;
                 accent = 0xFF7A5200; onAccent = 0xFFFFFFFF; accentContainer = 0xFFFFDEA6; onAccentContainer = 0xFF271900; cover = 0xFFE9E4DA; error = 0xFFBA1A1A;
             }
+            shade = cover;
         }
+    }
+
+    /**
+     * Colours for a cover or shade on v: from the surface it sits on (contract: dark on a dark surface, light on a light
+     * one, whatever the system setting says), dark when no surface colour can be read.
+     */
+    static Palette on(View v) {
+        Integer s = surface(v);
+        boolean dark = s == null || 0.2126 * Color.red(s) + 0.7152 * Color.green(s) + 0.0722 * Color.blue(s) < 128;
+        Palette p = new Palette(dark);
+        if (s != null) {
+            int ink = dark ? 0xFFFFFFFF : 0xFF000000;
+            p.cover = mix(s, ink, 0.06f);
+            p.shade = mix(s, ink, 0.10f); // close to the grey hosts paint a picture's place with while it loads
+        } else p.shade = mix(p.cover, 0xFFFFFFFF, 0.04f);
+        return p;
+    }
+
+    static int mix(int a, int b, float t) {
+        return Color.rgb(Math.round(Color.red(a) + (Color.red(b) - Color.red(a)) * t), Math.round(Color.green(a) + (Color.green(b) - Color.green(a)) * t),
+            Math.round(Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t));
+    }
+
+    /** The first opaque background of v or a parent (up to the window's), else the theme's background colour. */
+    static Integer surface(View v) {
+        for (Object o = v; o instanceof View; o = ((View) o).getParent()) {
+            Integer c = colorOf(((View) o).getBackground(), 0);
+            if (c != null) return c;
+        }
+        TypedValue tv = new TypedValue();
+        if (v.getContext().getTheme().resolveAttribute(android.R.attr.colorBackground, tv, true)
+            && tv.type >= TypedValue.TYPE_FIRST_COLOR_INT && tv.type <= TypedValue.TYPE_LAST_COLOR_INT && Color.alpha(tv.data) >= 0xE0) return tv.data;
+        return null;
+    }
+
+    private static Integer colorOf(Drawable d, int depth) {
+        if (d == null || depth > 4 || d.getAlpha() < 0xE0) return null;
+        Integer c = null;
+        if (d instanceof ColorDrawable) c = ((ColorDrawable) d).getColor();
+        else if (d instanceof GradientDrawable && android.os.Build.VERSION.SDK_INT >= 24) {
+            ColorStateList l = ((GradientDrawable) d).getColor();
+            if (l != null) c = l.getColorForState(d.getState(), l.getDefaultColor());
+        } else if (d instanceof LayerDrawable) { // the top opaque layer (a ripple over a fill, a border over a fill)
+            LayerDrawable l = (LayerDrawable) d;
+            for (int i = l.getNumberOfLayers() - 1; i >= 0 && c == null; i--) c = colorOf(l.getDrawable(i), depth + 1);
+        } else if (android.os.Build.VERSION.SDK_INT >= 23 && d instanceof android.graphics.drawable.DrawableWrapper) {
+            c = colorOf(((android.graphics.drawable.DrawableWrapper) d).getDrawable(), depth + 1);
+        } else if (d.getCurrent() != d) c = colorOf(d.getCurrent(), depth + 1); // a state list: its current state
+        return c != null && Color.alpha(c) >= 0xE0 ? c : null;
     }
 
     static boolean dark(Context c) {

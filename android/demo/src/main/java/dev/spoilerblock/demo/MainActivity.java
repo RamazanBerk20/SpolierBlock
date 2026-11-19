@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
         {"Zorblax Chronicles finale was wild", null},                     // invented work: covered only after a catalog update
     };
     static final String[] AUTHORS = {"@anna_k", "@deniz", "@moviebuff", "@gamer42", "@reader"};
-    static final int N = 240, TEXT = 0, CANVAS_DESC = 1, CANVAS_A11Y = 2, CANVAS_HOOK = 3, SHELF = 4, IMAGE = 5, VIDEO = 6;
+    static final int N = 240, TEXT = 0, CANVAS_DESC = 1, CANVAS_A11Y = 2, CANVAS_HOOK = 3, SHELF = 4, IMAGE = 5, VIDEO = 6, QUOTE = 7;
     // image posts (test/fixtures/images): file, caption. Expected: titled Night of the Living Dead, shown, Harry Potter
     // (OCR of the caption in the picture), shown, "unrecognised" media. Not frame-checked (pending until verdicts are in).
     static final String[][] IMAGES = {
@@ -97,7 +97,7 @@ public class MainActivity extends Activity {
     }
     static final java.util.Set<Integer> revealed = new java.util.HashSet<>(); // posts the tester revealed / marked seen
 
-    static int type(int pos) { return pos % 25 == 24 ? SHELF : pos % 25 == 12 ? VIDEO : pos % 25 >= 2 && pos % 25 <= 6 ? IMAGE : pos % 4; }
+    static int type(int pos) { return pos % 25 == 24 ? SHELF : pos % 25 == 12 ? VIDEO : pos % 25 >= 2 && pos % 25 <= 6 ? IMAGE : pos % 25 == 18 ? QUOTE : pos % 4; }
     static String body(int post) { return (String) POSTS[post][0]; }
     static Boolean expected(int post) { return POSTS[post][1] == null ? null : (Boolean) POSTS[post][1] && !revealed.contains(post); }
 
@@ -227,6 +227,15 @@ public class MainActivity extends Activity {
                 img.setBackground(frame);
                 img.setMaxHeight(dp(360));
                 l.addView(img, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            } else if (type == QUOTE) { // a clean post of one's own quoting another (X's QuoteView): only the quote can cover
+                TextView author = new TextView(parent.getContext());
+                author.setTextColor(0xFF666666);
+                l.addView(author);
+                TextView own = new TextView(parent.getContext());
+                own.setTextSize(17);
+                own.setText("Can't believe this one");
+                l.addView(own);
+                l.addView(new QuoteBox(parent.getContext()));
             } else {
                 TextView author = new TextView(parent.getContext());
                 author.setTextColor(0xFF666666);
@@ -252,6 +261,7 @@ public class MainActivity extends Activity {
             LinearLayout l = (LinearLayout) h.itemView;
             l.setTag(post);
             ((TextView) l.getChildAt(0)).setText(AUTHORS[pos % AUTHORS.length]);
+            if (type(pos) == QUOTE) { ((QuoteBox) l.getChildAt(2)).quote(body(post)); return; }
             View t = l.getChildAt(1);
             if (t instanceof TextView) ((TextView) t).setText(body(post)); else ((DrawnText) t).setText(body(post));
         }

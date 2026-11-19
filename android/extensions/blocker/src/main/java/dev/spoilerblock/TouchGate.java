@@ -11,7 +11,12 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 
-/** Window.Callback wrapper: sees every touch of the activity window before the app does (see Scanner.onTouch). */
+/**
+ * Window.Callback wrapper: sees every touch of the activity window before the app does (see Scanner.onTouch). It must
+ * stay the outermost callback: an app may wrap the callback too (Instagram's Reels viewer installs a gesture wrapper that
+ * keeps some events to itself), so the scanner wraps again whenever it is not on top (Scanner.gate), and a gate of ours
+ * further in passes on what an outer one already saw.
+ */
 final class TouchGate implements Window.Callback {
     private final Window.Callback app;
     private final Scanner scanner;
@@ -21,18 +26,27 @@ final class TouchGate implements Window.Callback {
         this.scanner = scanner;
     }
 
-    void toApp(MotionEvent ev) { app.dispatchTouchEvent(ev); }
+    void toApp(MotionEvent ev) { // a CANCEL of ours: no gate further in may take it for the user's
+        depth++;
+        try { app.dispatchTouchEvent(ev); } finally { depth--; }
+    }
+
+    private static int depth; // main thread: > 0 while an outer gate of ours dispatches
 
     @Override public boolean dispatchTouchEvent(MotionEvent ev) {
-        if (!SpoilerBlock.dead) {
+        if (depth > 0 || SpoilerBlock.dead) return app.dispatchTouchEvent(ev);
+        depth++;
+        try {
             try {
                 if (ev.getActionMasked() == MotionEvent.ACTION_UP) scanner.sb.watchWindows(); // a tap may open a dialog or popup
                 if (scanner.onTouch(this, ev)) return true;
             } catch (Throwable t) {
                 SpoilerBlock.fail("touch", t);
             }
+            return app.dispatchTouchEvent(ev);
+        } finally {
+            depth--;
         }
-        return app.dispatchTouchEvent(ev);
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent e) {
