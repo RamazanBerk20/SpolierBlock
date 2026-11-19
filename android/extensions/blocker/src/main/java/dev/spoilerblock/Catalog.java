@@ -326,6 +326,8 @@ final class Catalog {
         int kind, amb, labelRank, g;
         String label;
         boolean free, numbered, oth = true, orig;
+        // works per tier: 0 title, 1 alternative name, 2 derived series, 3 character, 4 part of a character's name
+        @SuppressWarnings("unchecked") final Set<Integer>[] tiers = new Set[5];
 
         void add(int w) {
             for (int i = 0; i < n; i++) if (works[i] == w) return;
@@ -360,6 +362,13 @@ final class Catalog {
             prefix[i] = p;
             if (p != null) prefixCount.merge(join(Matcher.tokenize(p).toks, " "), 1, Integer::sum);
         }
+        // the series names that qualify; "Halo: Reach" joins "Halo" (from "Halo 2", "Halo 3"...) though "Halo" is an everyday word
+        Set<String> qualified = new HashSet<>();
+        for (int i = 0; i < works.size(); i++) {
+            if (prefix[i] == null) continue;
+            String k = join(Matcher.tokenize(prefix[i]).toks, " ");
+            if (prefixCount.get(k) >= (colon[i] ? 2 : 3)) qualified.add(k);
+        }
         String[] seriesOf = new String[works.size()];
         for (int i = 0; i < works.size(); i++) {
             Work w = works.get(i);
@@ -367,13 +376,17 @@ final class Catalog {
             Set<String> other = new HashSet<>(Arrays.asList(w.other));
             boolean ot = other.contains(w.title);
             for (String f : possessive(w.title)) for (Variant v : nameVariants(f, low, words)) {
-                add(keys, works, words, v.text, i, v.joined ? Matcher.ALIAS : Matcher.TITLE, w.title, v.free, v.numbered, ot, v.orig);
-                if (!v.joined && v.text.contains(" ")) add(keys, works, words, v.text, i, Matcher.TAG, w.title, false, false, ot);
+                add(keys, works, words, v.text, i, v.joined ? Matcher.ALIAS : Matcher.TITLE, w.title, v.free, v.numbered, ot, v.orig, 0);
+                if (!v.joined && v.text.contains(" ")) add(keys, works, words, v.text, i, Matcher.TAG, w.title, false, false, ot, true, 0);
             }
             String p = prefix[i]; // a colon prefix shared by 2+ titles, or a name numbered in 3+ titles ("Battlefield")
-            if (p != null && prefixCount.get(join(Matcher.tokenize(p).toks, " ")) >= (colon[i] ? 2 : 3)) {
+            if (p == null) {
+                String raw = jsTrim(SERIES_SPLIT.split(w.title, -1)[0]);
+                if (!raw.equals(jsTrim(w.title)) && qualified.contains(join(Matcher.tokenize(raw).toks, " "))) p = raw;
+            }
+            if (p != null && qualified.contains(join(Matcher.tokenize(p).toks, " "))) {
                 add(keys, works, words, p, i, Matcher.SERIES, p, false, false, other.contains(p));
-                add(keys, works, words, p, i, Matcher.TAG, p, false, false, other.contains(p));
+                add(keys, works, words, p, i, Matcher.TAG, p, false, false, other.contains(p), true, 2);
                 seriesOf[i] = p;
             }
             for (String a : w.aliases) for (String f : possessive(a)) for (Variant v : nameVariants(f, low, words)) add(keys, works, words, v.text, i, Matcher.ALIAS, w.title, v.free, v.numbered, other.contains(a), v.orig);
@@ -386,21 +399,36 @@ final class Catalog {
 
         Map<String, Integer> gmap = new HashMap<>();
         List<Group> groups = new ArrayList<>();
-        for (Key e : keys.values()) {
-            int[] ws = Arrays.copyOf(e.works, e.n);
-            Arrays.sort(ws);
+        List<Object[]> typed = new ArrayList<>(); // {typed key, label, works, group}: a type word narrows ("the Minecraft movie")
+        for (Map.Entry<String, Key> en : keys.entrySet()) {
+            Key e = en.getValue();
+            int[] ws = sorted(closest(e, works));
             if (e.labelRank > RANK[Matcher.SERIES] && ws.length > 1 && seriesOf[ws[0]] != null) {
                 String sl = seriesOf[ws[0]];
                 int same = 0;
                 for (int w : ws) if (sl.equals(seriesOf[w]) || works.get(w).title.equals(sl)) same++;
                 if (same * 2 >= ws.length) e.label = sl; // majority
             }
-            StringBuilder id = new StringBuilder(e.label).append('\u0001');
-            for (int k = 0; k < ws.length; k++) { if (k > 0) id.append(','); id.append(ws[k]); }
-            Integer g = gmap.get(id.toString());
-            if (g == null) { gmap.put(id.toString(), g = groups.size()); groups.add(new Group(e.label, ws)); }
-            e.g = g;
+            if (e.kind != Matcher.TAG && (e.tiers[0] != null || e.tiers[1] != null || e.tiers[2] != null)) {
+                Set<Integer> all = new HashSet<>();
+                for (int k = 0; k < 3; k++) if (e.tiers[k] != null) all.addAll(e.tiers[k]);
+                for (String type : PRIORITY_TYPES) {
+                    // the closest works of that type, else any works of that type the name belongs to ("Minecraft movie")
+                    List<Integer> tw = new ArrayList<>();
+                    for (int w : ws) if (works.get(w).type.equals(type)) tw.add(w);
+                    if (tw.isEmpty()) {
+                        for (int w : all) if (works.get(w).type.equals(type)) tw.add(w);
+                        Collections.sort(tw);
+                    }
+                    if (tw.isEmpty() || tw.size() == ws.length && sameWorks(tw, ws)) continue;
+                    int[] twa = new int[tw.size()];
+                    for (int k = 0; k < twa.length; k++) twa[k] = tw.get(k);
+                    typed.add(new Object[]{en.getKey() + " \u0002" + type, twa.length == 1 ? works.get(twa[0]).title : e.label, twa, null});
+                }
+            }
+            e.g = groupOf(gmap, groups, e.label, ws);
         }
+        for (Object[] x : typed) x[3] = groupOf(gmap, groups, (String) x[1], (int[]) x[2]);
         gmap = null;
         Integer[] order = new Integer[groups.size()];
         for (int i = 0; i < order.length; i++) order[i] = i;
@@ -411,15 +439,18 @@ final class Catalog {
         int[] newIdx = new int[groups.size()];
         for (int i = 0; i < order.length; i++) newIdx[order[i]] = i;
 
-        int n = keys.size(), bits = 4;
+        int n = keys.size() + typed.size(), bits = 4;
         while ((1 << bits) < n * 1.6) bits++;
         int slots = 1 << bits, mask = slots - 1;
         int[] u = new int[3 + slots * 3];
-        u[0] = Matcher.MAGIC; u[1] = bits; u[2] = 2; // index format 2
+        u[0] = Matcher.MAGIC; u[1] = bits; u[2] = 3; // index format 3
         for (Map.Entry<String, Key> en : keys.entrySet()) {
             Key e = en.getValue();
             String[] t = en.getKey().split(" ", -1);
-            boolean low = works.get(groups.get(e.g).ws[0]).pop < COMMON_POP;
+            int best = Integer.MAX_VALUE; // the name's most popular work at any tier
+            for (int k = 0; k < e.n; k++) best = Math.min(best, e.works[k]);
+            double top = works.get(best).pop;
+            boolean low = top < COMMON_POP;
             boolean titleLike = e.kind == Matcher.TITLE || e.kind == Matcher.ALIAS || e.kind == Matcher.SERIES, one = t.length == 1;
             boolean allCommon = true;
             for (String x : t) if (!words.isCommon(x)) { allCommon = false; break; }
@@ -432,7 +463,7 @@ final class Catalog {
             boolean common = plainChar || titleLike && (numeric || !e.free && !e.numbered &&
                 (one ? words.isCommon(t[0]) && (low || e.kind != Matcher.TITLE || words.top3k.contains(t[0])) : low && allCommon));
             boolean cap = plainChar || titleLike && !e.free && (one || low || allCommon);
-            boolean rare = titleLike && one && works.get(groups.get(e.g).ws[0]).pop < DISTINCT_POP && !common && !e.free;
+            boolean rare = titleLike && one && top < DISTINCT_POP && !common && !e.free;
             boolean other = e.oth && e.kind != Matcher.PART && e.kind != Matcher.CHAR1;
             // strong enough in text read from pictures (see build-index.js)
             List<String> real = new ArrayList<>();
@@ -449,6 +480,13 @@ final class Catalog {
             int s = A & mask;
             while (u[3 + s * 3 + 2] != 0) s = (s + 1) & mask;
             u[3 + s * 3] = A; u[3 + s * 3 + 1] = B; u[3 + s * 3 + 2] = v + 1;
+        }
+        for (Object[] x : typed) { // looked up only next to a type word
+            int A = Matcher.SEED_A, B = Matcher.SEED_B;
+            for (String tok : ((String) x[0]).split(" ", -1)) { int[] h = Matcher.tokHash(tok); A = Matcher.mixA(A, h[0]); B = Matcher.mixB(B, h[1]); }
+            int s = A & mask;
+            while (u[3 + s * 3 + 2] != 0) s = (s + 1) & mask;
+            u[3 + s * 3] = A; u[3 + s * 3 + 1] = B; u[3 + s * 3 + 2] = ((newIdx[(Integer) x[3]] << 9) | Matcher.TITLE) + 1;
         }
         keys = null;
         ByteBuffer bb = ByteBuffer.allocate(u.length * 4).order(ByteOrder.LITTLE_ENDIAN);
@@ -490,6 +528,11 @@ final class Catalog {
     }
 
     private static void add(Map<String, Key> keys, List<Work> works, Words words, String str, int w, int kind, String label, boolean free, boolean numbered, boolean oth, boolean orig) {
+        add(keys, works, words, str, w, kind, label, free, numbered, oth, orig, TIER[kind]);
+    }
+
+    // tier: how close the name is to work w (see build-index.js); the default comes from the kind as passed
+    private static void add(Map<String, Key> keys, List<Work> works, Words words, String str, int w, int kind, String label, boolean free, boolean numbered, boolean oth, boolean orig, int tier) {
         List<String> t = Matcher.tokenize(str).toks;
         if (t.isEmpty() || t.size() > Matcher.MAX_N || (t.size() == 1 && t.get(0).length() < 2)) return;
         if ((kind == Matcher.CHAR || kind == Matcher.PART) && t.size() == 1) {
@@ -504,6 +547,8 @@ final class Catalog {
             e.kind = kind; e.label = label; e.labelRank = RANK[kind];
         }
         e.add(w);
+        if (e.tiers[tier] == null) e.tiers[tier] = new HashSet<>();
+        e.tiers[tier].add(w);
         if (kind != Matcher.PART && kind != Matcher.CHAR1) e.oth &= oth;
         if (free) e.free = true;
         if (numbered) e.numbered = true;
@@ -514,6 +559,53 @@ final class Catalog {
     }
 
     static byte[] utf8(String s) { return s.getBytes(StandardCharsets.UTF_8); }
+
+    private static final int[] TIER = new int[7];
+    static {
+        TIER[Matcher.TITLE] = 0; TIER[Matcher.ALIAS] = 1; TIER[Matcher.SERIES] = 2; TIER[Matcher.CHAR] = 3;
+        TIER[Matcher.CHAR1] = 4; TIER[Matcher.PART] = 4; TIER[Matcher.TAG] = 1;
+    }
+    private static final String[] PRIORITY_TYPES = {"movie", "tv", "game", "book", "anime", "manga", "comic"};
+
+    private static double pop(Set<Integer> set, List<Work> works) {
+        double m = Double.NEGATIVE_INFINITY;
+        for (int w : set) m = Math.max(m, works.get(w).pop);
+        return m;
+    }
+
+    /** The works a bare name refers to: its closest tier, plus its series for a franchise name (see build-index.js). */
+    private static Set<Integer> closest(Key e, List<Work> works) {
+        int k = 0;
+        while (e.tiers[k] == null) k++;
+        Set<Integer> s = e.tiers[2];
+        if (k < 2 && s != null && (s.containsAll(e.tiers[k]) || pop(s, works) >= 1.5 * pop(e.tiers[k], works))) {
+            Set<Integer> u = new HashSet<>(e.tiers[k]);
+            u.addAll(s);
+            return u;
+        }
+        return e.tiers[k];
+    }
+
+    private static int[] sorted(Set<Integer> set) {
+        int[] a = new int[set.size()];
+        int i = 0;
+        for (int w : set) a[i++] = w;
+        Arrays.sort(a);
+        return a;
+    }
+
+    private static boolean sameWorks(List<Integer> a, int[] b) {
+        for (int i = 0; i < b.length; i++) if (a.get(i) != b[i]) return false;
+        return true;
+    }
+
+    private static int groupOf(Map<String, Integer> gmap, List<Group> groups, String label, int[] ws) {
+        StringBuilder id = new StringBuilder(label).append('\u0001');
+        for (int k = 0; k < ws.length; k++) { if (k > 0) id.append(','); id.append(ws[k]); }
+        Integer g = gmap.get(id.toString());
+        if (g == null) { gmap.put(id.toString(), g = groups.size()); groups.add(new Group(label, ws)); }
+        return g;
+    }
 
     // function words that do not make a name strong in text read from pictures
     private static final Set<String> LIGHT = new HashSet<>(Arrays.asList(

@@ -1,0 +1,173 @@
+{
+ "Minecraft": [
+  "Minecraft|game|2011"
+ ],
+ "Half-Life": [
+  "Half-Life|game|1998"
+ ],
+ "Assassin's Creed": [
+  "Assassin's Creed|game|2007",
+  "Assassin's Creed|movie|2016"
+ ],
+ "Halo": [
+  "Halo 2|game|2004",
+  "Halo 3|game|2007",
+  "Halo 4|game|2012",
+  "Halo: Combat Evolved Anniversary|game|2011",
+  "Halo: Combat Evolved|game|2001",
+  "Halo: Reach|game|2010",
+  "Halo: The Master Chief Collection|game|2014",
+  "Halo|tv|2022"
+ ],
+ "Star Wars": [
+  "Star Wars: Battlefront II|game|2005",
+  "Star Wars: Battlefront|game|2004",
+  "Star Wars: Clone Wars|tv|2003",
+  "Star Wars: Dark Forces|game|1995",
+  "Star Wars: Droids|tv|1985",
+  "Star Wars: Empire at War|game|2006",
+  "Star Wars: Episode I – The Phantom Menace|game|1999",
+  "Star Wars: Episode I – The Phantom Menace|movie|1999",
+  "Star Wars: Episode II – Attack of the Clones|movie|2002",
+  "Star Wars: Episode III – Revenge of the Sith|game|2005",
+  "Star Wars: Episode III – Revenge of the Sith|movie|2005",
+  "Star Wars: Episode IV – A New Hope|movie|1977",
+  "Star Wars: Episode IX – The Rise of Skywalker|movie|2019",
+  "Star Wars: Episode V – The Empire Strikes Back|movie|1980",
+  "Star Wars: Episode VI – Return of the Jedi|movie|1983",
+  "Star Wars: Episode VII – The Force Awakens|movie|2015",
+  "Star Wars: Episode VIII – The Last Jedi|movie|2017",
+  "Star Wars: Galactic Battlegrounds|game|2001",
+  "Star Wars: Knights of the Old Republic|game|2003",
+  "Star Wars: Republic Commando|game|2005",
+  "Star Wars: Rogue Squadron|game|1998",
+  "Star Wars: Skeleton Crew|tv|2024",
+  "Star Wars: Squadrons|game|2020",
+  "Star Wars: Starfighter|movie|2027",
+  "Star Wars: The Bad Batch|tv|2021",
+  "Star Wars: The Clone Wars|movie|2008",
+  "Star Wars: The Clone Wars|tv|2008",
+  "Star Wars: The Force Unleashed II|game|2010",
+  "Star Wars: The Force Unleashed|game|2008",
+  "Star Wars: The Old Republic|game|2011",
+  "Star Wars: Visions|tv|2021"
+ ],
+ "Harry Potter": [
+  "Harry Potter|book|1997",
+  "Harry Potter|tv|2026"
+ ],
+ "The Lord of the Rings": [
+  "The Lord of the Rings|book|1954",
+  "The Lord of the Rings|movie|1978"
+ ],
+ "The Witcher": [
+  "The Witcher|book|1986",
+  "The Witcher|game|2007",
+  "The Witcher|tv|2019"
+ ],
+ "Resident Evil": [
+  "Resident Evil|game|1996",
+  "Resident Evil|game|2002",
+  "Resident Evil|movie|2002",
+  "Resident Evil|movie|2026",
+  "Resident Evil|tv|2022"
+ ],
+ "The Last of Us": [
+  "The Last of Us|game|2013",
+  "The Last of Us|tv|2023"
+ ],
+ "Dune": [
+  "Dune|book|0",
+  "Dune|book|1965",
+  "Dune|game|1992",
+  "Dune|movie|1984",
+  "Dune|movie|2021"
+ ],
+ "Batman": [
+  "Batman|comic|1940",
+  "Batman|movie|1943",
+  "Batman|movie|1966",
+  "Batman|movie|1989",
+  "Batman|tv|1966"
+ ],
+ "Pokémon": [
+  "Pokémon|anime|1997"
+ ],
+ "Final Fantasy": [
+  "Final Fantasy|game|1987"
+ ],
+ "Grand Theft Auto": [
+  "Grand Theft Auto 2|game|1999",
+  "Grand Theft Auto III|game|2001",
+  "Grand Theft Auto IV|game|2008",
+  "Grand Theft Auto VI|game|2026",
+  "Grand Theft Auto V|game|2013",
+  "Grand Theft Auto: Chinatown Wars|game|2009",
+  "Grand Theft Auto: Episodes from Liberty City|game|2009",
+  "Grand Theft Auto: Liberty City Stories|game|2005",
+  "Grand Theft Auto: London 1961|game|1999",
+  "Grand Theft Auto: London 1969|game|1999",
+  "Grand Theft Auto: San Andreas|game|2004",
+  "Grand Theft Auto: The Ballad of Gay Tony|game|2009",
+  "Grand Theft Auto: The Trilogy – The Definitive Edition|game|2021",
+  "Grand Theft Auto: Vice City Stories|game|2006",
+  "Grand Theft Auto: Vice City|game|2002",
+  "Grand Theft Auto|game|1998"
+ ],
+ "Call of Duty": [
+  "Call of Duty|game|2003"
+ ],
+ "Fallout": [
+  "Fallout|game|1997",
+  "Fallout|tv|2024"
+ ],
+ "Star Trek": [
+  "Star Trek|game|1971",
+  "Star Trek|movie|2009"
+ ],
+ "Game of Thrones": [
+  "Game of Thrones|game|2014",
+  "Game of Thrones|tv|2011"
+ ],
+ "Mission: Impossible": [
+  "Mission: Impossible|movie|1996",
+  "Mission: Impossible|tv|1966",
+  "Mission: Impossible|tv|1988"
+ ],
+ "Jurassic Park": [
+  "Jurassic Park|book|1990",
+  "Jurassic Park|movie|1993"
+ ],
+ "Godzilla": [
+  "Godzilla|movie|1954",
+  "Godzilla|movie|1998",
+  "Godzilla|movie|2014"
+ ],
+ "Doom": [
+  "Doom|game|1993",
+  "Doom|game|2016",
+  "Doom|movie|2005"
+ ],
+ "God of War": [
+  "God of War|game|2005",
+  "God of War|game|2018"
+ ],
+ "Tomb Raider": [
+  "Tomb Raider|game|1996",
+  "Tomb Raider|game|2013",
+  "Tomb Raider|movie|2018"
+ ],
+ "Silent Hill": [
+  "Silent Hill|game|1999",
+  "Silent Hill|movie|2006"
+ ],
+ "Mortal Kombat": [
+  "Mortal Kombat|game|1992",
+  "Mortal Kombat|game|2011",
+  "Mortal Kombat|movie|1995",
+  "Mortal Kombat|movie|2021"
+ ],
+ "Super Mario": [
+  "Super Mario Bros.|movie|1993"
+ ]
+}
