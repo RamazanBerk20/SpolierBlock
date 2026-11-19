@@ -113,6 +113,7 @@ public class MainActivity extends Activity {
             return;
         }
         if ("reels".equals(getIntent().getStringExtra("screen"))) { setContentView(Reels.build(this)); return; }
+        if ("watch".equals(getIntent().getStringExtra("screen"))) { setContentView(Watch.build(this)); return; } // a pinned player over a list
         if ("settings".equals(getIntent().getStringExtra("screen"))) { startActivity(new android.content.Intent(this, DemoSettings.class)); finish(); return; }
         list = new FeedList(this);
         list.setLayoutManager(new LinearLayoutManager(this));
@@ -128,6 +129,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onPause() {
         super.onPause();
+        if (Watch.playerTaps > 0 || Watch.playerShades > 0) Log.i(TAG, "watch: " + Watch.playerTaps + " taps reached the player, " + Watch.playerShades + " shades on it");
         Log.i(TAG, "frame check summary: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches, " +
             blockerLayouts + " blocker layouts, " + blockerDraws + " blocker draws; audio: " + Sound.checks + " checks, " + Sound.mismatches + " mismatches");
     }

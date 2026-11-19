@@ -233,21 +233,38 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     // ---------- views floating over covered items (e.g. YouTube's inline player and its controls) ----------
 
     private final Map<View, Shade> shades = new HashMap<>();
-    private final List<Rect> coverRects = new ArrayList<>();
+    private final List<Rect> coverRects = new ArrayList<>(); // the visible part of each covered item, on screen
+    private final List<int[]> coverOrigins = new ArrayList<>(); // where each covered item starts, on screen
     private final List<Cover> rectCovers = new ArrayList<>();
     private final Set<View> shaded = new HashSet<>();
 
     /**
-     * A view outside the lists that lies (>= 90 %) over a covered item and is a big part of it (>= 40 %) is drawn
-     * over the cover by the app: a player, its controls, a video preview. It gets an opaque shade too.
+     * Where an item is visible on screen: its bounds clipped by its list and every other ancestor (a row scrolled under
+     * a pinned player above the list is not visible there). False when no part of it is.
+     */
+    private boolean visibleOnScreen(View v, Rect out) {
+        if (!v.isShown() || !v.getGlobalVisibleRect(out)) return false;
+        decor.getLocationOnScreen(loc);
+        out.offset(loc[0], loc[1]);
+        return true;
+    }
+
+    /**
+     * A view outside the lists that lies (>= 90 %) over the visible part of a covered item and is about its size (40 to
+     * 110 %) is drawn over the cover by the app: the item's own video preview and its controls. It gets an opaque
+     * shade too. A view over the part of the item its list does not show (the watch page's player, pinned above the
+     * related list while a row scrolls under it) is not the item's and is left alone.
      */
     private void shadeFloaters() {
         coverRects.clear();
+        coverOrigins.clear();
         rectCovers.clear();
         for (Cover c : covers) {
-            if (!c.item.isShown()) continue;
+            Rect vis = new Rect();
+            if (!visibleOnScreen(c.item, vis)) continue;
             c.item.getLocationOnScreen(loc);
-            coverRects.add(new Rect(loc[0], loc[1], loc[0] + c.item.getWidth(), loc[1] + c.item.getHeight()));
+            coverRects.add(vis);
+            coverOrigins.add(new int[]{loc[0], loc[1]});
             rectCovers.add(c);
         }
         shaded.clear();
@@ -263,11 +280,14 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         long area = (long) v.getWidth() * v.getHeight();
         for (int k = 0; k < coverRects.size(); k++) {
             Rect r = coverRects.get(k);
-            long ra = (long) r.width() * r.height();
+            View item = rectCovers.get(k).item;
+            long ra = (long) item.getWidth() * item.getHeight();
             if (area < ra * 4 / 10 || area > ra * 11 / 10) continue;
+            Rect in = new Rect();
+            if (!visibleOnScreen(v, in)) continue;
+            long va = (long) in.width() * in.height();
             v.getLocationOnScreen(loc);
-            Rect in = new Rect(loc[0], loc[1], loc[0] + v.getWidth(), loc[1] + v.getHeight());
-            if (in.intersect(r) && (long) in.width() * in.height() * 10 >= area * 9) {
+            if (in.intersect(r) && (long) in.width() * in.height() * 10 >= va * 9) {
                 Shade d = shades.get(v);
                 if (d == null) {
                     shades.put(v, d = new Shade(v));
@@ -275,7 +295,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
                     if (Log.isLoggable(SpoilerBlock.TAG, Log.DEBUG)) Log.d(SpoilerBlock.TAG, "shade floating " + v.getClass().getName());
                 }
                 d.setBounds(0, 0, v.getWidth(), v.getHeight());
-                d.update(rectCovers.get(k), loc[0] - r.left, loc[1] - r.top);
+                d.update(rectCovers.get(k), loc[0] - coverOrigins.get(k)[0], loc[1] - coverOrigins.get(k)[1]);
                 shaded.add(v);
                 return;
             }
@@ -625,12 +645,12 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         c.recycle();
     }
 
+    /** The cover under a touch: only where its item is visible (never over a pinned player or a bar above its list). */
     private Cover coverAt(float x, float y) {
+        Rect vis = new Rect();
         for (int i = covers.size() - 1; i >= 0; i--) {
             Cover c = covers.get(i);
-            if (!c.item.isShown()) continue;
-            c.item.getLocationOnScreen(loc);
-            if (x >= loc[0] && y >= loc[1] && x < loc[0] + c.item.getWidth() * c.item.getScaleX() && y < loc[1] + c.item.getHeight() * c.item.getScaleY()) return c;
+            if (visibleOnScreen(c.item, vis) && vis.contains((int) x, (int) y)) return c;
         }
         return null;
     }
