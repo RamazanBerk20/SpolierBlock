@@ -293,7 +293,13 @@
         const joined = (a, b) => a >= 0 && b < tk.toks.length && /^ +$/.test(text.slice(tk.ends[a], tk.starts[b]));
         if (everyday(c) && named.has(line[c.h.i]) && !c.typed &&
             !(joined(c.h.i - 1, c.h.i) && fits(c.h.i - 1)) && !(joined(c.h.i, c.h.i + 1) && fits(c.h.i + 1))) continue;
-        if (c.caseOnly) { if (adjacent) accept(c); continue; }
+        // a name whose capitals prove nothing: a media word right next to it, or a type word of its works within the
+        // next 3 words of its sentence ("Until Dawn | FULL HORROR GAME - No Commentary")
+        let typedSoon = false;
+        for (let j = c.h.i + c.h.n; j < Math.min(tk.toks.length, c.h.i + c.h.n + 3) && !typedSoon; j++) {
+          typedSoon = sent[j] === si && ((TYPE_BIT[typeWord(tk.toks[j])] ?? 0) & mask) !== 0;
+        }
+        if (c.caseOnly) { if (adjacent || typedSoon) accept(c); continue; }
         // a name that mostly means something else (Palestine, Napoleon) only takes a media word near it; as an everyday
         // word at the start of a sentence ("Go to channel TV") only one right next to it
         if (c.other) { if (c.common && sentenceStart(text, c.s) ? adjacent : near) accept(c); continue; }

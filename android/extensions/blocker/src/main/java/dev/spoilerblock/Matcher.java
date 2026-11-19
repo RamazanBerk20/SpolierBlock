@@ -494,7 +494,14 @@ public final class Matcher {
         boolean adjacent = said || fits(c, c.i - 1, si, mask, sent, tk) || fits(c, after, si, mask, sent, tk);
         if (lined && !(joined(text, tk, c.i - 1, c.i) && fits(c, c.i - 1, si, mask, sent, tk))
             && !(joined(text, tk, c.i, c.i + 1) && fits(c, c.i + 1, si, mask, sent, tk))) return false;
-        if (c.caseOnly) return adjacent;
+        // capitals prove nothing: also a type word of its works within the next 3 words ("Until Dawn | FULL HORROR GAME")
+        boolean typedSoon = false;
+        for (int j = c.i + c.n; j < Math.min(len, c.i + c.n + 3) && !typedSoon; j++) {
+            String tw = typeWord(tk.toks.get(j));
+            Integer b = tw == null ? null : TYPE_BIT.get(tw);
+            typedSoon = sent[j] == si && b != null && (b & mask) != 0;
+        }
+        if (c.caseOnly) return adjacent || typedSoon;
         // a name that mostly means something else: a media word near it; as an everyday word at the start of a
         // sentence ("Go to channel TV"), right next to it
         if (c.other) return c.common && sentenceStart(text, c.s) ? adjacent : near;
