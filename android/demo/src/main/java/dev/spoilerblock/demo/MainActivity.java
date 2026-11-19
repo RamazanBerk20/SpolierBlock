@@ -105,6 +105,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
+        watchShown = getIntent().getIntExtra("watchShown", -1);
         String reveal = getIntent().getStringExtra("revealed"); // posts the test marked seen / showed: "8,12"
         if (reveal != null) for (String s : reveal.split(",")) if (!s.isEmpty()) revealed.add(Integer.parseInt(s));
         if ("more".equals(getIntent().getStringExtra("screen"))) { // messages, a bottom sheet, suggestions: More.java
@@ -112,6 +113,7 @@ public class MainActivity extends Activity {
             return;
         }
         if ("reels".equals(getIntent().getStringExtra("screen"))) { setContentView(Reels.build(this)); return; }
+        if ("watch".equals(getIntent().getStringExtra("screen"))) { setContentView(Watch.build(this)); return; } // a pinned player over a list
         if ("settings".equals(getIntent().getStringExtra("screen"))) { startActivity(new android.content.Intent(this, DemoSettings.class)); finish(); return; }
         list = new FeedList(this);
         list.setLayoutManager(new LinearLayoutManager(this));
@@ -122,10 +124,12 @@ public class MainActivity extends Activity {
         if (at >= 0) ((LinearLayoutManager) list.getLayoutManager()).scrollToPositionWithOffset(at, 300);
         if (getIntent().getBooleanExtra("spoilerEval", false)) SpoilerEval.run(this);
         if (getIntent().getBooleanExtra("imageEval", false)) ImageEval.run(this);
+        if (getIntent().getBooleanExtra("seriesStub", false)) seriesStub();
     }
 
     @Override protected void onPause() {
         super.onPause();
+        if (Watch.playerTaps > 0 || Watch.playerShades > 0) Log.i(TAG, "watch: " + Watch.playerTaps + " taps reached the player, " + Watch.playerShades + " shades on it");
         Log.i(TAG, "frame check summary: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches, " +
             blockerLayouts + " blocker layouts, " + blockerDraws + " blocker draws; audio: " + Sound.checks + " checks, " + Sound.mismatches + " mismatches");
     }
@@ -153,6 +157,12 @@ public class MainActivity extends Activity {
             int post = (Integer) tag;
             boolean covered = covered(v);
             checks++;
+            if (post == watchShown && v instanceof ViewGroup && ((ViewGroup) v).getChildAt(((ViewGroup) v).getChildCount() - 1) instanceof Counter) {
+                // the player row: "Show once" holds through counters, frames, late verdicts and rebinds
+                if (!covered && !watchedOpen) { watchedOpen = true; Log.i(TAG, "watched post " + post + " shown at frame " + frames); }
+                else if (covered && watchedOpen) { mismatches++; Log.e(TAG, "MISMATCH frame " + frames + " post " + post + " covered again after Show once"); }
+                continue;
+            }
             if (expected(post) == null) continue; // depends on the catalog update, checked by screenshots instead
             if (covered != expected(post)) {
                 mismatches++;
@@ -214,6 +224,7 @@ public class MainActivity extends Activity {
                 caption.setTextSize(17);
                 l.addView(caption);
                 l.addView(new Video(parent.getContext()), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(200)));
+                l.addView(new Counter(parent.getContext())); // like counts ticking under the post, as on X
             } else if (type == IMAGE) {
                 TextView caption = new TextView(parent.getContext());
                 caption.setTextSize(17);
@@ -267,7 +278,46 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Until the index carries series data: the picker's "More from this series" gets, for a cover's first name, every
+     * work whose title contains that name (Dune: Dune Messiah, Children of Dune...). Reflection: the demo is built
+     * without the blocker.
+     */
+    static void seriesStub() {
+        try {
+            Class<?> picker = Class.forName("dev.spoilerblock.SeenPicker"), series = Class.forName("dev.spoilerblock.SeenPicker$Series");
+            Object stub = java.lang.reflect.Proxy.newProxyInstance(series.getClassLoader(), new Class<?>[]{series}, (proxy, m, args) -> {
+                if (!m.getName().equals("more")) return m.getName().equals("toString") ? "series stub" : null;
+                Object matcher = args[0];
+                java.lang.reflect.Field tf = matcher.getClass().getField("titles"), lf = matcher.getClass().getField("labels");
+                tf.setAccessible(true); lf.setAccessible(true);
+                String[] titles = (String[]) tf.get(matcher), labels = (String[]) lf.get(matcher);
+                String name = labels[((int[]) args[1])[0]].toLowerCase(java.util.Locale.ROOT);
+                java.util.List<Integer> out = new java.util.ArrayList<>();
+                for (int w = 0; w < titles.length; w++) if (titles[w].toLowerCase(java.util.Locale.ROOT).contains(name)) out.add(w);
+                return out;
+            });
+            java.lang.reflect.Field f = picker.getDeclaredField("series");
+            f.setAccessible(true);
+            f.set(null, stub);
+            Log.i(TAG, "series stub installed");
+        } catch (Throwable t) { Log.e(TAG, "series stub", t); }
+    }
+
     static final int VIDEO_POST = 16; // "Elden Ring boss fights are brutal": covered by its caption
+
+    /** A like counter that ticks every 300 ms: the post's text changes while the post stays the same. */
+    static class Counter extends TextView implements Runnable {
+        int n = 100;
+        Counter(Context c) { super(c); setText("♥ 100"); }
+        @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); postDelayed(this, 300); }
+        @Override protected void onDetachedFromWindow() { removeCallbacks(this); super.onDetachedFromWindow(); }
+        @Override public void run() { setText("♥ " + (++n)); postDelayed(this, 300); }
+    }
+
+    // --ei watchShown N: post N's player row is shown once by the test; from the first frame it is seen uncovered it must stay so
+    static int watchShown = -1;
+    static boolean watchedOpen;
 
     /**
      * Frames drawn into a TextureView's surface while attached: video content no ImageView capture can reach. With
