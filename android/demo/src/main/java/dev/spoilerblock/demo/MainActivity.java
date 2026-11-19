@@ -124,7 +124,6 @@ public class MainActivity extends Activity {
         if (at >= 0) ((LinearLayoutManager) list.getLayoutManager()).scrollToPositionWithOffset(at, 300);
         if (getIntent().getBooleanExtra("spoilerEval", false)) SpoilerEval.run(this);
         if (getIntent().getBooleanExtra("imageEval", false)) ImageEval.run(this);
-        if (getIntent().getBooleanExtra("seriesStub", false)) seriesStub();
     }
 
     @Override protected void onPause() {
@@ -276,32 +275,6 @@ public class MainActivity extends Activity {
             View t = l.getChildAt(1);
             if (t instanceof TextView) ((TextView) t).setText(body(post)); else ((DrawnText) t).setText(body(post));
         }
-    }
-
-    /**
-     * Until the index carries series data: the picker's "More from this series" gets, for a cover's first name, every
-     * work whose title contains that name (Dune: Dune Messiah, Children of Dune...). Reflection: the demo is built
-     * without the blocker.
-     */
-    static void seriesStub() {
-        try {
-            Class<?> picker = Class.forName("dev.spoilerblock.SeenPicker"), series = Class.forName("dev.spoilerblock.SeenPicker$Series");
-            Object stub = java.lang.reflect.Proxy.newProxyInstance(series.getClassLoader(), new Class<?>[]{series}, (proxy, m, args) -> {
-                if (!m.getName().equals("more")) return m.getName().equals("toString") ? "series stub" : null;
-                Object matcher = args[0];
-                java.lang.reflect.Field tf = matcher.getClass().getField("titles"), lf = matcher.getClass().getField("labels");
-                tf.setAccessible(true); lf.setAccessible(true);
-                String[] titles = (String[]) tf.get(matcher), labels = (String[]) lf.get(matcher);
-                String name = labels[((int[]) args[1])[0]].toLowerCase(java.util.Locale.ROOT);
-                java.util.List<Integer> out = new java.util.ArrayList<>();
-                for (int w = 0; w < titles.length; w++) if (titles[w].toLowerCase(java.util.Locale.ROOT).contains(name)) out.add(w);
-                return out;
-            });
-            java.lang.reflect.Field f = picker.getDeclaredField("series");
-            f.setAccessible(true);
-            f.set(null, stub);
-            Log.i(TAG, "series stub installed");
-        } catch (Throwable t) { Log.e(TAG, "series stub", t); }
     }
 
     static final int VIDEO_POST = 16; // "Elden Ring boss fights are brutal": covered by its caption
