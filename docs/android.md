@@ -1,8 +1,8 @@
 # Android
 
-The Android part is a [Morphe](https://github.com/MorpheApp) patch bundle (version 0.2.0) and a companion app. The bundle adds one app-agnostic Java extension to a host app. Thin per-app patches inject it. The companion app, `dev.spoilerblock`, owns the settings that every patched app shares.
+The Android part is a [Morphe](https://github.com/MorpheApp) patch bundle (version 0.2.2) and a companion app. The bundle adds one app-agnostic Java extension to a host app. Thin per-app patches inject it. The companion app, `dev.spoilerblock`, owns the settings that every patched app shares.
 
-Read the [limits in the README](../README.md#status-and-known-limits) first. In short: it has only run in an x86_64 emulator, nothing has run in X or Instagram feeds or on a real phone, and patching these apps is against the services' terms. The config, the decision rule and the cover wording are in [agents/contract.md](agents/contract.md). The Java code follows them, and `ConfigTest` and `CustomWorkTest` check it.
+Read the [limits in the README](../README.md#status-and-known-limits) first. In short: the owner ran the 0.2.0 bundle on one real phone (a Galaxy S25+) in patched YouTube, X and Instagram and reported that covers and buttons work in the YouTube and X feeds and that a covered reel is muted; the 0.2.2 changes have run only in an x86_64 emulator and the demo app, nothing was measured on a phone, and patching these apps is against the services' terms. The config, the decision rule and the cover wording are in [agents/contract.md](agents/contract.md). The Java code follows them, and `ConfigTest` and `CustomWorkTest` check it.
 
 ## What the patch does
 
@@ -94,7 +94,7 @@ Run these from the repository root unless stated.
    ./gradlew :patches:buildAndroid
    ```
 
-   The bundle is written to `android/patches/build/libs/patches-0.2.0.mpp`. The version comes from `version` in `android/gradle.properties`. The 0.2.0 bundle is 138 MB (the 0.1 bundle was about 112 MB). If `dist/firefox/data` lacks one of the six catalog files, the build stops and tells you to run `npm run build`.
+   The bundle is written to `android/patches/build/libs/patches-0.2.2.mpp`. The version comes from `version` in `android/gradle.properties`. The 0.2.0 bundle is 138 MB (the 0.1 bundle was about 112 MB); the 0.2.2 bundle was not built for this page, so its size is not measured. If `dist/firefox/data` lacks one of the six catalog files, the build stops and tells you to run `npm run build`.
 
 `apply.sh` uses the newest `patches-*.mpp` it finds in that folder.
 
@@ -159,6 +159,10 @@ The patch only adds its libraries to ABIs the app already ships. So a patched ap
 
 **Instagram.** Feed captions and comments are `IgTextLayoutView`, which draws a `Layout`. The patch hooks `setTextLayout(Layout)` on `com.instagram.ui.widget.textview.IgTextLayoutView`. The hook makes the text independent of the view's accessibility node provider, which may be absent.
 
+**X quoted posts.** X draws the quoted post's text itself: `com.twitter.tweetview.core.QuoteView` builds a `StaticLayout` in `onMeasure` from a `CharSequence` field, and sets a content description only while an accessibility service runs. The patch (`TextHook` with a `field`, in `SpoilerBlockPatch.kt`) inserts, at the start of `QuoteView.onMeasure(II)`, a read of that field and a call to the blocker with it. The field is `O`, an obfuscated name read statically from X 12.19.1, so it can differ in another X version. The hook is fail-soft: if the class, the method, the field or two free registers are missing, the patch logs a warning (`text hook not found`) and only the quoted text is lost. The reply-context line inside a quote is a `TextLayoutView` and is hooked by the existing rule. This has never run in X: it comes from reading the APK. The demo reproduces it with `QuoteBox`.
+
+**Instagram Reels.** Instagram's Reels viewer wraps the window's `Window.Callback` with its own gesture handler after the blocker installed its `TouchGate`, and that handler keeps a plain tap to itself (read statically in 452.1; the demo's wrapper does the same), so a tap on a cover's buttons could be swallowed. Since 0.2.2 the blocker puts its gate back in front when something wrapped it (see [Cover](#how-text-and-pixels-are-captured), under "Touch"). This is from reading Instagram 452.1 and from a reproduction in the demo app; it never ran in Instagram. The owner reported the Reels buttons as a problem in 0.2.0, which this change targets.
+
 ### Manifest and native libraries
 
 - New library files are written compressed into the APK. That only installs with `extractNativeLibs=true`. X declares `false`, so the patch sets it to `true`. X's own libraries stay stored in the APK and are now also extracted at install. YouTube and Instagram already extract.
@@ -169,13 +173,13 @@ The patch only adds its libraries to ABIs the app already ships. So a patched ap
 
 ## Using the bundle in Morphe Manager
 
-Not verified on a real device. The bundle is an ordinary `.mpp` file, so the intent is to add `patches-0.2.0.mpp` as a local patch source in Morphe Manager and enable `SpoilerBlock` together with the other patches you want. The menu steps are not described here because they could not be checked in this repository. If you do this, also read the signing notes above.
+Not verified on a real device. The bundle is an ordinary `.mpp` file, so the intent is to add `patches-0.2.2.mpp` as a local patch source in Morphe Manager and enable `SpoilerBlock` together with the other patches you want. The menu steps are not described here because they could not be checked in this repository. If you do this, also read the signing notes above.
 
 ## How text and pixels are captured
 
 The blocker uses only public Android APIs on the host's views.
 
-**Feed items.** A `Scanner` is attached to each activity window. Before every frame (`OnPreDrawListener`, after layout and before draw) it looks at the children of the window's scrolling containers. A container is an `AbsListView`, a view that can scroll, or a view whose class name (or a superclass name) ends in `RecyclerView`, `ViewPager`, `ViewPager2` or `ScrollView`. It finds containers again when the layout changes or every 500 ms. Nested lists inside an item are judged item by item. A list drawn by Jetpack Compose is not made of such views, so it is not recognised as a container (not tested).
+**Feed items.** A `Scanner` is attached to each activity window. Before every frame (`OnPreDrawListener`, after layout and before draw) it looks at the children of the window's scrolling containers. A container is an `AbsListView`, a view that can scroll, or a view whose class name (or a superclass name) ends in `RecyclerView`, `ViewPager`, `ViewPager2` or `ScrollView`. It finds containers again when the layout changes or every 500 ms. Nested lists inside an item are judged item by item. Only a container whose class name ends in `ScrollView` is looked into (through up to three levels of single children) to find its items. A list or pager that shows one full-screen page at rest (Reels, Shorts) holds one child too, but that child is the item itself, so the page is covered as one item. A list drawn by Jetpack Compose is not made of such views, so it is not recognised as a container (not tested).
 
 **Other windows.** Dialogs, bottom sheets, popup menus and drop-downs (search suggestions) are windows of their own, not part of the activity's. The blocker finds their root views with `WindowInspector` (API 29 and newer): on every frame for a second after a touch, a key press or a resume, and every half second otherwise. Each gets its own scanner, and covers there get their buttons through a transparent view added on top of the window. The settings screen and its dialogs are never scanned. Below API 29 these windows are not scanned.
 
@@ -189,6 +193,14 @@ The blocker uses only public Android APIs on the host's views.
 A cheap fingerprint of the item (view identities, texts, sizes, images) decides whether to read it again. An unchanged item is re-read at most once per second as a safety net. The text goes through the Java matcher and the decision rule, and, for style `spoilers`, the classifier. The classifier loads on the first item that needs it and is released when no work uses that style.
 
 **Cover.** An opaque panel is drawn in the item's own `ViewGroupOverlay`, so it scrolls and animates with the item. It shows the contract's wording ("Mentions {t}", "Spoiler about {t}" and so on) and three buttons: "Show once", "I've seen it" and ⋮ for settings. On a short item, such as one line of a message, the message and the buttons sit side by side and the buttons shrink to fit. Touches on a cover go to the app until they turn into a scroll. A tap cancels the app's gesture and is handled by the blocker. A floating view that lies over a covered item (for example YouTube's inline player) gets an opaque shade too. "Show once" lasts for the current process. While an item's pictures are being judged, each picture gets an opaque shade of its own, without text or buttons, and the post's text stays readable (the extension dims pending pictures instead; see [Images and video](#images-and-video)).
+
+**Text and the decision rule.** The item's own text is read first. Any U+0001 in it is replaced by a space, so an app's text cannot pose as OCR text. The OCR text of the item's pictures follows it behind one U+0001 (at most the last 4,000 characters; contract rule 8), and `Matcher.evaluate` reads it as the extension's matcher does ([how-it-works.md](how-it-works.md#text-read-from-pictures)). Rule 7 is applied in `Scanner`: the post's own text is evaluated alone (`ownNames`) when the item has pictures. A model title is dropped when that text names any work, and per picture when the picture's OCR text names one (`ocrNames`). When the own text names a seen work and no covered one (`ownSeenOnly`), pictures cover nothing. The label lists text groups in the matcher's order (own text first, then OCR-only, then image titles). The classifier gets the text with the marker replaced by a line break.
+
+**Colours.** A cover and the shade over a picture are coloured from the surface behind them (`Ui.on`, `Ui.surface`), not from the system night-mode setting. The surface is the first background of the view or one of its parents that is a solid colour (a colour, a gradient fill, the top solid layer of a layer drawable, a wrapped or state-dependent drawable; alpha at least 0xE0), then the theme's window background colour, and when none can be read the cover is dark. A surface that is dark by luminance gives a dark palette. The cover is the surface mixed 6% toward white (dark) or black (light). The picture shade is the surface mixed 10% the same way, so it is a tone of the host's own colour and close to the grey a host paints a picture's place with while it loads; when no surface is found it is the palette's cover colour lightened by 4%. The settings screen still uses the palette of the system setting.
+
+**Touch.** The window touch hook (`TouchGate`) must be the outermost `Window.Callback`. Apps may wrap the callback after the blocker (Instagram's Reels viewer installs a gesture wrapper). `Scanner.gate()` runs on every frame of an activity window and on resume, and puts a new `TouchGate` on top when the callback is no longer one. A gate further in passes on what an outer gate of ours already saw (a depth counter), and the blocker's own cancel events do not re-enter the gate.
+
+**Seen picker.** "I've seen it" on a cover whose names stand for one work marks it at once (`SpoilerBlock.markWorks`). With several works (a franchise name, an original and its remake) it opens `SeenPicker`, a plain framework dialog titled "Which have you seen?" with one checkbox per work not yet seen (title, and `{type} · {year}` under it), nothing ticked, the note `Posts that only say "{t}" stay covered until every one is marked.` and the buttons All, Cancel and Mark seen. Mark seen is disabled until a work is ticked. Only the ticked works are written, in one write. The dialog is in the dark or light of the surface the cover sat on, and its window is on the `ownWindows` list, so the scanner never reads it.
 
 **TalkBack.** A covered item is exposed to TalkBack as its cover: the message and the three buttons, as focusable and activatable nodes, through an accessibility delegate. The item's real content stays hidden from TalkBack. This works on API 29 and newer, and only for views that do not have an accessibility node provider of their own. On API 28, and on views that have one (Litho, Compose), the content is hidden from TalkBack and the cover is not readable. Tested only in the demo app on the emulator.
 
@@ -204,11 +216,13 @@ The Android pipeline is a port of the browser's (see [how-it-works.md](how-it-wo
 
 With "Scan images and video" on, `ImageView`s that are at least 96 dp in both directions and show a drawable other than a plain colour are scanned.
 
-- **Capture.** The image view's own drawable is drawn into a `RenderNode`, rendered off screen by a `HardwareRenderer` into an `ImageReader`, and the result is scaled to at most 1280 px on the long side (the size the extension's OCR reads). It does not call `View.draw`: drawing the view on a hardware canvas put the host's own render nodes into the capture renderer, which can take their damage and leave stale regions on devices with partial screen updates. That is the suspected cause of a feed that jumped on a real phone. The change was checked only by the demo app's frame checks on the emulator. It was never tried on a phone or in X. One capture is done per frame. A queue of 8 jobs is kept, newest first. Below Android 10, and for animated images, the capture draws in software; hardware bitmaps then fail closed.
+- **Capture.** The image view's own drawable is drawn into a `RenderNode`, rendered off screen by a `HardwareRenderer` into an `ImageReader`, and the result is scaled to at most 1280 px on the long side (the size the extension's OCR reads). It does not call `View.draw`: drawing the view on a hardware canvas put the host's own render nodes into the capture renderer, which can take their damage and leave stale regions on devices with partial screen updates. That was the suspected cause of a feed that jumped on a real phone. The change was checked by the demo app's frame checks on the emulator. The owner ran 0.2.0 on a phone and has not reported the jump again; no frame counter or log from that run is kept here, and it was not checked in X separately. One capture is done per frame. A queue of 8 jobs is kept, newest first. Below Android 10, and for animated images, the capture draws in software; hardware bitmaps then fail closed.
 - **Resize.** The picture is squashed to the model's 256 x 256 input by a Java port of `src/background/pixels.js` (`Images.visionPixels`): a separable triangle filter like PIL's antialiased bilinear, the whole picture without a crop. The browsers use the same function, so the numbers agree. `ClipTest` requires pixel values within 1 of the extension's (4 values were off by 1 in 75 images).
 - **Title check.** `Clip.java` is the title verdict of `engine.js`: the cosine to the shipped int8 title rows (`clip-text.bin`), compared with the generic prompts, with the cut-offs and prompts read from `clip-meta.json` (minimum score, margin, title gap, media gate). Title checks that wait together run as one batch of up to 4, as in the engine.
 - **OCR.** `Ocr.java` is `ocr.js` step for step: detector input up to 960 px, a probability map thresholded at 0.3, boxes, a recogniser pass per box, lines with a mean confidence of at least 0.6, read in rows. A run past 10 seconds is stopped and counts as a failure. The text joins the item's text for matching.
-- **Cache and scope.** A pixel hash cache (500 entries) avoids judging the same picture twice. Video frames are not scanned. Only the `ImageView` thumbnails are. Images are judged only when they could change the outcome: scanning on, and unlisted works covered, unrecognised images covered, or at least one work blocked. The image models are released when "Scan images and video" is turned off.
+- **Cache and scope.** A pixel hash cache (500 entries, keyed by the hash of the model's 256 x 256 input) avoids judging the same picture twice. Images are judged only when they could change the outcome: scanning on, and unlisted works covered, unrecognised images covered, or at least one work blocked. The image models are released when "Scan images and video" is turned off.
+- **Video frames.** An on-screen `TextureView` or `SurfaceView` inside an item is sampled (`Images.captureVideo`): a `TextureView` is read with `getBitmap`, a `SurfaceView` with `PixelCopy`, neither draws or lays out the host's views. The frame is at most 448 px on the long side and a new one is taken every 5 seconds (it is part of the picture's key). It goes through the same title check and OCR as a picture. The last frame's verdict holds until the next is in, and a player stays shaded until its first frame has a verdict. A frame that cannot be read (a protected surface) gives no verdict and no shade, so the post's text and pictures still count. A `TextureView` is shaded in its parent's overlay, because it draws only its layer. A player that floats over a list instead of sitting in the item (YouTube's inline feed player) is not inside the item and is not sampled (a `shortcut` comment in `Images.java`). This replaces the earlier "video frames are not scanned": thumbnails and posters were always scanned, frames are new in 0.2.2 and have run only in the demo.
+- **Early load and saved verdicts.** The image models load when the first activity resumes, when images matter for the current settings (`Images.prewarm`), so the load overlaps the host's own start instead of following its first feed. A picture whose verdict is known (from this run or a saved one) is answered on the capture thread without waiting for the models. Each verdict is applied as soon as it is ready, not when its batch ends. Verdicts are saved across restarts in `spoilerblock-images.bin` in the app's cache directory (`getCacheDir()`; the system may clear it), keyed by the pixel hash. A file is used only for the same build of the app (the package's last update time) and the same file version. It is written when the queue runs dry and at most every 5 seconds while busy, with the OCR text cut at 8,000 characters, and it never leaves the device. It is read again when scanning is switched back on.
 - **Pending and failed pictures.** A picture whose verdict is not in yet gets an opaque shade over just that picture, in the picture's own overlay (no text, no buttons). The post's text stays readable, and only a verdict covers the post. A failed check (a capture or model failure, or OCR that timed out) leaves the picture shaded. The wording is in the [contract](agents/contract.md).
 - **Threads.** The CPU sessions use half the cores, at most 4, and do not spin between runs. The classifier uses 1 thread. The worker thread runs at background priority. XNNPACK is not used: it was slower (690 ms alone and 355 ms in a batch of 4 on the emulator, against 333 and 155 ms for the CPU session) and crashed on 1.22.
 
@@ -220,7 +234,14 @@ With "Scan images and video" on, `ImageView`s that are at least 96 dp in both di
 
 The check runs once and is repeated after an app or OS update. Later starts run the reference picture once on the accelerated session to be sure it still works. A failed accelerated run falls back to the CPU session, and the CPU is kept until the next app or OS update. When acceleration wins, the CPU vision session is dropped, so one copy of the weights is in memory. The current mode is shown in Settings > About. OCR always runs on the CPU.
 
-**What was measured, and where.** Only on the x86_64 emulator, with 2 threads: a title check takes 333 ms for one picture and 155 ms per picture in a batch of 4, and OCR 196 ms per picture in the fixture run. Parity with the extension on the fixtures (`ClipTest`, `OcrTest`, and the demo's on-device check): 0 of 75 title verdicts differ, and 21 of 21 OCR texts are identical. **Hardware acceleration, arm64 and all speeds have never run on a real phone.** The emulator's x86_64 numbers say little about a phone.
+**Startup on the emulator** (x86_64, a logged-out YouTube search, seconds after process start; the `cold start:` line in logcat under the tag `SpoilerBlock`, one run per figure, so read them as indicative):
+
+| | Before 0.2.2 | After, pictures not seen before | After, pictures seen before (saved verdicts) |
+|---|---|---|---|
+| First verdict | 3.9 to 4.2 s | 3.3 to 3.4 s | 1.9 to 2.3 s |
+| Every picture on screen judged | 5.5 to 5.8 s | 4.9 to 5.1 s | 2.0 to 2.8 s |
+
+**What was measured, and where.** Only on the x86_64 emulator, with 2 threads: a title check takes 333 ms for one picture and 155 ms per picture in a batch of 4, and OCR 196 ms per picture in the fixture run. Parity with the extension on the fixtures (`ClipTest`, `OcrTest`, and the demo's on-device check): 0 of 75 title verdicts differ, and 21 of 21 OCR texts are identical. **Hardware acceleration, arm64 speed and every figure above have never been measured on a real phone** (the owner's 0.2.0 run on a Galaxy S25+ gave no numbers). The emulator's x86_64 numbers say little about a phone.
 
 ## Settings
 
@@ -235,11 +256,15 @@ It opens from:
   | App | Row |
   |---|---|
   | YouTube | Added to both settings lists (`settings_fragment.xml` and the "Cairo" one, `settings_fragment_cairo.xml`). Verified on the emulator. |
-  | X | Added to `settings_root.xml` (order 105). Present in the patched file; X was never run, so it has never been seen working. |
+  | X | Added to `settings_root.xml` (order 105). Present in the patched file. Not seen working by an agent; the owner has not reported on it. |
   | Instagram | None. Its settings come from server data, so there is no preference file to add a row to. |
   | Demo apps | Added to the demo's own settings. |
 
   A missing screen in another app version only loses the row (the patch logs a warning). The cover's ⋮ button and the shortcut always work.
+
+The Library can select several works at once, as the extension's does: long-press a work, or press "Select". Each row then has a checkbox, the header reads "Select all N shown" (N is the number of works the filter and search show) or "N selected", and the actions are Seen, Blocked, Style (Default, Everything, Spoilers only) and Remove, each one write for all selected works. "Done" and the back button leave selection first.
+
+The About part shows the version from `SettingsActivity.VERSION`, which still reads 0.2.0 in this tree although the bundle and the companion are 0.2.2 (`android/gradle.properties`).
 
 The Data part exports and imports `spolierblock-config.json` (the contract's export file) through the system document picker, so neither the companion app nor the patch needs a storage permission. It also holds the catalog update setting and a reset.
 
@@ -290,7 +315,7 @@ The Java code is a port of the extension's. Tests check that Java gives the same
 
 `android/demo` is a test app, not part of the bundle. It has two flavours that install side by side: `one` (`dev.spoilerblock.demo`) and `two` (`dev.spoilerblock.demo2`). Both are patched alike, so a work marked seen in one is seen in the other through the shared config.
 
-The main screen is a feed of 240 items that mixes plain text views, text drawn on a canvas and exposed only through a content description, text exposed only through an accessibility node provider, text exposed nowhere (reached only by a setter hook), clean posts, ambiguous titles and a nested horizontal shelf. It knows which items must be covered and checks every drawn frame, counting frames and logging mismatches under the tag `SBDemo`. Its release build is minified, like the real apps. A second screen (`--es screen more`) holds the places a spoiler reaches outside a feed: a direct-message conversation, a bottom sheet, search suggestions and a test push notification. Another (`--es screen settings`) is a preference settings screen that carries the patch's settings row. A TextureView row stands in for video content that no image capture can reach.
+The main screen is a feed of 240 items that mixes plain text views, text drawn on a canvas and exposed only through a content description, text exposed only through an accessibility node provider, text exposed nowhere (reached only by a setter hook), clean posts, ambiguous titles and a nested horizontal shelf. It knows which items must be covered and checks every drawn frame, counting frames and logging mismatches under the tag `SBDemo`. Its release build is minified, like the real apps. Rows of type quote (every 25th post, offset 18) are clean posts that quote another: the quote is drawn by `QuoteBox`, a view that keeps the text in a field and lays it out in `onMeasure`, like X's `QuoteView`. Only the patch's field hook can read it, so only the quote can cover the row. A screen of full-screen pages (`--es screen reels`, `Reels.java`) plays sound and a `TextureView`, one page per swipe, with an Instagram-style wrapper: after the activity resumes it wraps the window callback and keeps every plain tap to itself, as Instagram's Reels viewer does, so the demo checks that the blocker's gate gets back in front. A second screen (`--es screen more`) holds the places a spoiler reaches outside a feed: a direct-message conversation, a bottom sheet, search suggestions and a test push notification. Another (`--es screen settings`) is a preference settings screen that carries the patch's settings row. A TextureView row stands in for a video player: its frames (plain colours, no title) are sampled like a real player's.
 
 | Script | What it does |
 |---|---|
@@ -307,18 +332,32 @@ The demo's intent extras `spoilerEval` and `imageEval` start on-device runs of t
 
 A cover silences what it covers. The patch rewrites the app's own calls of `AudioTrack.play`, `setVolume`, `setStereoVolume` and `MediaPlayer.start`, `setVolume` so they go through a registry (`Media.java`) that remembers each player and the volume the app last asked for. While a cover hides a video surface (inside the item or floating over it) or fills at least 60% of the window (Reels, Shorts), every known player in the app plays at volume 0, and volume changes the app makes meanwhile are only remembered. Sound returns when the cover goes, the window goes to the background, blocking is switched off, or the blocker disables itself after an error. The device's stream volume and mute state are never touched.
 
-Call sites rewritten in the 0.1 patched files: YouTube 4 `AudioTrack.play` and 5 `MediaPlayer.start`, Instagram 11 and 28, X 8 and 10. Limits: an uncovered video playing next to a covered one is muted too; the covered video keeps playing silently; YouTube's VR/360 audio (`libgvr_audio.so`, OpenSL ES) is not reached; a covered video can sound for a few seconds after the app starts, until the index has loaded. Verified only in the demo app on the emulator (an `AudioTrack` feed row and a `MediaPlayer` pager).
+Call sites rewritten in the 0.1 patched files: YouTube 4 `AudioTrack.play` and 5 `MediaPlayer.start`, Instagram 11 and 28, X 8 and 10. Limits: an uncovered video playing next to a covered one is muted too; the covered video keeps playing silently; YouTube's VR/360 audio (`libgvr_audio.so`, OpenSL ES) is not reached; a covered video can sound for a few seconds after the app starts, until the index has loaded. Verified in the demo app on the emulator (an `AudioTrack` feed row and a `MediaPlayer` pager). The owner reports that a covered reel was muted on the real phone with the 0.2.0 bundle (not measured by an agent).
 
 ## Not covered
 
 - YouTube comments. The comments list is scanned, but its rows draw their own text (Litho): there is no `TextView`, no content description, and the accessibility tree carries no comment text unless an accessibility service is running. A fix needs a YouTube-specific hook on Litho's text drawable (`com.facebook.litho.TextContent` keeps its name; its implementation is obfuscated). Seen on the logged-out emulator build. Shorts comments and live chat were not checked.
 - Comments in X and Instagram were not checked (no account).
-- The audio hooks have not run in YouTube, X or Instagram.
+- YouTube's inline feed player is not sampled for video frames: it floats over the list. Its thumbnail and the item's text still count.
+- Android differs from the extension in a few details: see [Differences from the extension](#differences-from-the-extension).
 
-- Real phones, Firefox for Android, and the X and Instagram feeds were not tested. Nothing has run in X or Instagram, and everything on Android ran only in an emulator.
-- The X settings row has never been run.
-- The capture change that is meant to stop the feed from jumping was checked only by frame counters in the demo on the emulator.
-- NNAPI acceleration, arm64 and every speed figure: never run on a real phone. The figures above are from the x86_64 emulator with 2 threads. The only memory figure is the emulator's +550 MB for the accelerated session.
+Real-device status (the owner's report for 0.2.0, not measured by an agent): covers and buttons worked in the YouTube and X feeds, a covered reel was muted, and the feed jump was not reported again. Not tested:
+
+- The 0.2.2 changes on a phone: colours from the host's background, the seen picker, early loading and saved verdicts, video-frame sampling, the multi-select library. They ran only on the emulator and in the demo.
+- The Reels touch fix and the X quoted-post hook. Both come from reading the APKs (Instagram 452.1, X 12.19.1) and never ran in Instagram or X.
+- The audio hooks in YouTube and X (the owner's report names a reel).
+- The X settings row, and comments in X and Instagram.
+- Firefox for Android.
+- NNAPI acceleration, arm64 speed and every speed and memory figure on a phone. The figures above are from the x86_64 emulator with 2 threads. The only memory figure is the emulator's +550 MB for the accelerated session.
 - Using the bundle as a local source in Morphe Manager (see above).
 - Updating a patched app after the host app updates: the patch does not fingerprint, so it is expected to apply to a new version, but only the versions in the table above were tried.
 - Lists drawn by Jetpack Compose, and windows below API 29.
+
+## Differences from the extension
+
+The contract is the same on both platforms; these details differ and are not in it:
+
+- Order of "Image from" and "Spoiler about". Android decides "Image from" first: a post with a spoilers-style text match and a titled picture is labelled "Image from {t}" and the classifier is not asked (`Scanner`). The extension asks the classifier and labels "Spoiler about {t}" when it says spoiler, and "Image from {t}" otherwise (`decide` in `content.js`).
+- Names in a label. When "Mentions" applies, Android lists every covered text group in the label ("and N more" counts them), including spoilers-style ones; the extension counts only the style-`all` groups.
+- Mark seen in the picker is disabled on Android until a work is ticked; in the extension it is enabled and writes nothing when nothing is ticked.
+- A failed picture check stays shaded on Android; the extension reveals it after its retries (see the contract).

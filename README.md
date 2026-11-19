@@ -1,6 +1,6 @@
 # SpolierBlock
 
-Version 0.2.0.
+Version 0.2.2.
 
 SpolierBlock hides spoilers about films, shows, games, books, manga, anime and comics. It runs entirely on the device.
 
@@ -20,28 +20,37 @@ The extension is a development build that you load by hand. The patch bundle nee
 
 ## What it does
 
-- **Text matching.** A hash-index matcher over a catalog of 24,670 works built from Wikidata. It knows titles, aliases, character names and series names. Names shared by several works form one group. Ambiguous names (such as "Lost" or "It") need corroboration before they match, and a name whose usual meaning is not a work ("Palestine", "Napoleon") matches only next to a media word that fits the work's type. Sequel numbers match in both forms ("GTA 6", "GTA VI"). The catalog holds narrative works only: scripture, reference works, most non-fiction, documentaries and news or talk shows are left out.
+- **Text matching.** A hash-index matcher over a catalog of 24,609 works built from Wikidata. It knows titles, aliases, character names and series names. Names shared by several works form one group. Ambiguous names (such as "Lost" or "It") need corroboration before they match, and a name whose usual meaning is not a work ("Palestine", "Napoleon") matches only next to a media word that fits the work's type. Sequel numbers match in both forms ("GTA 6", "GTA VI"). In ALL-CAPS runs and Headline Case lines (video titles) capital letters prove nothing, so a name that relies on case needs a media word next to it there; a distinctive single word ("Minecraft", "Arcane") counts however it is written. Text read from pictures is judged more strictly than the post's own text (see "Behaviour to know about"). The catalog holds narrative works only: scripture, reference works, most non-fiction, documentaries, news and talk shows, music competitions, award ceremonies, game and quiz shows, variety and sketch shows, albums and music videos are left out. Reality competitions and talent shows stay, because their results are spoilers.
 - **Three states and two styles.** Each work you touch is "seen" or "blocked". Each work, or all works by default, uses a style: `all` (cover anything about the work) or `spoilers` (cover only what a classifier calls a spoiler). The classifier is all-MiniLM-L6-v2, fine-tuned and quantised to int8 (`models/spoiler`). It scores each sentence and takes the highest score. If it fails, the post stays covered.
 - **Settings.** The extension has a settings page in its own tab (Library, Add by hand, Blocking, Data, About) and a small popup. You can add works the catalog does not know by hand, and export or import everything as one file that works on both platforms.
-- **Images and video thumbnails.** A SigLIP 2 vision model (weights quantised to int8) compares an image with precomputed title rows. The result is either a confident title or "looks like film, show or game media, no title". The engine resizes the picture itself (`src/background/pixels.js`), so every browser feeds the model the same numbers. OCR (PaddleOCR v5) reads text in the image and passes it to the same text matcher. Media stays dimmed until both verdicts are in. Naming a work from a picture that has no text is weak. OCR is the dependable image signal. An unidentified media image is covered only when "Cover unrecognised film and game images" is on; it is off by default.
+- **Images and video thumbnails.** A SigLIP 2 vision model (weights quantised to int8) compares an image with precomputed title rows. The result is either a confident title or "looks like film, show or game media, no title". The engine resizes the picture itself (`src/background/pixels.js`), so every browser feeds the model the same numbers. OCR (PaddleOCR v5) reads text in the image and passes it to the same text matcher. Media stays dimmed until both verdicts are in. Naming a work from a picture that has no text is weak. OCR is the dependable image signal, and the image model's title is used only for a picture that no text identifies. An unidentified media image is covered only when "Cover unrecognised film and game images" is on; it is off by default.
 - **Opt-in catalog update.** Off by default. You can choose daily, weekly or monthly, or press "Update now". It downloads new titles directly from Wikidata's public query service. This is the only network use. Nothing about you is sent.
 - **Threads.** The Chrome build is cross-origin isolated, so the models run on up to 4 WASM threads. The Firefox build runs on one thread.
-- **Android.** The same catalog and matcher rules, ported to Java and tested against the JavaScript version. The same classifier through ONNX Runtime. A full-screen settings screen opens from the ⋮ button on a cover, from an app shortcut, or from the host app's own settings. Push notification text is checked too. Images use the same models as the browser (SigLIP 2 and PaddleOCR on ONNX Runtime 1.22), with the same resize and cut-offs. A picture still being judged is shaded on its own and the post's text stays readable. Optional NNAPI acceleration of the title model is there, but it has never run on a real phone. See [docs/android.md](docs/android.md).
+- **Android.** The same catalog and matcher rules, ported to Java and tested against the JavaScript version. The same classifier through ONNX Runtime. A full-screen settings screen opens from the ⋮ button on a cover, from an app shortcut, or from the host app's own settings; its library can select several works at once. Push notification text is checked too. Images use the same models as the browser (SigLIP 2 and PaddleOCR on ONNX Runtime 1.22), with the same resize and cut-offs. The models load when the app opens, each picture's verdict is applied as soon as it is ready, and verdicts are kept across restarts. A picture still being judged is shaded on its own and the post's text stays readable. On-screen video players are sampled for a frame every 5 seconds. Covers take their colours from the host app's actual background. Optional NNAPI acceleration of the title model is there, but its speed has never been measured on a real phone. See [docs/android.md](docs/android.md).
 
 ## Status and known limits
 
 Measured results, from the maintainer's runs on this repository's fixtures. Where a figure was not re-run for this page, it says so.
 
-**Text matcher**, `node tools/fp-posts.mjs` on `test/fixtures/fp-posts.jsonl` (630 everyday posts, 290 posts about media; re-run for this page):
+**Text matcher**, `node tools/fp-posts.mjs` on `test/fixtures/fp-posts.jsonl` (636 everyday posts, 297 posts about media; the 0.2.2 column was re-run for this page):
 
-| | 0.1 | 0.2 |
-|---|---|---|
-| Everyday posts wrongly covered | 51 of 630 | 9 of 630 |
-| Media posts matched | 156 of 290 | 224 of 290 |
-| of which non-English posts | 33 of 70 | 63 of 70 |
-| Wrongly covered sentences of everyday prose (`tools/fp-text.mjs`) | 15.8 per 1,000 | 3.8 per 1,000 |
+| | 0.1 | 0.2.0 | 0.2.2 |
+|---|---|---|---|
+| Everyday posts wrongly covered | 51 of 630 | 9 of 630 | 9 of 636 |
+| Media posts matched | 156 of 290 | 224 of 290 | 241 of 297 |
+| of which non-English posts | 33 of 70 | 63 of 70 | 63 of 71 |
+| Wrongly covered sentences of everyday prose (`tools/fp-text.mjs`) | 15.8 per 1,000 | 3.8 per 1,000 | 4.5 per 1,000 |
 
-The 0.1 column and the `fp-text` row are the maintainers' figures and were not re-run here. The rules were tuned while looking at this benchmark, so it is not held out.
+The 0.1 and 0.2.0 columns and the `fp-text` row are the maintainers' figures and were not re-run here (the earlier columns carry the post counts they were recorded with; the file holds 636 and 297 now). `fp-text` rose from 3.8 to 4.5 while media recall rose. The rules were tuned while looking at this benchmark, so it is not held out.
+
+**Video-style titles and text read from pictures** (new in 0.2.2; run for this page except where marked; all three sets were looked at while the rules were chosen, so none is held out):
+
+| Set and command | Result |
+|---|---|
+| Headline Case and ALL-CAPS titles, `node tools/fp-posts.mjs --file=test/fixtures/headlines.jsonl` | 5 of 250 titles that name no work wrongly covered; 168 of 250 titles of works matched |
+| Picture text on its own, `node tools/fp-ocr.mjs` (`test/fixtures/ocr-noise.jsonl`) | 1 of 320 picture texts with no work covered; 70 of 80 titles in pictures matched |
+
+Known misses and leaks: an everyday-word title with no media word near it ("Dune Was Incredible", "Why Lost Failed"); a single word in picture text (a thumbnail that only says MINECRAFT); everyday words missing from the word lists (Vertigo, Scrubs); and a few non-fiction leaks.
 
 **Spoiler classifier**, wrongly blocked or caught, out of the number of posts (`node tools/eval-spoiler.mjs`; the 0.2 column was re-run for this page):
 
@@ -69,29 +78,39 @@ Neither file was used for training or for choosing the threshold. `spoiler-eval2
 
 Title checks are slower than in 0.1 and OCR is faster. Image recognition is still weak: it names few titles, and a wrong title is possible (8 wrong titles and 2 ordinary photos named on the held-out split). The dependable signals are text inside images (OCR) and the text around a post.
 
+**Real-device status**
+
+The owner ran the 0.2.0 bundle on one real phone (a Galaxy S25+) in patched YouTube, X and Instagram. This is the owner's report; no agent saw it. Covers and their buttons worked in the YouTube and X feeds, a covered reel was muted, and the earlier feed jump has not been reported again. The problems reported from that run were false covers, cover colours, the buttons on Reels and a franchise name marking every work as seen. The 0.2.2 changes address them, but those changes have run only on the emulator and in the demo app. Nothing was measured on a phone (speed, memory, acceleration). Agents here still use the emulator only.
+
 **Not tested**
 
 - Real social sites in a browser. The end-to-end tests use fixture pages.
 - Firefox for Android.
-- Any real phone. Android only ran in an x86_64 emulator (an arm64 build under translation too). NNAPI acceleration, arm64 and every Android speed figure have never run on a real phone.
-- X and Instagram feeds on Android. They were only launched to their login screens in 0.1. Nothing has run in X or Instagram since, and the settings row added to X's own settings screen has never been run.
-- The Android fix for a feed that jumped on a real phone (image capture drawing host views). It was checked only by frame counters in the demo app on the emulator.
-- Video frames on Android. Only thumbnails and posters are scanned there.
+- The 0.2.2 Android changes on a phone: colours from the host's background, the seen picker, early model loading and saved verdicts, video-frame sampling, the multi-select library.
+- The Reels touch fix. It comes from reading Instagram's APK and from a reproduction in the demo app; it never ran in Instagram.
+- The X quoted-post hook. It comes from reading X 12.19.1 statically and never ran in X. Its field name is obfuscated, so another X version may lose it (the patch then logs a warning).
+- NNAPI acceleration, arm64 speed and every Android speed and memory figure on a phone. The figures here are from an x86_64 emulator.
+- The Android fix for a feed that jumped (image capture drawing host views): the owner has not reported the jump again, but no frame counter or log from the phone exists here.
 - TalkBack with real content, and push notifications from a real app. Both were tried only in the demo.
-- Silencing a covered video on Android in the real apps. The audio hooks are in the patch for YouTube, X and Instagram but ran only in the demo.
 - Comment sections in X and Instagram on Android (no account). In the browser, comments were tested on fixture pages only.
+- The settings row added to X's own settings screen: the owner has not reported on it.
 
 **Behaviour to know about**
 
 - In `spoilers` style a bare title mention is shown, so a trailer title is not hidden. `all` style hides it.
 - Posts that name nothing ("that ending destroyed me") are not caught.
 - A single-word title at the start of a sentence, with no media word in that sentence, is not matched.
+- "I've seen it" on a name that stands for several works (a franchise such as "Resident Evil", or an original and its remake) opens a picker, "Which have you seen?". Only the works you tick are marked, and a post that only says the franchise name stays covered until every one is marked.
+- Text read from pictures (OCR) counts only for clear multi-word titles: a single word, a sequel-number swap or a name that mostly means something else is ignored there, media words in picture text do not help, and picture text never confirms a weak name in the post's own text. When the post's own text names only works you have seen, picture text does not cover it.
+- The image model's title for a picture is used only when no text identifies the picture: it is dropped when the post's own text, or the picture's own text, names any work.
+- Android checks "Image from" before "Spoiler about": a post with both a spoilers-style text match and a titled picture is labelled "Image from {t}" and the classifier is not asked. The extension asks it first and says "Spoiler about" when it answers spoiler.
 - Not scanned in the browser: backgrounds set by a stylesheet, loose text directly inside a very large container, and media inside shadow roots is not dimmed until its verdict arrives.
 - YouTube comments on Android are not covered: the comment rows draw their own text (Litho) and expose it to nothing the blocker reads. Search results and the watch-page title are covered.
-- A covered post's video and audio are silenced. In the browser a player embedded from another site (a YouTube embed) that is already playing is hidden but not silenced. On Android every player in the app is muted while a covered video is on screen, the video keeps playing silently, YouTube's VR/360 audio is not reached, and a covered video can sound for a few seconds after the app starts, before the index has loaded.
+- A covered post's video and audio are silenced. In the browser a player embedded from another site (a YouTube embed) that is already playing is hidden but not silenced. On Android every player in the app is muted while a covered video is on screen, the video keeps playing silently, YouTube's VR/360 audio is not reached, and a covered video can sound for a few seconds after the app starts, before the index has loaded. A covered reel was muted on the owner's phone (0.2.0).
+- Android video frames: on-screen players inside a feed item are sampled (at most 448 px, one frame every 5 seconds), and a player stays shaded until its first frame is judged. A protected video gets no shade and no verdict. YouTube's inline feed player floats over the list instead of sitting in the item, so it is not sampled.
 - Chinese, Japanese and Thai text has no word spaces, so titles inside such text do not match.
 - Each frame of a page loads its own copy of the index (about 3.3 MB).
-- Android patch sizes: the 0.2.0 bundle is 138 MB and the companion APK 1.5 MB. How much a patched app grows was measured for 0.1 only (roughly 100 to 115 MB over the original); not re-measured. X additionally needs `extractNativeLibs` set to true, which the patch does.
+- Android patch sizes: the 0.2.0 bundle is 138 MB and the companion APK 1.5 MB; the 0.2.2 sizes were not measured. How much a patched app grows was measured for 0.1 only (roughly 100 to 115 MB over the original); not re-measured. X additionally needs `extractNativeLibs` set to true, which the patch does.
 - Patching and using modified X, Instagram or YouTube apps is against those services' terms. APKs are not included in this repository. You must supply your own and must not redistribute the patched files.
 
 ## Privacy
@@ -110,10 +129,10 @@ A release has these files:
 
 | File | What it is |
 |---|---|
-| `spolierblock-0.2.0-firefox.zip` | The Firefox build. Unpack it and load it as in the [load steps](#quick-start-browser-extension) below, choosing the unpacked `manifest.json`. |
-| `spolierblock-0.2.0-chrome.zip` | The Chrome build. Unpack it and use "Load unpacked" on the folder. |
-| `patches-0.2.0.mpp` | The Morphe patch bundle. Use it with `android/apply.sh` (see [docs/android.md](docs/android.md)), or add it as a local patch source in Morphe Manager (not verified). |
-| `spolierblock-companion-0.2.0.apk` | Optional companion app. It keeps one list shared by all patched apps. |
+| `spolierblock-0.2.2-firefox.zip` | The Firefox build. Unpack it and load it as in the [load steps](#quick-start-browser-extension) below, choosing the unpacked `manifest.json`. |
+| `spolierblock-0.2.2-chrome.zip` | The Chrome build. Unpack it and use "Load unpacked" on the folder. |
+| `patches-0.2.2.mpp` | The Morphe patch bundle. Use it with `android/apply.sh` (see [docs/android.md](docs/android.md)), or add it as a local patch source in Morphe Manager (not verified). |
+| `spolierblock-companion-0.2.2.apk` | Optional companion app. It keeps one list shared by all patched apps. |
 | `SHA256SUMS.txt` | Checksums of the files above. |
 
 No YouTube, X or Instagram APK is ever distributed. You supply your own.
@@ -169,10 +188,10 @@ See [docs/android.md](docs/android.md). In short: build the extension data (`npm
 | `src/options/` | Settings page, and the config module and UI helpers shared with the popup. |
 | `src/popup/` | The toolbar quick panel. |
 | `src/shared/` | Catalog rules and the index builder, shared by the browser and Node. |
-| `data/catalog.json` | The work catalog (24,670 works). |
+| `data/catalog.json` | The work catalog (24,609 works). |
 | `models/spoiler/` | The fine-tuned spoiler classifier (int8 ONNX, tokenizer, threshold). |
 | `models/ocr/` | The OCR character list. The OCR models themselves are downloaded by the build. |
-| `tools/` | Build, catalog, calibration, evaluation and training scripts. |
+| `tools/` | Build, catalog (including `tools/catalog/common-words.txt`, built by `tools/catalog/words.mjs`), calibration, evaluation and training scripts. |
 | `test/` | Unit tests, fixtures, end-to-end runner. |
 | `android/` | Morphe patch bundle, Java extension, companion app, demo app, scripts. |
 | `research/` | On-device model research: `REPORT.md` and the scripts behind it. Downloaded data, models and result files are not in git. `REPORT.md` was written for 0.1; its image section is out of date. |
@@ -204,6 +223,7 @@ For coding agents:
 | Text model base | `sentence-transformers/all-MiniLM-L6-v2`, fine-tuned here | See the model card |
 | Spoiler training data | Reddit episode-discussion comments from the `bobotran/spoiler-matching` dataset (hand-labelled split) | CC BY-SA 3.0 |
 | Spoiler training data | English Wikipedia plot, production and reception sentences of the 300 most popular works | CC BY-SA 4.0 |
+| Common-word list | `tools/catalog/common-words.txt`: a 20,000-word English list plus the 5,000 most frequent subtitle words of each of English, Turkish, Spanish, Portuguese, German, French and Italian, from `hermitdave/FrequencyWords` (OpenSubtitles 2018). It decides which names count as everyday words. | CC BY-SA 4.0 |
 
 The classifier in `models/spoiler` was trained on that Reddit data, that Wikipedia text, and hand-written sentences and patterns. The held-out evaluation sets are hand-written and were not used for training or threshold choice.
 

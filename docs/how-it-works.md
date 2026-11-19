@@ -1,6 +1,6 @@
 # How it works
 
-This page describes the browser extension (version 0.2.0). The Android port is in [android.md](android.md). It follows the same rules. The config, the decision rule and the cover wording are defined in [agents/contract.md](agents/contract.md) and are not repeated here.
+This page describes the browser extension (version 0.2.2). The Android port is in [android.md](android.md). It follows the same rules. The config, the decision rule and the cover wording are defined in [agents/contract.md](agents/contract.md) and are not repeated here.
 
 ## Overview
 
@@ -41,15 +41,16 @@ It runs at `document_start` in every frame (`all_frames`, `match_about_blank`). 
 1. **Gate.** `content.css` keeps `body` invisible until the matcher is loaded and the first scan ran (`data-sb-ready` on `<html>`). A 2.5 second timer sets the attribute anyway, so a failure never leaves a page blank.
 2. **Observe.** A `MutationObserver` collects changed text nodes, `alt` and `aria-label` attributes, images, videos and elements with an inline `url(...)` style. It runs before paint. It also watches open and closed shadow roots, including roots attached after the element was first seen (a custom element that is not yet defined is retried for 30 seconds).
 3. **Find the block.** For each changed text it walks up (through shadow boundaries) to a "post-like" container. Site selectors exist for X (posts, user cells, trends, DM rows and conversations, search suggestions, hover cards), YouTube (video and comment renderers, notifications, live chat messages) and Reddit. Everywhere else a generic list is used: `article`, `li`, `figure`, `blockquote`, role `article`, `row`, `listitem` or `option`, and class names containing `card`, `post`, `tweet`, `comment`, `message`, `item` or `entry`. That list is what covers direct messages, notification lists and search suggestions on other sites. A container with more than 3,000 characters of text is treated as a page section, not a post.
-4. **Read the block.** Text nodes joined by newlines, plus `alt`, `aria-label` and `title` attributes, plus text inside shadow roots, plus any OCR text of the pictures the block shows now.
-5. **Match.** `matcher.evaluate(text, isSeen)` returns the groups the text is about. Groups whose works are all seen are dropped.
-6. **Decide.** The decision rule of the contract turns groups and picture verdicts into a cover label or nothing. A block is re-decided from what it shows now, not from what it showed before.
-7. **Cover.** A `<sb-overlay>` element with a shadow root is added inside the block. It carries the label and the three buttons. The block's own children get `visibility: hidden`. The cover is a small light or dark panel (dark when the block's background is dark) with a compact one-row layout for short blocks.
+4. **Read the block.** Text nodes joined by newlines, plus `alt`, `aria-label` and `title` attributes, plus text inside shadow roots. The post's own text is read first. Any OCR text of the pictures the block shows now follows it behind one U+0001 character (`own text` + `\u0001` + `OCR text`, contract rule 8). `domText` strips U+0001 from the page's own text, so a page cannot pose as OCR text.
+5. **Match.** `matcher.evaluate(text, isSeen)` returns the groups the text is about, own-text groups first, then groups named only by OCR text (see [The matcher](#the-matcher)). Groups whose works are all seen are dropped. When the block has pictures, the post's own text is also evaluated alone (`own`), so the decision knows what the typed text names.
+6. **Decide.** The decision rule of the contract turns groups and picture verdicts into a cover label or nothing (`decide` in `content.js`). Rule 7 is applied here: the image model's title (`img`) is dropped when `own` names any work, seen or not, and per picture when that picture's OCR text names a work; a block whose own text names a seen work and no covered one is not covered by its pictures, and `Possible film, show or game image` is not shown for it. A block is re-decided from what it shows now, not from what it showed before. The text sent to the classifier has the marker replaced by a line break.
+7. **Cover.** A `<sb-overlay>` element with a shadow root is added inside the block. It carries the label and the three buttons. The block's own children get `visibility: hidden`. The cover is a small light or dark panel with a compact one-row layout for short blocks. It is dark when the nearest opaque background above the block is dark. When there is none (`isDark` in `content.js`), the canvas colour decides: the page's `color-scheme`, read from the computed property or, when that is `normal`, from `<meta name="color-scheme">` (a meta tag leaves the property at `normal`). A page that allows both schemes follows the system setting; a page that allows only dark is dark under a light system, and the other way round.
    - "Show once" lasts until the text of the block changes or the page is reloaded.
-   - "I've seen it" writes every work of the matched name group to `storage.local.works` in one call. Every tab then re-evaluates through `storage.onChanged`. It is absent for an unidentified image.
+   - "I've seen it" on a name group with one work writes it to `storage.local.works` at once. With several works (a franchise, an original and its remake) it opens the picker (`seenClicked`): a modal `<dialog>` inside the cover's shadow root, so it sits in the top layer and changes no layout. It is titled "Which have you seen?", lists the works not yet seen with `{type} · {year}`, has nothing ticked at first, and offers All, Cancel and Mark seen. Escape closes it and focus returns to the button. Only the ticked works are written, in one call (`markWorks`). Every tab then re-evaluates through `storage.onChanged`. The button is absent for an unidentified image.
    - ⋮ sends `ui.openSettings`, which opens the settings page in a tab.
 8. **Tab title.** `document.title` is replaced by the cover's label while the title names a covered work. This is done in the top frame only.
 9. **Pause and disable.** `settings.enabled` and `settings.pausedSites` (a host and its subdomains) switch scanning off live.
+10. **Settings changes.** `rescanAll` re-checks covered blocks in place (`scanBlock(b, true)`), so a cover that stays keeps its element and the keyboard focus inside it; only a block that is gone is released. Then it collects the page again.
 
 ### The layout rule
 
@@ -112,7 +113,7 @@ Any failure replies `{ error }`. `prio` is `0` for an image in the viewport, oth
 
 - A catalog key is a sequence of normalised tokens, up to 8 tokens. Longer keys are dropped.
 - Each key is hashed to two 32-bit values. The table is one flat `Uint32Array` with open addressing, loaded as is. The file layout is `[magic, slotBits, format, ...slots]` and each slot is `hashA, hashB, value + 1`.
-- Index format 1 packs a value as `group << 8 | rare << 7 | cap << 6 | common << 5 | ambiguous << 4 | other << 3 | kind`. Format 0 (`group << 7`, no `rare` or `other`) still loads.
+- Index format 2 packs a value as `group << 9 | ocr << 8 | rare << 7 | cap << 6 | common << 5 | ambiguous << 4 | other << 3 | kind`. Format 1 (`group << 8`, no `ocr`) and format 0 (`group << 7`, no `rare`, `other` or `ocr`) still load, with the missing bits read as 0.
 - Lookup costs about tokens x 8 hash probes. Memory per tab is about the file size. The shipped index is 1.6 MB (`index.bin`) plus 1.7 MB (`index.json`). Every frame of a page loads its own copy, so about 3.3 MB per frame.
 - `index.json` holds per-work columns (`ids`, `titles`, `types`, `years`), sorted by popularity, and `groups`: `[label, workIdx, workIdx, ...]`.
 
@@ -129,7 +130,7 @@ A name maps to one group: every work carrying that name. "Dune" is the book, bot
 |---|---|---|
 | title | "Breaking Bad" | |
 | alias | "TLOU2", "gta6" | Up to 8 per work. A single everyday word is never indexed as an alias. |
-| series | "Star Wars" | Prefix before `:`, an en dash or a hyphen. Only when at least two works share it. Not derived from a single common word or fewer than 4 characters. |
+| series | "Star Wars", "Battlefield" | Prefix before `:`, an en dash or a hyphen, when at least two works share it. Also a name that is numbered in three or more titles ("Battlefield 3", "Battlefield 4", "Battlefield V"). Not derived from a single common word or fewer than 4 characters. The part after the colon (a subtitle) is not indexed on its own; only the full title is. |
 | character | "Walter White" | Full multi-word names (up to 8 per work). Real people are not fetched. |
 | char1 | single-token character name | Weak. Must start with a capital letter. |
 | part | "Snape" from a full name | Weakest. Must start with a capital letter. Parts that are everyday words are not indexed. |
@@ -142,19 +143,20 @@ Flags on a name, set by the index builder:
 | Flag | Meaning |
 |---|---|
 | `cap` | Must be written in Title Case. Set for single-word names, names of works below 60 sitelinks and names made only of common words. |
-| `common` | Made of everyday words and naming a less popular work (or a single everyday word at any popularity). |
-| `rare` | A single uncommon word naming a less popular work ("Bloodborne"). Weak: it needs a media word in its sentence. |
+| `common` | Made of everyday words and naming a less popular work (or a single everyday word at any popularity). A bare number ("10.5", "1917") is `common` too: it needs a media word, quotes or a hashtag. "Everyday" means the first 1,000, 3,000 or 10,000 lines of `tools/catalog/common-words.txt` (the English 20k list, most frequent first) for the finer rules, and any line of it for the rest. Since 0.2.2 the file also holds subtitle words of six more languages (see [Catalog](#catalog)). |
+| `rare` | A single uncommon word naming a work with fewer than 45 sitelinks (`DISTINCT_POP`; "Bloodborne"). Weak: it needs a media word in its sentence. From 45 sitelinks up such a word ("Minecraft", "Arcane") is not `rare`: it is a title however it is written. |
 | `ambiguous` | The catalog's own flag: a title under 4 characters, one common word, or two top-1,000 words. |
 | `other` | The name's dominant meaning in Wikidata is not a work (a place, a person, a brand, scripture). Set only when that holds for every work carrying the name. |
+| `ocr` | Strong enough to count in text read from pictures. See [Text read from pictures](#text-read-from-pictures). |
 
 ### Decision rules
 
 These are in `Matcher.evaluate`.
 
 1. A tag needs the `#`. A char1 or part needs a capital first letter.
-2. A "cap" name must be written in Title Case ("The Walk", "Siberia"): its first token and every token longer than 3 characters must start with a capital letter or a digit. A hashtag lifts this. Quotes do not.
-3. The longest match wins. "Us" and "Last" inside "The Last of Us" are dropped. So is "Potter" inside "Harry Potter".
-4. A match is weak when the name is `common`, `other` or `rare`, a char1 or part, or a short or ambiguous title (ambiguous and at most 2 tokens, or one token of 3 characters or fewer). A strong match is accepted at once.
+2. A "cap" name must be written in Title Case ("The Walk", "Siberia"): its first token and every token longer than 3 characters must start with a capital letter or a digit. A hashtag lifts this. Quotes do not. All-lowercase text therefore still needs a capital, even for a distinctive single word.
+3. The longest match wins, whether or not its group is seen. "Us" and "Last" inside "The Last of Us" are dropped. So is "Potter" inside "Harry Potter". A seen longer name still consumes the shorter name inside it.
+4. A match is weak when the name is `common`, `other` or `rare`, a char1 or part, or a short or ambiguous title (ambiguous and at most 2 tokens, or one token of 3 characters or fewer), or when it is case-only (see "Case evidence" below). A strong match is accepted at once.
 5. A weak match is accepted without further tests when another, different name of the same group is in the text. It is also accepted when it is in a hashtag or in quotes, unless it is an `other` name: a hashtag or quotes are no evidence for "#Palestine" or a song title.
 6. Anything else needs a capitalised first letter, and a part name stops here. What follows looks only inside the name's own sentence (a sentence ends at `.`, `!`, `?` or a line break, except after an ordinal like "2."). A media word must fit the work's type: "game" corroborates a game, not a film, and "Nintendo Switch" says nothing about a film called "Switch". The words are in the `CONTEXT` table of `matcher.js`: English, plus Turkish (with suffix stems), Spanish, Portuguese, German, French and Italian.
    - An `other` name takes only a fitting media word within 3 tokens. If it is also an everyday word at the start of a sentence, only a media word right next to it.
@@ -162,15 +164,38 @@ These are in `Matcher.evaluate`.
    - An everyday-word name at the start of a sentence needs a second capitalised word of 3 or more letters ("The Bear", not "Marley and Me"), or else a media word right next to it.
    - A single everyday word takes a fitting media word within 3 tokens.
    - Other weak names take a fitting media word anywhere in their sentence.
+   - A case-only match (below) takes only a media word right next to it.
 7. A group whose works are all inside another matched group adds nothing.
+8. The result is ordered by label tier: groups the post's own text names first, then groups named only by OCR text; within a tier the group matched by the longer name first, then the more popular work (the index sorts groups by popularity). Groups whose works are all seen are dropped, and when the own text names only seen works the OCR-only groups are dropped too.
+
+Media words: `series`, `serie`, `serien` and the Turkish `serisi`, `serinin` and `seriye` count for every work type. Video-title words are weak media words (a `YT` bit in `CONTEXT`): `review`, `reaction`, `soundtrack`, `ost`, `lore`, `recap`, `breakdown`, `masterpiece`, `remastered`, Turkish `inceleme`, and for games `walkthrough` and `mods`. A name flagged `common` never takes them ("Switch 2 Review" does not cover a film called "Switch"). `actor`, `actress` and `acting` are not media words any more.
+
+### Case evidence
+
+In an ALL-CAPS run of two or more words, or on a Headline Case line (at least 4 words of 4 or more letters, 70 percent of them capitalised: "Grace Ashcroft's Voice Actress Reacts to Thirst Comments"), capital letters prove nothing (`caseless` in `matcher.js`; the post's own text only). There a name that relies on case needs a media word right next to it. That is a Title-Case name that is a single word or two everyday words and that is `common`, ambiguous, `rare` or `other`: "KES", "Thirst", "The Master". A distinctive single word does not rely on case: a word that is not an everyday word in any shipped list, not `other`, naming a work with at least 45 sitelinks ("Minecraft", "Arcane") is a title however it is written, in a headline or in capitals.
+
+### Text read from pictures
+
+The caller passes OCR text after the post's own text behind one U+0001 character (contract, rule 8). The matcher treats the part after the marker like this:
+
+- A name counts only if the index marks it `ocr` (strong). The builder sets that bit for a title, alias or multi-word character name written as it is in the catalog (not a sequel-number swap or a joined form such as "gta6"), with at least two tokens, that is not `other`, and one of: at least two real words (3 or more letters, not `the`, `and` and the like; for a less popular work the name must also not be ambiguous); one real word that is not an everyday word in a name of a work with at least 60 sitelinks (`COMMON_POP`; "The Mandalorian" has 55, so "THE MANDALORIAN" does not match from picture text); or a sequel-numbered title with a word of 4 or more letters outside the 3,000 most frequent ("BATTLEFIELD 4"; "GEN 5" exists only as the swapped form of "Gen V" and does not count).
+- Never a single word: a thumbnail that only says MINECRAFT matches nothing. Case, quotes and hashtags are not looked at.
+- A name never crosses the marker, and a sentence ends at it, so a media word in OCR text does not corroborate a name in the post's own text, and a media word in the own text does not confirm an OCR name. OCR text never corroborates a weak own-text name through another name of the same group either.
+- When the own text names only seen works, OCR-only groups do not cover (contract, rule 7).
+
+Why so strict: thumbnail text is all capitals, full of logos, timers and shouty phrases, so a single OCR word is nearly always noise. The figures are in the README (`tools/fp-ocr.mjs`).
 
 ### Sequel numbers
 
 At build time, names with Roman or Arabic sequel numbers from 2 to 20 are written both ways ("Grand Theft Auto VI" and "grand theft auto 6"). For two-token names the joined forms are also indexed ("gta6", "gtavi"). "I" is never a numeral, and a numeral only counts after another word. A numbered name of a popular work, or a non-everyday short word plus a number, may match in any case. "Chapter 6" and "Windows 11" still need corroboration.
 
-### Known limit
+### Known limits
 
-A single-word title at the start of a sentence, with no media word in that sentence, goes unmatched.
+- A single-word title at the start of a sentence, with no media word in that sentence, goes unmatched.
+- An everyday-word title with no media word near it ("Dune Was Incredible", "Why Lost Failed") goes unmatched.
+- A single word in picture text goes unmatched.
+- Everyday words that are in none of the word lists (Vertigo, Scrubs) count as distinctive: "I bought new Scrubs for work" is matched to the series.
+- A few non-fiction names still match.
 
 ## Styles
 
@@ -206,7 +231,7 @@ Media scanning is controlled by `settings.scanImages`. Until an image has a verd
 - Readable images (same-origin, CORS, blob) are redrawn to a canvas of at most 768 px on the long side and sent as a JPEG data URL. Cross-origin images and CSS backgrounds are sent as a URL, and the background fetches them with the extension's host permission and without credentials.
 - Both verdicts are required before the image is revealed: title check and OCR. An engine error or a 60 second silence (a safety net for a lost message) reveals the image and is counted in `data-sb-stats`.
 - Video: the `poster` is scanned. During playback a frame (at most 448 px) is scanned at most every 5 seconds. If a frame turns out covered, the video is paused. A video stays a placeholder until its first frame has a verdict. Videos from other origins without CORS cannot be sampled, so only the poster and the surrounding text count.
-- OCR text is added to the block's text and the matcher runs again. A title verdict of a group or "unknown" is kept per picture.
+- OCR text is added to the block's text after the post's own text, behind one U+0001 character, and the matcher runs again (see [Text read from pictures](#text-read-from-pictures)). A title verdict of a group or "unknown" is kept per picture. `mediaInfo` drops a picture's model title when that picture's own OCR text names a work (rule 7); `decide` drops all model titles when the post's own text names one.
 
 ### Engine side
 
@@ -264,11 +289,11 @@ There is no worker and no time limit in the engine. Rotated text reads worse bec
 | `ambiguous` | True for a title under 4 characters, one common word, or two top-1,000 words. |
 | `other` | Optional. The title, aliases, characters or series prefix of this work whose dominant sense in Wikidata is not a work. |
 
-The shipped catalog has 24,670 works (14,994 films, 2,928 games, 2,876 books, 2,837 series, 465 manga, 424 anime, 146 comics). 2,866 of them have an `other` list. When a work fits several types, the first of anime, tv, movie, game, manga, comic, book wins. Works need at least 15 sitelinks. The film series class is excluded.
+The shipped catalog has 24,609 works (14,956 films, 2,928 games, 2,876 books, 2,814 series, 465 manga, 424 anime, 146 comics; counted in `data/catalog.json`). 2,862 of them have an `other` list. The 0.2.0 catalog had 24,670 (14,994 films, 2,837 series, 2,866 with an `other` list). When a work fits several types, the first of anime, tv, movie, game, manga, comic, book wins. Works need at least 15 sitelinks. The film series class is excluded.
 
-The catalog keeps works that are told as a story. A work is dropped when its instance-of, genre or form (P31, P136, P7937) is on an explicit list of scripture, reference works, non-fiction, documentaries, news and talk shows (`NOT_NARRATIVE` in `src/shared/catalog-rules.js`), unless it is also a novel, short story, play, fiction or a fiction film genre. This dropped 797 works from the 0.1 catalog.
+The catalog keeps works that are told as a story. A work is dropped when its instance-of, genre or form (P31, P136, P7937) is on an explicit list of scripture, reference works, non-fiction, documentaries, news and talk shows (`NOT_NARRATIVE` in `src/shared/catalog-rules.js`), unless it is also a novel, short story, play, fiction or a fiction film genre. This dropped 797 works from the 0.1 catalog. Since 0.2.2 the list also holds contests (music competitions), award ceremonies, game and quiz shows, variety and sketch shows, albums and music videos, which removed 61 more works (38 films and 23 series, net: the count went from 24,670 to 24,609). Reality competitions and talent shows are kept on purpose, because their results are spoilers (`NARRATIVE` lets them through). A work of such a class that is left out is also a sense of its own in the `other` lookup, so a name shared with it can be `other`.
 
-`other` is computed by looking up each name (title, aliases, characters, series prefix) on Wikidata: an item with the same English or `mul` label or alias, more sitelinks than the work, and a class that is not a work, a franchise, a character or a disambiguation page. `tools/catalog/20k.txt` is the common-word list behind `ambiguous` and the index rules.
+`other` is computed by looking up each name (title, aliases, characters, series prefix) on Wikidata: an item with the same English or `mul` label or alias, more sitelinks than the work, and a class that is not a work, a franchise, a character or a disambiguation page. `tools/catalog/common-words.txt` is the common-word list behind `ambiguous` and the index rules. `tools/catalog/words.mjs` builds it: the English list `20k.txt` (most frequent first; the index rules use its first 1,000, 3,000 and 10,000 lines), then the 5,000 most frequent subtitle words of each of English, Turkish, Spanish, Portuguese, German, French and Italian from `hermitdave/FrequencyWords` (OpenSubtitles 2018, CC BY-SA 4.0), so a title that is an everyday word in one of those languages ("Kes", "Thirst") counts as one in text of any language. The result has 42,041 lines. The script downloads the lists once into `tools/catalog/cache/`. It is a build input of the catalog (`ambiguous`), the index and the extension, which copies it to `data/common-words.txt`.
 
 `npm run build` compiles the catalog into `index.bin` and `index.json`, the title matrix, and copies the pieces the update needs (`catalog.json`, `common-words.txt`, `catalog-classes.json`, `catalog-info.json`). `catalog-classes.json` also has a `sameSense` list: the classes that count as "a work or a fictional thing" for the `other` lookup.
 
@@ -283,7 +308,7 @@ Opt-in, off by default. Choose daily, weekly or monthly on the settings page (Da
 - Result: the bundled catalog, all added works and the hand-added works are rebuilt with the same code as the Node build (`src/shared/build-index.js`). The index is written to `storage.local` as one key (`catalogIndex`) in a single `set` call, so a tab sees either the old or the new index. Open tabs swap indexes on `storage.onChanged`.
 - Failure: only `catalogMeta.lastError` is written. The working index is not touched.
 - When the extension itself is updated with a newer bundled catalog, the index is rebuilt offline from `catalogAdded` and `custom`.
-- The settings page shows a line such as "24,670 titles + N new · updated 3 days ago", or the last error.
+- The settings page shows a line such as "24,609 titles + N new · updated 3 days ago", or the last error.
 
 This is the only network use of the extension. A test build may ship `data/update-config.json` to redirect the update to a local mock. Release builds have no such file.
 

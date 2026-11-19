@@ -1,6 +1,6 @@
 # UI rules
 
-For anyone changing what the user sees: the extension's settings page (`src/options/`), the popup (`src/popup/`), the in-page cover (`src/content/content.js` and `content.css`), and the Android screens (`SettingsActivity.java`, `Ui.java`, `Cover.java`). The values below were read from those files at version 0.2.0. If a file and this page disagree, the file is right; fix this page.
+For anyone changing what the user sees: the extension's settings page (`src/options/`), the popup (`src/popup/`), the in-page cover (`src/content/content.js` and `content.css`), and the Android screens (`SettingsActivity.java`, `Ui.java`, `Cover.java`). The values below were read from those files at version 0.2.2. If a file and this page disagree, the file is right; fix this page.
 
 ## The `design-taste-frontend` skill
 
@@ -68,6 +68,7 @@ Surfaces are told apart by tone steps, not by lines or shadows. The only shadow 
 Defined in the `OVERLAY_CSS` string in `content.js`. It lives in a shadow root, so page CSS cannot reach it.
 
 - 13 px on 1.35, the same system font stack.
+- The picker for "I've seen it" is a modal `<dialog class="pk">` in the cover's shadow root, using the same colour variables and 12 px radius.
 - Light: background `#eef1f4`, text `#1f2328`, border `#b9c0c8`, focus ring `#0b57d0`. Dark (when the covered block is dark): `#22272e`, `#e6e8eb`, `#59616b`, `#8ab4f8`.
 - A flex row: the label on its own line, then the pill buttons (1 px border, 28 px minimum height, 12 px side padding, hover tint of the current colour). The ⋮ button has no border and a 16 px glyph.
 - Two compact layouts by container query: at 76 px of height or less everything sits on one row with the label truncated; at 34 px or less the buttons shrink to 22 px.
@@ -78,7 +79,7 @@ Known inconsistency: `base.css` says its `--cover` colour is "the near-black of 
 
 Read `Ui.java` first. The library has no resources and no AndroidX (it is merged into other apps), so everything is built in code from plain framework views: `LinearLayout`, `TextView`, `GradientDrawable`, `RippleDrawable`, and icons drawn on a canvas (`Ui.Icon`: back and close, 24 dp, 2 dp stroke). Do not add an XML layout, a drawable resource, a font file or a library. The companion app, which has resources, uses them only for its launcher icon.
 
-- **Palette** (`Ui.Palette`, one per system night mode): light background `#FBF8F2`, surface `#F4F0E8`, text `#1D1B20`, accent `#7A5200` (amber) on `#FFFFFF`; dark background `#141317`, surface `#1D1C21`, text `#ECE9E3`, accent `#F0B856` on `#2A1C00`. Containers, outline, muted text and error have a value in each. The covers use the palette's `cover` colour (`#E9E4DA` light, `#1C1B20` dark).
+- **Palette** (`Ui.Palette`, one per system night mode): light background `#FBF8F2`, surface `#F4F0E8`, text `#1D1B20`, accent `#7A5200` (amber) on `#FFFFFF`; dark background `#141317`, surface `#1D1C21`, text `#ECE9E3`, accent `#F0B856` on `#2A1C00`. Containers, outline, muted text and error have a value in each. A cover does not use the palette's `cover` colour as is any more: `Ui.on(view)` takes the first solid background behind the view, then the theme's window background, else dark, and mixes it 6% toward white or black (the pending-picture shade 10%). The fixed palette (`#E9E4DA` light, `#1C1B20` dark) is the base and the fallback. The seen picker (`SeenPicker.java`) and the library's selection mode (`SettingsActivity.Library`) use the same palette and `Ui` helpers as the settings screen.
 - **Type** in sp (so it follows the user's font size): title large 22, title medium 16, body large 16, body medium 14, label large 14, body small 12. Medium weight uses `sans-serif-medium`. Line spacing 1.15.
 - **Touch targets** at least 48 dp (the cover's own buttons are 44 dp, and shrink to 24 dp on a short item). Buttons are `Ui.button` in four kinds (filled, tonal, outlined, text) plus danger, with a 24 dp radius. Single-choice groups are `Ui.Segmented`, an outlined pill with the chosen segment filled with the accent container, and each segment has a content description that includes the group's name.
 - **Navigation.** Five tabs, as on the extension. Back is a 48 dp icon button. The screen is full-screen and applies the insets of the system bars, the keyboard and the display cutout itself (`SettingsActivity.java`), and sets the bar colours and icon appearance from the palette.

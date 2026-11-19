@@ -65,7 +65,7 @@ Per area, add:
 | 2 | Which pinned files and shas apply, that the title model must not get int8 activations, the cut-offs' calibration status, and the memory budget. Ask for `bench-engine` figures in Chrome and Zen. |
 | 3 | The layout rule (a cover never changes a measured size), the e2e groups to run (`ONLY=...`), both browsers. |
 | 4 | The storage keys and messages that must not change, and that the 0.1 migration keeps working. |
-| 5 | Public Android APIs only, no resources or AndroidX in the library, the emulator rules (one at a time), and that nothing is tested on a real phone or in X or Instagram. |
+| 5 | Public Android APIs only, no resources or AndroidX in the library, the emulator rules (one at a time), and that agents never use a real phone: the owner ran 0.2.0 on one phone and the 0.2.2 changes have run only on the emulator and in the demo, nothing in X or Instagram. |
 | 6 | Check every link and every statement against the code. Do not edit code. |
 
 ## Worktrees
