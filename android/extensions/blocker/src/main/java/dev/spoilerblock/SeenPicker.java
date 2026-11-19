@@ -25,7 +25,14 @@ import java.util.List;
  * the dark or light of the surface the cover sat on; our scanner never reads it (it lists titles).
  */
 final class SeenPicker {
-    static void show(Activity a, boolean dark, Matcher m, List<Integer> works, String label) {
+    /** The picker's note (contract, cover wording): the group's own label, or a general note when the cover names several. */
+    static String note(int groups, String label) {
+        return groups > 1 ? "This post names several works. It stays covered until each one is marked."
+            : "Posts that only say \"" + label + "\" stay covered until every one is marked.";
+    }
+
+    /** works: the unseen works of every group the cover names; groups, label: how many groups, and the first one's label. */
+    static void show(Activity a, boolean dark, Matcher m, List<Integer> works, int groups, String label) {
         Ui.Palette p = new Ui.Palette(dark);
         Dialog d = new Dialog(a, android.R.style.Theme_Material_Dialog_NoActionBar);
         LinearLayout l = new LinearLayout(a);
@@ -69,7 +76,7 @@ final class SeenPicker {
         l.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
         TextView note = Ui.text(a, Ui.BODY_SMALL, p.muted, false);
-        note.setText("Posts that only say \"" + label + "\" stay covered until every one is marked.");
+        note.setText(note(groups, label));
         note.setPadding(0, Ui.dp(a, 12), 0, Ui.dp(a, 8));
         l.addView(note, Ui.matchWidth());
 

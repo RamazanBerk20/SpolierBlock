@@ -121,8 +121,7 @@ final class Cover {
         Activity a = activity(item.getContext());
         if (a == null) a = scanner.sb.resumedActivity();
         if (a == null || a.isFinishing()) return;
-        String label = m.labels[marks[0]] + (marks.length > 1 ? " and " + (marks.length - 1) + " more" : "");
-        SeenPicker.show(a, palette.dark, m, open, label);
+        SeenPicker.show(a, palette.dark, m, open, marks.length, m.labels[marks[0]]); // one unseen row still opens it: the user sees what is marked
     }
 
     private int dp(int v) { return Ui.dp(item.getContext(), v); }
