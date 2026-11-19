@@ -85,14 +85,14 @@ Identical strings on both platforms. `{t}` is the group label; with several grou
 
 Pictures still being judged: both platforms shade the picture itself (the extension dims it, Android paints an opaque
 shade over it, with no text and no buttons) and leave the post's text readable; only a verdict covers the post. A picture
-whose check fails stays shaded.
+whose check fails stays shaded on Android; the extension reveals it after its retries.
 
 Buttons: `Show once`, `I've seen it` (absent for the unidentified image) and a settings button (`⋮`, accessible name
 `SpolierBlock settings`).
 
 `I've seen it` on a group with one work marks it seen at once. On a group with several works (a franchise name such as
 "Resident Evil", or an original and its remake) it opens a picker instead: title `Which have you seen?`, one row per work
-(`{title}` and `{type} · {year}`) with a checkbox, nothing ticked, the buttons `All`, `Cancel` and `Mark seen`, and the
+not yet seen (`{title}` and `{type} · {year}`) with a checkbox, nothing ticked, the buttons `All`, `Cancel` and `Mark seen`, and the
 note `Posts that only say "{t}" stay covered until every one is marked.` Only the ticked works are written.
 
 The cover and the pending-picture shade take their colours from the surface they sit on (the page or the host app's
