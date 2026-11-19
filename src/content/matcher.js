@@ -11,10 +11,14 @@
   // about a film called "Switch", "the Warriors game" nothing about the "Warriors" novels. Tokens are normalised
   // (lowercase, no diacritics), so "bölüm" is "bolum" and "película" is "pelicula".
   const TYPE_BIT = { movie: 1, tv: 2, game: 4, book: 8, anime: 16, manga: 32, comic: 64 };
-  const MOV = 1, EPIS = 2 | 16, SCREEN = 1 | 2 | 16, GAME = 4, READ = 8 | 32 | 64, ALL = 127;
+  const MOV = 1, EPIS = 2 | 16, SCREEN = 1 | 2 | 16, GAME = 4, READ = 8 | 32 | 64, ALL = 127, YT = 128;
   const CONTEXT = new Map();
   for (const [mask, words] of [
     [ALL, 'ending endings finale spoiler spoilers sequel prequel remake reboot character characters plot adaptation franchise saga trilogy premiere'],
+    // video-title words ("Oppenheimer Review", "Halo Lore", "Midsommar Is A Masterpiece"): weak (YT), an everyday-word
+    // name does not take them ("Switch 2 Review", "Telefon incelemesi", "Click Review")
+    [ALL | YT, 'review reviews reaction reacts reacting soundtrack ost lore recap recaps breakdown masterpiece remastered inceleme incelemesi'],
+    [GAME | YT, 'walkthrough mod mods modded'],
     [SCREEN | GAME, 'trailer teaser scene scenes cast animation animated'],
     [SCREEN, 'director cinema theater theatre netflix hbo disney pixar imdb tv watched watching rewatch rewatched ' +
       'rewatching binge imax oscar oscars emmy emmys blockbuster screenplay cine kino'],
@@ -214,7 +218,7 @@
         // a capital proves nothing in an ALL-CAPS run or a Headline Case line: there a single word or two everyday
         // words ("KES", "Thirst", "The Master") need a media word right next to them
         loud ??= caseless(text, tk, ocrFrom);
-        const caseOnly = cap && (h.n === 1 || (common && h.n === 2)) && loud.slice(h.i, h.i + h.n).some(Boolean);
+        const caseOnly = cap && (common || amb || rare || other) && (h.n === 1 || (common && h.n === 2)) && loud.slice(h.i, h.i + h.n).some(Boolean);
         const weak = caseOnly || common || other || rare || kind === KIND.CHAR1 || kind === KIND.PART || (TITLE_LIKE(kind) && ((amb && h.n <= 2) || (h.n === 1 && firstTok.length <= 3)));
         cands.push({ g, common, other, rare, caseOnly, weak, part: kind === KIND.PART, h, s, e, hashed, key: tk.toks.slice(h.i, h.i + h.n).join(' ') });
       }
@@ -235,9 +239,13 @@
         // the rest only looks inside the name's own sentence, at words that fit the work's type
         sent ??= sentences(text, tk);
         const si = sent[c.h.i], mask = this.typeMask(c.g);
-        const fits = (j) => sent[j] === si && (j < c.h.i || j >= c.h.i + c.h.n) && (contextMask(tk.toks[j]) & mask) !== 0;
+        const fits = (j) => {
+          if (sent[j] !== si || (j >= c.h.i && j < c.h.i + c.h.n)) return false;
+          const cm = contextMask(tk.toks[j]);
+          return (cm & mask) !== 0 && !(cm & YT && c.common);
+        };
         // the sentence says what it is ("Portal is a perfect game") or that someone consumed it ("just beat Portal")
-        const said = (c.h.n > 1 || !SUBJECT.has(c.key)) && described(tk, sent, c.h.i + c.h.n, si, mask) || (sent[c.h.i - 1] === si && ((VERBS.get(tk.toks[c.h.i - 1]) ?? 0) & mask) !== 0);
+        const said = (c.h.n > 1 || !SUBJECT.has(c.key)) && described(tk, sent, c.h.i + c.h.n, si, mask, c.common) || (sent[c.h.i - 1] === si && ((VERBS.get(tk.toks[c.h.i - 1]) ?? 0) & mask) !== 0);
         let near = said;
         for (let j = Math.max(0, c.h.i - 3), hi = Math.min(tk.toks.length, c.h.i + c.h.n + 3); j < hi && !near; j++) near = fits(j);
         // only a media word right next to it ("Lost season 6", "Lost 2. sezon")
@@ -294,14 +302,15 @@
   const COPULA = new Set('is was are were es ist war est etait'.split(' '));
   const DET = new Set('a an the such my our your his her their this one un una ein eine einen une um uma bir'.split(' '));
   const STOP = new Set('to of for in on at with about from that which who where when because but and or if than like as by while'.split(' '));
-  function described(tk, sent, j, si, mask) {
+  function described(tk, sent, j, si, mask, everyday) {
     const cop = sent[j] === si && COPULA.has(tk.toks[j]);
     if (cop) j++;
     let det = false;
     for (let k = j; k < Math.min(tk.toks.length, j + 8) && sent[k] === si; k++) {
       const t = tk.toks[k];
       if (DET.has(t)) { det ||= cop || t === 'bir'; continue; }
-      if (det && (contextMask(t) & mask) !== 0) return true;
+      const cm = contextMask(t);
+      if (det && (cm & mask) !== 0 && !(everyday && cm & YT)) return true;
       if (STOP.has(t) && !(t === 'of' && tk.toks[k - 1] === 'one')) return false; // "one of the best films"
     }
     return false;

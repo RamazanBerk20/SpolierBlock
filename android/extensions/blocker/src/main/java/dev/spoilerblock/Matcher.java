@@ -23,12 +23,15 @@ public final class Matcher {
     static final int MAX_N = 8;
     static final int TITLE = 0, ALIAS = 1, CHAR = 2, TAG = 3, CHAR1 = 4, SERIES = 5, PART = 6;
     // media context words -> the work types they corroborate (TYPE_BIT); see the JS for the reasons
-    private static final int MOV = 1, EPIS = 2 | 16, SCREEN = 1 | 2 | 16, GAME = 4, READ = 8 | 32 | 64, ALL = 127;
+    private static final int MOV = 1, EPIS = 2 | 16, SCREEN = 1 | 2 | 16, GAME = 4, READ = 8 | 32 | 64, ALL = 127, YT = 128;
     private static final Map<String, Integer> CONTEXT = new HashMap<>();
     private static final Map<String, Integer> TYPE_BIT = new HashMap<>();
     static {
         Object[][] ctx = {
             {ALL, "ending endings finale spoiler spoilers sequel prequel remake reboot character characters plot adaptation franchise saga trilogy premiere"},
+            // video-title words: weak (YT), an everyday-word name does not take them (see the JS)
+            {ALL | YT, "review reviews reaction reacts reacting soundtrack ost lore recap recaps breakdown masterpiece remastered inceleme incelemesi"},
+            {GAME | YT, "walkthrough mod mods modded"},
             {SCREEN | GAME, "trailer teaser scene scenes cast animation animated"},
             {SCREEN, "director cinema theater theatre netflix hbo disney pixar imdb tv watched watching rewatch rewatched " +
                 "rewatching binge imax oscar oscars emmy emmys blockbuster screenplay cine kino"},
@@ -272,7 +275,7 @@ public final class Matcher {
                 }
                 if (loud == null) loud = caseless(text, tk, ocrFrom);
                 boolean caseOnly = false; // a capital proves nothing in an ALL-CAPS run or a Headline Case line
-                if (cap && (n == 1 || common && n == 2)) for (int j = i; j < i + n && !caseOnly; j++) caseOnly = loud[j];
+                if (cap && (common || amb || rare || other) && (n == 1 || common && n == 2)) for (int j = i; j < i + n && !caseOnly; j++) caseOnly = loud[j];
                 boolean titleLike = kind == TITLE || kind == ALIAS || kind == SERIES;
                 Cand c = new Cand();
                 c.g = g; c.i = i; c.n = n; c.s = s; c.e = e; c.common = common; c.other = other; c.rare = rare; c.hashed = hashed;
@@ -352,7 +355,7 @@ public final class Matcher {
         int si = sent[c.i], mask = typeMask(c.g);
         // the sentence says what it is ("Portal is a perfect game") or that someone consumed it ("just beat Portal")
         Integer verb = c.i > 0 && sent[c.i - 1] == si ? VERBS.get(tk.toks.get(c.i - 1)) : null;
-        boolean said = (c.n > 1 || !SUBJECT.contains(c.key)) && described(tk, sent, c.i + c.n, si, mask) || verb != null && (verb & mask) != 0;
+        boolean said = (c.n > 1 || !SUBJECT.contains(c.key)) && described(tk, sent, c.i + c.n, si, mask, c.common) || verb != null && (verb & mask) != 0;
         boolean near = said;
         for (int j = Math.max(0, c.i - 3), hi = Math.min(len, c.i + c.n + 3); j < hi && !near; j++) near = fits(c, j, si, mask, sent, tk);
         int after = c.i + c.n + (c.i + c.n < len && DIGITS.matcher(tk.toks.get(c.i + c.n)).matches() ? 1 : 0); // "Lost 2. sezon"
@@ -393,7 +396,9 @@ public final class Matcher {
 
     // a media word of the work's type in the name's own sentence, outside the name
     private static boolean fits(Cand c, int j, int si, int mask, int[] sent, Tokens tk) {
-        return j >= 0 && j < sent.length && sent[j] == si && (j < c.i || j >= c.i + c.n) && (contextMask(tk.toks.get(j)) & mask) != 0;
+        if (j < 0 || j >= sent.length || sent[j] != si || (j >= c.i && j < c.i + c.n)) return false;
+        int cm = contextMask(tk.toks.get(j));
+        return (cm & mask) != 0 && !((cm & YT) != 0 && c.common);
     }
 
     // verbs of consuming a work, only right before the name; "<name> is (such) a ... game" (see the JS)
@@ -409,14 +414,15 @@ public final class Matcher {
         STOP = words("to of for in on at with about from that which who where when because but and or if than like as by while");
     private static java.util.Set<String> words(String s) { return new java.util.HashSet<>(Arrays.asList(s.split(" "))); }
 
-    private static boolean described(Tokens tk, int[] sent, int j, int si, int mask) {
+    private static boolean described(Tokens tk, int[] sent, int j, int si, int mask, boolean everyday) {
         boolean cop = j < sent.length && sent[j] == si && COPULA.contains(tk.toks.get(j));
         if (cop) j++;
         boolean det = false;
         for (int k = j; k < Math.min(tk.size(), j + 8) && sent[k] == si; k++) {
             String t = tk.toks.get(k);
             if (DET.contains(t)) { det = det || cop || t.equals("bir"); continue; }
-            if (det && (contextMask(t) & mask) != 0) return true;
+            int cm = contextMask(t);
+            if (det && (cm & mask) != 0 && !(everyday && (cm & YT) != 0)) return true;
             if (STOP.contains(t) && !(t.equals("of") && tk.toks.get(k - 1).equals("one"))) return false; // "one of the best films"
         }
         return false;

@@ -20,6 +20,7 @@ export function setCommonWords(text) {
 }
 const commonWords = () => common;
 export const COMMON_POP = 60; // measured with tools/fp-text.mjs
+export const DISTINCT_POP = 45;
 const RULES = !globalThis.process?.env?.SB_NO_COMMON_RULE; // measurement switch for tools/fp-text.mjs "before" numbers
 const isCommon = (t) => /^\d+$/.test(t) || commonWords().has(t);
 // "everyday word" for numbered short names: the 10k most frequent words (the 20k list also holds "gta", "halo")
@@ -165,7 +166,11 @@ export function buildIndex(catalog) {
     const common = plainChar || (RULES && titleLike && (numeric || (!e.free && !e.numbered && (one ? isCommon(t[0]) && (low || e.kind !== KIND.TITLE || isTop3k(t[0])) : low && t.every(isCommon))))) ? 1 : 0;
     // "rare": a single uncommon word naming a less popular work ("Bloodborne", "Telefon"). Not an everyday word, but
     // weak: it needs a media word in its sentence. When it mostly names something else the "other" flag says so.
-    const rare = RULES && titleLike && one && low && !common && !e.free ? 1 : 0;
+    const top = works[groups[e.g].ws[0]].pop ?? 0;
+    // "rare" (weak): a single uncommon word of a work below DISTINCT_POP. From DISTINCT_POP up such a word ("Arcane",
+    // "Minecraft") is a title however it is written, headline or all caps (chosen with tools/fp-posts.mjs on
+    // test/fixtures/headlines.jsonl and fp-posts.jsonl, and tools/fp-text.mjs; 45 keeps Arcane)
+    const rare = RULES && titleLike && one && top < DISTINCT_POP && !common && !e.free ? 1 : 0;
     // "cap": must appear in Title Case; only popular multi-word names with a distinctive word ("game of thrones")
     // may be written in lowercase
     const cap = plainChar || (RULES && titleLike && !e.free && (one || low || t.every(isCommon))) ? 1 : 0;

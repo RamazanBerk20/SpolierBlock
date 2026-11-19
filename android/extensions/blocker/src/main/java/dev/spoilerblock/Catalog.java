@@ -242,7 +242,7 @@ final class Catalog {
 
     // ---------- build-index.js ----------
 
-    static final int COMMON_POP = 60;
+    static final int COMMON_POP = 60, DISTINCT_POP = 45;
     private static final Pattern SERIES_SPLIT = Pattern.compile(":| – | — | - ");
     private static final String[] ROMAN = {"ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx"};
     private static final Map<String, String> TO_ARABIC = new HashMap<>(), TO_ROMAN = new HashMap<>();
@@ -432,7 +432,7 @@ final class Catalog {
             boolean common = plainChar || titleLike && (numeric || !e.free && !e.numbered &&
                 (one ? words.isCommon(t[0]) && (low || e.kind != Matcher.TITLE || words.top3k.contains(t[0])) : low && allCommon));
             boolean cap = plainChar || titleLike && !e.free && (one || low || allCommon);
-            boolean rare = titleLike && one && low && !common && !e.free;
+            boolean rare = titleLike && one && works.get(groups.get(e.g).ws[0]).pop < DISTINCT_POP && !common && !e.free;
             boolean other = e.oth && e.kind != Matcher.PART && e.kind != Matcher.CHAR1;
             // strong enough in text read from pictures (see build-index.js)
             List<String> real = new ArrayList<>();

@@ -178,6 +178,20 @@ const PHONE = [
   ['Lost season 6 was a mess', ['Lost']],
   ['Watching 10.5 on TV tonight, a disaster miniseries', ['10.5']],
   ['The height chart said 10.5 feet', []],
+  // YouTube titles (Headline Case, ALL CAPS): distinctive single words of popular works are titles however written
+  ['Minecraft Speedrunning: A Brief History', ['Minecraft']],
+  ['Arcane Is A Masterpiece', ['Arcane']],
+  ['Interstellar Docking Scene Reaction', ['Interstellar']],
+  ['MINECRAFT BUT EVERYTHING IS LAVA', ['Minecraft']],
+  ['Skyrim Is Better Than You Remember', ['The Elder Scrolls V: Skyrim']],
+  ['Oppenheimer Review', ['Oppenheimer']],
+  ['Midsommar Is A Masterpiece', ['Midsommar']],
+  ['Why Lost Failed', []],
+  ['Chernobyl Is Terrifying', []],
+  ['Nintendo Switch 2 Review', []],
+  ['Telefon incelemesi: 6 ay sonra', []],
+  ['x' + M + 'MINECRAFT', []],
+  ['x' + M + 'OPPENHEIMER REVIEW', []],
 ];
 for (const [text, want, seen] of PHONE) {
   const re = seen && new RegExp(seen), seenW = dmeta.titles.map((t, i) => (re && re.test(t) ? i : -1)).filter((i) => i >= 0);
