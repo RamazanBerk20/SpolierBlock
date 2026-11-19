@@ -49,7 +49,10 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     volatile Config.Works works; // the config seen through the matcher's work list
     boolean enabled, scanImages, blockUnlisted, unknownImages;
     int generation; // bumped when the config, the index or a verdict changes: every item is re-evaluated
-    final Set<String> revealed = new HashSet<>(); // "Show once": item texts shown this session
+    // "Show once": posts shown this session (Scanner.shownKey), the last 500
+    final Set<String> revealed = Collections.newSetFromMap(new java.util.LinkedHashMap<String, Boolean>() {
+        @Override protected boolean removeEldestEntry(Map.Entry<String, Boolean> e) { return size() > 500; }
+    });
     final Map<View, Scanner> scanners = new WeakHashMap<>(); // window root view -> scanner
     private Activity resumed;
     private boolean pendingManage;

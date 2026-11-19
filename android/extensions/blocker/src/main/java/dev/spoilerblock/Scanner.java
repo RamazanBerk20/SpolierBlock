@@ -60,6 +60,8 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         this.sb = sb;
         this.decor = decor;
         this.activityWindow = activityWindow;
+        youtube = decor.getContext().getPackageName().contains("youtube");
+        iconMax = Ui.dp(decor.getContext(), 64);
         decor.getViewTreeObserver().addOnPreDrawListener(this);
         decor.getViewTreeObserver().addOnGlobalLayoutListener(this);
     }
@@ -349,7 +351,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         List<View> toShade = new ArrayList<>();
         for (View mv : media) {
             Images.State s = sb.images.state(mv);
-            key.append('\u0000').append(s.key);
+            if (!Images.isVideo(mv)) key.append('\u0000').append(s.key); // a player's key changes with every sampled frame
             if (!s.done) { pending = true; toShade.add(mv); continue; }
             if (s.failed) { toShade.add(mv); continue; } // fail closed: the picture stays shaded
             // rule 7: the image model speaks only for a picture no text identifies
@@ -409,7 +411,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             msg = "Possible film, show or game image";
         }
         shadePictures(it, msg == null ? toShade : new ArrayList<>()); // pending pictures are shaded, not the whole post
-        String reveal = key.toString(); // "Show once" is for this text with these images
+        String reveal = shownKey(text, key); // "Show once" is for this post, whatever its counters, players and pictures do next
         Cover cv = coverOf(it);
         boolean block = msg != null && !sb.revealed.contains(reveal);
         boolean log = Log.isLoggable(SpoilerBlock.TAG, Log.DEBUG);
@@ -425,6 +427,17 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             covers.remove(cv);
             if (log) Log.d(SpoilerBlock.TAG, "unblock " + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)));
         }
+    }
+
+    /**
+     * The key "Show once" remembers a post by: its own text (never the text read from its pictures) with numbers blanked
+     * and spaces collapsed, so ticking counters, a playing video, pictures that finish loading, late verdicts and a rebind
+     * to another view leave it shown. A post without words is known by its pictures instead.
+     */
+    static String shownKey(String own, CharSequence media) {
+        String k = own.replaceAll("\\d[\\d.,:]*", "#").replaceAll("\\s+", " ").trim();
+        for (int i = 0; i < k.length(); i++) if (Character.isLetter(k.charAt(i))) return k;
+        return "\u0000" + media;
     }
 
     private boolean[] noneSeen; // for rules 6 and 7's "names a work", seen or not
@@ -515,6 +528,17 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         return h;
     }
 
+    private final boolean youtube; // row descriptions carry a metadata tail (YouTubeText)
+    private final int iconMax;
+
+    /**
+     * A small tappable icon's description is its button label ("Go to channel X", "Action menu", "Like"), in any
+     * language: never the post's content.
+     */
+    private boolean iconButton(View v) {
+        return v.isClickable() && v instanceof android.widget.ImageView && v.getWidth() <= iconMax && v.getHeight() <= iconMax;
+    }
+
     /** Visible text of an item: TextView text, content descriptions and the accessibility (virtual view) tree. */
     private void collect(View v, TextCapture.Texts out, boolean root) {
         if (v.getVisibility() != View.VISIBLE) return;
@@ -523,7 +547,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             return;
         }
         CharSequence cd = v.getContentDescription();
-        out.add(cd);
+        if (cd != null && !iconButton(v)) out.add(youtube ? YouTubeText.strip(cd.toString()) : cd);
         if (v instanceof TextView && !(v instanceof EditText)) { // the user's own typing is not a spoiler
             CharSequence t = ((TextView) v).getText();
             out.add(t);
