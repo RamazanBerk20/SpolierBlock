@@ -189,6 +189,21 @@ export function buildIndex(catalog) {
   const newIdx = new Array(groups.length);
   order.forEach((old, i) => { newIdx[old] = i; });
 
+  // A franchise is as known as its works together: no single "Resident Evil", "God of War" or "Dark Souls" work
+  // reaches COMMON_POP, so their everyday-word names were "common" and needed a media word ("Resident Evil is scary"
+  // matched nothing). fame: the popularity of the works a name titles, aliases or derives a series from, plus its
+  // numbered sequels and subtitled entries ("Dark Souls II", "Dark Souls: Remastered"; not "The Ten Commandments" for
+  // "The Ten").
+  const startsWith = new Map();
+  works.forEach((w, i) => {
+    const p = seriesPrefix(w.title) ?? numberedStem(w.title), k = p && tokenize(p).toks.join(' ');
+    if (k) (startsWith.get(k) ?? startsWith.set(k, []).get(k)).push(i);
+  });
+  const fame = (key, e) => {
+    let sum = 0;
+    for (const w of new Set([...e.tiers.slice(0, 3).flatMap((x) => (x ? [...x] : [])), ...(startsWith.get(key) ?? [])])) sum += works[w].pop ?? 0;
+    return sum;
+  };
   const entries = new Map();
   // "common": a name made only of everyday words whose most popular work is below COMMON_POP ("The Walk",
   // "In the Park", "Friday"). Such names need the Title-Case form plus corroboration, see matcher.
@@ -200,11 +215,15 @@ export function buildIndex(catalog) {
     const top = works[Math.min(...e.works)].pop ?? 0;
     const low = top < COMMON_POP, titleLike = e.kind === KIND.TITLE || e.kind === KIND.ALIAS || e.kind === KIND.SERIES;
     const one = t.length === 1;
+    // a known franchise of two words or more is no everyday phrase; but "The" and one word stays everyday English ("THE
+    // FALL OF CONSTANTINOPLE"), and so does a name with no later word of 3+ letters, whose capital the sentence's own
+    // can hide ("What if we...")
+    const famous = () => !one && !(t[0] === 'the' && t.length === 2) && t.slice(1).some((x) => x.length >= 3) && fame(key, e) >= COMMON_POP;
     // single-word titles are already flagged by the catalog's own ambiguity rule; aliases/series are not
     // a character name made of everyday words only ("The Sheep", "Thing One") is treated like such a title
     const plainChar = RULES && e.kind === KIND.CHAR && t.every(isCommon) && (t[0] === 'the' || t.every(isTop3k));
     const numeric = t.every((x) => !/\p{L}/u.test(x)); // "10.5", "1917", "300": need a media word or quotes
-    const common = plainChar || (RULES && titleLike && (numeric || (!e.free && !e.numbered && (one ? isCommon(t[0]) && (low || e.kind !== KIND.TITLE || isTop3k(t[0])) : low && t.every(isCommon))))) ? 1 : 0;
+    const common = plainChar || (RULES && titleLike && (numeric || (!e.free && !e.numbered && (one ? isCommon(t[0]) && (low || e.kind !== KIND.TITLE || isTop3k(t[0])) : low && t.every(isCommon) && !famous())))) ? 1 : 0;
     // "rare": a single uncommon word naming a less popular work ("Bloodborne", "Telefon"). Not an everyday word, but
     // weak: it needs a media word in its sentence. When it mostly names something else the "other" flag says so.
     // "rare" (weak): a single uncommon word of a work below DISTINCT_POP. From DISTINCT_POP up such a word ("Arcane",
@@ -224,7 +243,7 @@ export function buildIndex(catalog) {
     const ocr = RULES && e.orig && !other && t.length >= 2 && (titleLike || e.kind === KIND.CHAR) &&
       ((real.length >= 2 && !(e.amb && low)) || (real.length === 1 && !low && !isCommon(real[0])) ||
        (num && real.some((x) => x.length >= 4 && !isTop3k(x)))) ? 1 : 0;
-    entries.set(key, (newIdx[e.g] << 9) | (ocr << 8) | (rare << 7) | (cap << 6) | (common << 5) | (e.amb << 4) | (other << 3) | e.kind);
+    entries.set(key, (newIdx[e.g] << 9) | (ocr << 8) | (rare << 7) | (cap << 6) | (common << 5) | ((e.amb && !(RULES && famous())) << 4) | (other << 3) | e.kind);
   }
   for (const [key, g] of typed) entries.set(key, (newIdx[g] << 9) | KIND.TITLE); // looked up only next to a type word
   const sorted = order.map((i) => groups[i]);

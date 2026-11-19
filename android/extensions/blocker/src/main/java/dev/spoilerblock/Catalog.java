@@ -459,6 +459,9 @@ final class Catalog {
         int slots = 1 << bits, mask = slots - 1;
         int[] u = new int[3 + slots * 3];
         u[0] = Matcher.MAGIC; u[1] = bits; u[2] = 3; // index format 3
+        // fame (build-index.js): a franchise is as known as its works together, numbered sequels and subtitled entries
+        Map<String, List<Integer>> startsWith = new HashMap<>();
+        for (int i = 0; i < works.size(); i++) if (prefix[i] != null) startsWith.computeIfAbsent(join(Matcher.tokenize(prefix[i]).toks, " "), x -> new ArrayList<>()).add(i);
         for (Map.Entry<String, Key> en : keys.entrySet()) {
             Key e = en.getValue();
             String[] t = en.getKey().split(" ", -1);
@@ -476,7 +479,8 @@ final class Catalog {
             boolean numeric = true; // "10.5", "1917": need a media word or quotes
             for (String x : t) if (hasLetter(x)) { numeric = false; break; }
             boolean common = plainChar || titleLike && (numeric || !e.free && !e.numbered &&
-                (one ? words.isCommon(t[0]) && (low || e.kind != Matcher.TITLE || words.top3k.contains(t[0])) : low && allCommon));
+                (one ? words.isCommon(t[0]) && (low || e.kind != Matcher.TITLE || words.top3k.contains(t[0]))
+                    : low && allCommon && !famous(t, e, startsWith.get(en.getKey()), works)));
             boolean cap = plainChar || titleLike && !e.free && (one || low || allCommon);
             boolean rare = titleLike && one && top < DISTINCT_POP && !common && !e.free;
             boolean other = e.oth && e.kind != Matcher.PART && e.kind != Matcher.CHAR1;
@@ -488,7 +492,7 @@ final class Catalog {
             if (num) for (String x : real) if (x.length() >= 4 && !words.top3k.contains(x)) { numOk = true; break; }
             boolean ocr = e.orig && !other && t.length >= 2 && (titleLike || e.kind == Matcher.CHAR) &&
                 (real.size() >= 2 && !(e.amb == 1 && low) || real.size() == 1 && !low && !words.isCommon(real.get(0)) || numOk);
-            int v = (newIdx[e.g] << 9) | (ocr ? 1 << 8 : 0) | (rare ? 1 << 7 : 0) | (cap ? 1 << 6 : 0) | (common ? 1 << 5 : 0) | (e.amb << 4) | (other ? 1 << 3 : 0) | e.kind;
+            int v = (newIdx[e.g] << 9) | (ocr ? 1 << 8 : 0) | (rare ? 1 << 7 : 0) | (cap ? 1 << 6 : 0) | (common ? 1 << 5 : 0) | (e.amb == 1 && !famous(t, e, startsWith.get(en.getKey()), works) ? 1 << 4 : 0) | (other ? 1 << 3 : 0) | e.kind;
             // buildIndexBinary: linear probing in insertion order
             int A = Matcher.SEED_A, B = Matcher.SEED_B;
             for (String tok : t) { int[] h = Matcher.tokHash(tok); A = Matcher.mixA(A, h[0]); B = Matcher.mixB(B, h[1]); }
@@ -630,6 +634,24 @@ final class Catalog {
     private static boolean sameWorks(List<Integer> a, int[] b) {
         for (int i = 0; i < b.length; i++) if (a.get(i) != b[i]) return false;
         return true;
+    }
+
+    /** build-index.js famous: a known franchise of 2+ words, not "The" + one word, with a later word of 3+ letters. */
+    private static boolean famous(String[] t, Key e, List<Integer> startsWith, List<Work> works) {
+        if (t.length < 2 || t[0].equals("the") && t.length == 2) return false;
+        boolean longer = false;
+        for (int i = 1; i < t.length; i++) longer |= t[i].length() >= 3;
+        return longer && fame(e, startsWith, works) >= COMMON_POP;
+    }
+
+    /** build-index.js fame: the popularity of a name's title, alias and series works plus its sequels (startsWith). */
+    private static double fame(Key e, List<Integer> startsWith, List<Work> works) {
+        Set<Integer> ws = new HashSet<>();
+        for (int k = 0; k < 3; k++) if (e.tiers[k] != null) ws.addAll(e.tiers[k]);
+        if (startsWith != null) ws.addAll(startsWith);
+        double sum = 0;
+        for (int w : ws) sum += works.get(w).pop;
+        return sum;
     }
 
     private static int groupOf(Map<String, Integer> gmap, List<Group> groups, String label, int[] ws) {

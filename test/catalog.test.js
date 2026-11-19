@@ -177,6 +177,36 @@ test('"More from this series": a late entry lists the rest of its franchise, old
   assert.deepEqual(m.moreFromSeries(m.evaluate('Inception ending')), []); // in no series: nothing more
 });
 
+test('plain sentences name the best-known works and franchises (top 300 names of 2+ words)', { skip: !has && 'no data/catalog.json' }, () => {
+  for (const [text, label] of [['Resident Evil is scary', 'Resident Evil'], ['The new Resident Evil looks great', 'Resident Evil'],
+    ['I love Resident Evil', 'Resident Evil'], ['Dark Souls is hard', 'Dark Souls'], ['God of War is great', 'God of War'],
+    ['Silent Hill is terrifying', 'Silent Hill'], ['Breaking Bad is overrated', 'Breaking Bad'], ['Star Wars is overrated', 'Star Wars']]) {
+    assert.deepEqual(m.evaluate(text).map((g) => built.meta.groups[g][0]), [label], text);
+  }
+  // test/fixtures/top-names.json: the 300 titles of two words or more with the most sitelinks, counting the works of
+  // the catalog series of that name (2026-11-19). Each, in four plain sentences, must find a work of that title.
+  // Known misses (88 of 1200; 367 before names took their franchise's fame), and why:
+  const known = new Set([
+    // a catalog entry for a list or a series item: nobody writes the name; the short name matches instead
+    'Foundation series', 'Oz book series', 'Platonic dialogue', 'Spider-Man in film', 'Mortal Engines Quartet', 'The Inheritance Cycle',
+    'Space Odyssey', 'The Human Comedy',
+    // "The" and one word stays everyday English ("THE FALL OF CONSTANTINOPLE"): needs a media word
+    'The Ring', 'The Thing', 'The Flash', 'The Transporter', 'The Office',
+    // everyday words, no work at COMMON_POP and no numbered or subtitled entries of that name: needs a media word
+    '28 Days Later', 'Dirty Harry', 'Friday the 13th', 'Gone with the Wind', 'Ip Man', 'Johnny English', "JoJo's Bizarre Adventure",
+    'Knives Out', 'Mario & Sonic at the Olympic Games', 'Medal of Honor', 'Metal Gear', 'Power Rangers', 'Pretty Cure', 'Super Smash Bros.',
+    'The Land Before Time', 'The Wolf Man',
+  ]);
+  const names = JSON.parse(fs.readFileSync(new URL('./fixtures/top-names.json', import.meta.url), 'utf8'));
+  let misses = 0;
+  for (const n of names) for (const t of ['{X} is great', 'I finally finished {X}', 'the ending of {X} surprised me', 'honestly {X} is great']) {
+    const text = t.replace('{X}', n);
+    const ok = m.evaluate(text).some((g) => built.meta.groups[g].slice(1).some((w) => built.meta.titles[w].toLowerCase() === n.toLowerCase()));
+    if (!ok) { misses++; assert.ok(known.has(n), `no match: ${text}`); }
+  }
+  assert.ok(misses <= 88, `${misses} misses`);
+});
+
 test('rows the Android Scanner passed on YouTube search results (0.2.2 logs): labels as reviewed',{ skip: !has && 'no data/catalog.json' }, () => {
   const rows = fs.readFileSync(new URL('./fixtures/yt-rows.jsonl', import.meta.url), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   for (const r of rows) assert.deepEqual(m.evaluate(r.text).map((g) => built.meta.groups[g][0]), r.expect, r.text.slice(0, 80));
