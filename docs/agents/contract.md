@@ -59,8 +59,13 @@ A text match names a group: every work that carries the matched name.
 5. An image identified as a covered group's work covers regardless of style.
 6. An image that looks like film/show/game media but has no title covers only when `settings.unknownImages`, and never
    when the post's text names a seen work and no covered one.
-7. The post's own text outranks its pictures. When the post's own text names a seen work and no covered one, a title put
-   on its picture (rule 5) and names found only in text read from its pictures (OCR) do not cover.
+7. Text outranks pictures, and typed text outranks text read from pictures.
+   - When the post's own text names a seen work and no covered one, a title put on its picture (rule 5) and names found
+     only in text read from its pictures (OCR) do not cover.
+   - The image model's title for a picture is dropped whenever the post's own text or that picture's own text (OCR)
+     names any work, seen or not: the model only speaks for pictures that no text identifies.
+   - The cover's label names the best-supported group: one named by the post's own text first, then one named only by
+     OCR text, then an image title. Within a tier, a longer matched name comes before a shorter one.
 8. Text read from pictures is weaker evidence than text the author typed: it is often all capitals, so capital letters
    prove nothing in it, and it is full of stray words. The caller passes it to the matcher after the post's own text,
    separated by one U+0001 character (`own text` + `\u0001` + `OCR text`). The matcher's rules for the part after the
