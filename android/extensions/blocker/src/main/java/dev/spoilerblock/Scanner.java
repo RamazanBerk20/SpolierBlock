@@ -48,7 +48,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     private long statFrames, statNs, statMaxNs, statReads, statReadNs, statEvals, statEvalNs, statLast = SystemClock.uptimeMillis();
 
     private static final class Item implements View.OnAttachStateChangeListener {
-        long fp; int gen = -1; long at; String text; int[] groups; boolean stale, pending;
+        long fp; int gen = -1; long at; String text; int[] groups; boolean stale, pending, ownSeenOnly; String own; int ownGen = -1;
         // A recycled view is removed and re-added (RecyclerView pool): treat it as unknown, whatever its fingerprint.
         @Override public void onViewAttachedToWindow(View v) { stale = true; }
         @Override public void onViewDetachedFromWindow(View v) { stale = true; }
@@ -95,7 +95,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         for (View v : now) {
             android.graphics.drawable.ColorDrawable d = pictureShades.get(v);
             if (d == null) {
-                pictureShades.put(v, d = new android.graphics.drawable.ColorDrawable(Ui.palette(v.getContext()).cover));
+                pictureShades.put(v, d = new android.graphics.drawable.ColorDrawable(Ui.on(v).shade));
                 v.getOverlay().add(d);
             }
             d.setBounds(0, 0, v.getWidth(), v.getHeight());
@@ -295,7 +295,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         Cover paused = coverOf(it); // the real text, not the cover's accessibility nodes
         if (paused != null) paused.a11yPause(true);
         try { collect(it, texts, true); } finally { if (paused != null) paused.a11yPause(false); }
-        String text = texts.sb.toString();
+        String text = texts.sb.toString().replace('\u0001', ' '); // the app's text cannot pose as text read from pictures
         // media views: their verdicts (requested here when missing) and the text OCR found in them
         media.clear();
         if (sb.imagesMatter()) sb.images.candidates(it, this, media, true);
@@ -319,7 +319,8 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             }
             if (!s.ocr.isEmpty()) ocr.append('\n').append(s.ocr);
         }
-        String full = ocr.length() == 0 ? text : text + ocr.substring(Math.max(0, ocr.length() - 4000));
+        // rule 8: text read from pictures goes after the post's own text, behind one U+0001 (the matcher reads it more strictly)
+        String full = ocr.length() == 0 ? text : text + '\u0001' + ocr.substring(Math.max(1, ocr.length() - 4000));
         statReads++;
         statReadNs += System.nanoTime() - r0;
         if (st.gen != sb.generation || !full.equals(st.text)) {
@@ -327,20 +328,25 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             st.groups = m.evaluate(full, v.seen);
             statEvals++; statEvalNs += System.nanoTime() - e0;
         }
+        // rule 7: own text naming a seen work and no covered one outranks the pictures (their titles and their OCR names)
+        if (media.isEmpty()) st.ownSeenOnly = false;
+        else if (st.ownGen != sb.generation || !text.equals(st.own)) { st.ownSeenOnly = ownSeenOnly(m, text, v); st.own = text; st.ownGen = sb.generation; }
+        int[] groups = st.ownSeenOnly ? new int[0] : st.groups;
         st.fp = fp; st.gen = sb.generation; st.at = now; st.text = full; st.stale = false; st.pending = pending; // a pending image is asked again next frame
 
         // the contract's decision rule: which groups cover, and why (its cover wording)
         List<Integer> all = new ArrayList<>(), spoilers = new ArrayList<>();
-        for (int g : st.groups) {
+        for (int g : groups) {
             int k = Config.group(m.groupWorks(g), v, sb.blockUnlisted);
             if (k == Config.STYLE_ALL) all.add(g); else if (k == Config.STYLE_SPOILERS) spoilers.add(g);
         }
+        if (st.ownSeenOnly) imgGroups.clear();
         String msg = null;
         List<Integer> named = new ArrayList<>();
         if (!all.isEmpty()) { msg = "Mentions "; named.addAll(all); named.addAll(spoilers); }
         else if (!imgGroups.isEmpty()) { msg = "Image from "; named.addAll(imgGroups); named.addAll(spoilers); }
         else if (!spoilers.isEmpty()) {
-            Boolean spoiler = sb.spoilerVerdict(full);
+            Boolean spoiler = sb.spoilerVerdict(full.replace('\u0001', '\n'));
             if (spoiler == null) msg = "Checking ";
             else if (spoiler) msg = "Spoiler about ";
             if (msg != null) named.addAll(spoilers);
@@ -350,7 +356,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         if (msg != null) {
             label = m.labels[named.get(0)] + (named.size() > 1 ? " and " + (named.size() - 1) + " more" : "");
             msg = msg.equals("Checking ") ? "Checking " + label + " for spoilers…" : msg + label;
-        } else if (unknown && Config.coverUnknownImage(sb.unknownImages, namesSeen(m, full, v), !all.isEmpty() || !spoilers.isEmpty())) {
+        } else if (unknown && Config.coverUnknownImage(sb.unknownImages, st.ownSeenOnly, !all.isEmpty() || !spoilers.isEmpty())) {
             msg = "Possible film, show or game image";
         }
         shadePictures(it, msg == null ? toShade : new ArrayList<>()); // pending pictures are shaded, not the whole post
@@ -360,7 +366,9 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         boolean log = Log.isLoggable(SpoilerBlock.TAG, Log.DEBUG);
         if (block) {
             if (cv == null) { covers.add(cv = new Cover(this, it, parent)); if (!activityWindow) catcher(); }
-            if (cv.show(msg, label != null ? named.get(0) : -1, reveal) && log) {
+            int[] marks = new int[label != null ? named.size() : 0];
+            for (int i = 0; i < marks.length; i++) marks[i] = named.get(i);
+            if (cv.show(msg, marks, reveal) && log) {
                 Log.d(SpoilerBlock.TAG, "block \"" + msg + "\" " + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)) + " text=" + full.replace('\n', '|'));
             }
         } else if (cv != null) {
@@ -370,13 +378,20 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         }
     }
 
-    private boolean[] noneSeen; // for rule 6's "names a seen work"
+    private boolean[] noneSeen; // for rules 6 and 7's "names a seen work"
 
-    /** Whether the text names a work the user has seen (the matcher drops seen groups, so it is asked without them). */
-    private boolean namesSeen(Matcher m, String text, Config.Works v) {
+    /**
+     * Rules 6 and 7: whether the post's own text names a work the user has seen and no covered one (the matcher drops
+     * seen groups, so it is asked without them).
+     */
+    private boolean ownSeenOnly(Matcher m, String text, Config.Works v) {
         if (noneSeen == null || noneSeen.length != m.ids.length) noneSeen = new boolean[m.ids.length];
-        for (int g : m.evaluate(text, noneSeen)) if (m.groupSeen(g, v.seen)) return true;
-        return false;
+        boolean seen = false;
+        for (int g : m.evaluate(text, noneSeen)) {
+            if (m.groupSeen(g, v.seen)) seen = true;
+            else if (Config.group(m.groupWorks(g), v, sb.blockUnlisted) != Config.NOT_COVERED) return false;
+        }
+        return seen;
     }
 
     private Catcher catcher;
@@ -554,8 +569,8 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         }
 
         @Override public void draw(Canvas canvas) {
-            canvas.drawColor(0xFF111111);
-            if (cover == null) return;
+            if (cover == null) { canvas.drawColor(0xFF111111); return; }
+            canvas.drawColor(cover.palette.cover);
             canvas.save();
             canvas.translate(-dx, -dy);
             cover.drawInto(canvas);

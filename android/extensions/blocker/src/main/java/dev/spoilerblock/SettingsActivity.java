@@ -309,7 +309,7 @@ public final class SettingsActivity extends Activity {
         t.setPadding(0, 0, dp(64), dp(12));
     }
 
-    private static String typeLabel(String type) {
+    static String typeLabel(String type) {
         int i = Config.TYPES.indexOf(type);
         return i < 0 ? "" : TYPE_LABELS[i];
     }

@@ -26,7 +26,8 @@ final class Cover {
     private final LinearLayout root, row;
     private final TextView msg, once, seen, manage;
     private String message;
-    private int group = -1; // the work group "I've seen it" marks; -1: none (unidentified or pending image)
+    private int[] marks = new int[0]; // the name groups "I've seen it" marks; none for an unidentified image
+    final Ui.Palette palette;
     String text;
     private final int savedA11y;
 
@@ -35,7 +36,7 @@ final class Cover {
         this.item = item;
         host = item instanceof ViewGroup ? (ViewGroup) item : parent;
         Context ctx = item.getContext();
-        Ui.Palette p = Ui.palette(ctx);
+        Ui.Palette p = palette = Ui.on(item);
         root = new LinearLayout(ctx);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
@@ -96,12 +97,32 @@ final class Cover {
     /** A button was activated (a tap, or TalkBack). */
     void press(View b) {
         if (b == once) scanner.revealOnce(this);
-        else if (b == seen && group >= 0) SpoilerBlock.I.markSeen(group);
+        else if (b == seen && marks.length > 0) seen();
         else if (b == manage) {
             Activity a = activity(item.getContext());
             if (a == null) a = scanner.sb.resumedActivity(); // a dialog's or popup's context may not be the activity
             if (a != null) SpoilerBlock.I.openSettings(a);
         }
+    }
+
+    /**
+     * "I've seen it": the works of the cover's names, marked at once when there is one, else picked in a dialog
+     * (contract: a franchise name or a remake must not mark works the user has not seen).
+     */
+    private void seen() {
+        Matcher m = scanner.sb.matcher;
+        if (m == null) return;
+        java.util.LinkedHashSet<Integer> all = new java.util.LinkedHashSet<>();
+        for (int g : marks) for (int w : m.groupWorks(g)) all.add(w);
+        if (all.size() <= 1) { SpoilerBlock.I.markWorks(all); return; }
+        Config.Works v = scanner.sb.worksFor(m);
+        java.util.List<Integer> open = new java.util.ArrayList<>();
+        for (int w : all) if (!v.seen[w]) open.add(w);
+        Activity a = activity(item.getContext());
+        if (a == null) a = scanner.sb.resumedActivity();
+        if (a == null || a.isFinishing()) return;
+        String label = m.labels[marks[0]] + (marks.length > 1 ? " and " + (marks.length - 1) + " more" : "");
+        SeenPicker.show(a, palette.dark, m, open, label);
     }
 
     private int dp(int v) { return Ui.dp(item.getContext(), v); }
@@ -117,7 +138,7 @@ final class Cover {
         b.setGravity(Gravity.CENTER);
         b.setPadding(dp(16), 0, dp(16), 0);
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(p.surface);
+        bg.setColor(Ui.mix(p.cover, p.dark ? 0xFFFFFFFF : 0xFF000000, 0.06f));
         bg.setStroke(dp(1), p.outline);
         bg.setCornerRadius(dp(22));
         b.setBackground(bg);
@@ -127,14 +148,14 @@ final class Cover {
         return b;
     }
 
-    /** Returns true when what the cover says changed. group: the work group "I've seen it" marks, or -1. */
-    boolean show(String message, int group, String text) {
+    /** Returns true when what the cover says changed. marks: the name groups "I've seen it" marks. */
+    boolean show(String message, int[] marks, String text) {
         this.text = text;
-        if (message.equals(this.message) && group == this.group) return false;
+        if (message.equals(this.message) && java.util.Arrays.equals(marks, this.marks)) return false;
         this.message = message;
-        this.group = group;
+        this.marks = marks;
         msg.setText(message);
-        seen.setVisibility(group >= 0 ? View.VISIBLE : View.GONE);
+        seen.setVisibility(marks.length > 0 ? View.VISIBLE : View.GONE);
         layout(true);
         return true;
     }

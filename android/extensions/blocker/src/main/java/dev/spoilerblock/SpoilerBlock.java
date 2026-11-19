@@ -129,14 +129,16 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         invalidateAll();
     }
 
-    /** "I've seen it": every work carrying the name, in one write. */
-    void markSeen(int group) {
+    /** "I've seen it": the works (matcher indices) the user says they have seen, in one write. */
+    void markWorks(Iterable<Integer> works) {
         Matcher m = matcher;
         Config c = store.get();
         JSONObject w = new JSONObject();
         long now = System.currentTimeMillis();
+        StringBuilder names = new StringBuilder();
         try {
-            for (int i : m.groupWorks(group)) {
+            for (int i : works) {
+                names.append(names.length() > 0 ? ", " : "").append(m.titles[i]);
                 JSONObject old = c.work(m.ids[i]);
                 w.put(m.ids[i], Config.entry(Config.SEEN, old == null || old.isNull("style") ? null : old.optString("style"),
                     m.titles[i], m.types[i], m.years[i], now));
@@ -145,7 +147,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         } catch (org.json.JSONException e) {
             throw new IllegalStateException(e);
         }
-        Log.i(TAG, "marked seen: " + m.labels[group]);
+        Log.i(TAG, "marked seen: " + names);
     }
 
     /** Fills the titles of entries that have none (migrated from 0.1, which stored only ids), once the index is known. */
@@ -688,7 +690,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
             List<View> roots = android.view.inspector.WindowInspector.getGlobalWindowViews();
             for (View r : roots) {
                 // activity windows get their scanner in onActivityResumed; our own screen is never covered (nor its dialogs)
-                if (scanners.containsKey(r) || activityDecors.containsKey(r) || activityOf(r.getContext()) instanceof SettingsActivity) continue;
+                if (scanners.containsKey(r) || activityDecors.containsKey(r) || ownWindows.containsKey(r) || activityOf(r.getContext()) instanceof SettingsActivity) continue;
                 // not attached yet is fine: a new window's tree listeners are merged in at its first traversal
                 scanners.put(r, new Scanner(this, r, false));
                 Log.i(TAG, "scanning window " + r.getClass().getName());
@@ -699,6 +701,9 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
             }
         } catch (Throwable t) { fail("window watch", t); }
     }
+
+    // Our own dialogs (the seen picker lists titles): never scanned.
+    static final Map<View, Boolean> ownWindows = new WeakHashMap<>();
 
     // An activity's decor view has a DecorContext, not the activity, as its context: activity windows are known by their decor.
     private final Map<View, Boolean> activityDecors = new WeakHashMap<>();
