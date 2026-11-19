@@ -31,19 +31,12 @@ final class SeenPicker {
             : "Posts that only say \"" + label + "\" stay covered until every one is marked.";
     }
 
-    /** For a cover's name groups, the other works of the same series (matcher indices), from the catalog's series field. */
-    interface Series { List<Integer> more(Matcher m, int[] groups); }
-
-    // shortcut: no series data in the index yet, so the second section stays empty; set by the index loader once it has it
-    static volatile Series series = (m, groups) -> java.util.Collections.emptyList();
-
     static final int SERIES_SHOWN = 6; // more than this: the rest behind "Show N more"
 
-    /** The second section's works: the series' others, minus the first section's and the seen ones, oldest first. */
+    /** The second section's works: the rest of the series (the catalog's series field, oldest first), minus the seen ones. */
     static List<Integer> moreFromSeries(Matcher m, int[] groups, java.util.Collection<Integer> listed, boolean[] seen) {
         List<Integer> out = new ArrayList<>();
-        for (int w : series.more(m, groups)) if (!listed.contains(w) && !seen[w] && !out.contains(w)) out.add(w);
-        out.sort((x, y) -> Integer.compare(m.years[x] > 0 ? m.years[x] : Integer.MAX_VALUE, m.years[y] > 0 ? m.years[y] : Integer.MAX_VALUE));
+        for (int w : m.moreFromSeries(groups)) if (!listed.contains(w) && !seen[w]) out.add(w);
         return out;
     }
 
