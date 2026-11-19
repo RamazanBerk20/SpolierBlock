@@ -116,12 +116,13 @@
       t += '\n' + (e.getAttribute('alt') || '') + '\n' + (e.getAttribute('aria-label') || '') + '\n' + (e.getAttribute('title') || '');
     }
     for (const h of hostsIn(node)) { const sr = shadowOf(h); if (sr) t += domText(sr); }
-    return t;
+    return t.replaceAll(OCR_MARK, ' '); // page text cannot pose as OCR text
   }
 
   // ---------- state ----------
   // Matches are name groups (index.json `groups`: [label, workIdx...]).
   const UNKNOWN = -1;
+  const OCR_MARK = '\u0001'; // own text + OCR_MARK + text read from the post's pictures (contract, rule 8)
   // CLIP verdicts name groups of the bundled index; an updated index (opt-in catalog update) maps them via fromBundled.
   // shortcut: works added by a catalog update have no CLIP title rows (the text tower is not shipped), so their images
   // only get the generic verdict; ship rows for them if visual titles matter.
@@ -159,8 +160,13 @@
 
   // The decision rule of docs/agents/contract.md. Returns null or { label, marks } (marks: groups "I've seen it" marks).
   function decide(st, onVerdict) {
-    const tg = st.groups.filter(covers);
-    const img = st.hits.map(fromClip).filter((g) => g !== UNKNOWN && covers(g));
+    const tg = st.groups.filter(covers); // in the matcher's order, own-text groups first (rule 7)
+    // rule 7: the image model's title only speaks for a picture no text identifies: dropped when the post's own text names
+    // any work (and, per picture, when its OCR text does: mediaInfo). A post whose own text names a seen work and no
+    // covered one is not covered by its pictures (names found only in OCR text: matcher.evaluate, after the marker).
+    const own = st.own ?? [];
+    const ownSeenOnly = () => own.some(isSeenGroup) && !own.some(covers);
+    const img = own.length ? [] : st.hits.map(fromClip).filter((g) => g !== UNKNOWN && covers(g));
     const marks = [...new Set([...tg, ...img])];
     const all = tg.filter((g) => groupStyle(g) === 'all');
     if (all.length) return { label: `Mentions ${names(all)}`, marks };
@@ -170,7 +176,7 @@
     if (img.length) return { label: `Image from ${names(img)}`, marks };
     if (tg.length && v === undefined) return { label: `Checking ${names(tg)} for spoilers…`, marks };
     if (settings.unknownImages && st.hits.some((h) => fromClip(h) === UNKNOWN) &&
-        (tg.length || !matcher.evaluate(st.text).some(isSeenGroup))) return { label: 'Possible film, show or game image', marks: [] };
+        (tg.length || !ownSeenOnly())) return { label: 'Possible film, show or game image', marks: [] };
     return null;
   }
 
@@ -181,7 +187,11 @@
     const visit = (n) => {
       for (const m of n.querySelectorAll('img, video, [data-sb-bg]')) {
         const v = verdict.get(m);
-        if (v && v.src === mediaSrc(m) && findMediaBlock(m) === block) { ocr += v.ocr; v.hits.forEach((g) => hits.add(g)); }
+        if (!v || v.src !== mediaSrc(m) || findMediaBlock(m) !== block) continue;
+        ocr += v.ocr;
+        // rule 7: the model's title is dropped when the picture's own text names a work (read as OCR text: after the marker)
+        const named = v.ocr && matcher.evaluate(OCR_MARK + v.ocr.trim()).length > 0;
+        v.hits.forEach((g) => { if (g === UNKNOWN || !named) hits.add(g); });
       }
     };
     visit(block);
@@ -192,10 +202,16 @@
   function scanBlock(block, force) {
     if (!block || !active || !block.isConnected) return;
     const dom = domText(block), mi = mediaInfo(block);
-    const text = mi.ocr ? dom + '\n' + mi.ocr : dom;
+    const text = mi.ocr ? dom + OCR_MARK + mi.ocr.trim() : dom; // rule 8: the matcher reads OCR text more strictly
     const key = text + '\0' + mi.hits.join();
     if (!force && scanned.get(block)?.key === key) return;
-    scanned.set(block, { dom, text, key, hits: mi.hits, groups: matcher.evaluate(text, isSeenGroup) });
+    let groups = matcher.evaluate(text, isSeenGroup), own = null;
+    if (mi.ocr || mi.hits.length) {
+      own = matcher.evaluate(dom); // every work the post's own text names, seen or not (rule 7)
+      // own-text groups before OCR-only ones, keeping the matcher's order (a no-op once the matcher orders them so)
+      groups = [...groups.filter((g) => own.includes(g)), ...groups.filter((g) => !own.includes(g))];
+    }
+    scanned.set(block, { dom, text, key, hits: mi.hits, groups, own });
     apply(block);
   }
 
@@ -210,7 +226,7 @@
     if (waiting.has(text)) return void waiting.get(text).add(cb);
     waiting.set(text, new Set([cb]));
     setBusy(1);
-    ask({ type: 'text.classify', text: text.slice(0, 4000) })
+    ask({ type: 'text.classify', text: text.replace(OCR_MARK, '\n').slice(0, 4000) })
       // fail closed: an engine error keeps the cover
       .then((r) => verdicts.set(text, !r || r.error ? true : !!r.spoiler), () => verdicts.set(text, true))
       .finally(() => {
@@ -238,14 +254,31 @@
     [data-a=menu]{border-color:transparent;min-width:28px;padding:0 6px;font-size:16px;line-height:1}
     @container (max-height:76px){.b{flex-wrap:nowrap;justify-content:flex-start;padding:2px 8px}
       p{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:start}}
-    @container (max-height:34px){button{min-height:22px;padding:0 8px}.b{gap:4px}}`;
+    @container (max-height:34px){button{min-height:22px;padding:0 8px}.b{gap:4px}}
+    .pk{box-sizing:border-box;width:min(360px,calc(100vw - 32px));max-height:min(70vh,520px);padding:16px;border:1px solid var(--line);
+      border-radius:12px;background:var(--bg);color:var(--fg);font:inherit;text-align:start;box-shadow:0 8px 32px rgba(0,0,0,.35)}
+    .pk[open]{display:flex;flex-direction:column;gap:10px}
+    .pk::backdrop{background:rgba(0,0,0,.35)}
+    .pk .h{margin:0;font-weight:600;font-size:15px}
+    .pk ul{list-style:none;margin:0;padding:0;overflow:auto;min-height:0}
+    .pk label{display:flex;gap:10px;align-items:flex-start;padding:6px 2px;cursor:pointer}
+    .pk input{margin:2px 0 0;width:18px;height:18px;flex:none}
+    .pk small{display:block;opacity:.75;font-size:12px}
+    .pk .note{font-size:12px;opacity:.8}
+    .pk .row{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+    .pk .pri{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+    .pk input:focus-visible{outline:2px solid var(--ring);outline-offset:2px}`;
 
   function isDark(el) {
     for (let e = el; e; e = up(e)) {
       const m = getComputedStyle(e).backgroundColor.match(/[\d.]+/g);
       if (m && (m[3] === undefined || +m[3] > 0.5)) return 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2] < 128;
     }
-    return getComputedStyle(root).colorScheme.includes('dark') && matchMedia('(prefers-color-scheme: dark)').matches;
+    // no opaque background anywhere: the canvas colour, which follows the page's color-scheme (the system setting only
+    // when the page allows both)
+    const prop = getComputedStyle(root).colorScheme; // a <meta name="color-scheme"> leaves the property at "normal"
+    const cs = prop !== 'normal' ? prop : document.querySelector('meta[name="color-scheme" i]')?.content ?? '';
+    return cs.includes('dark') && (!cs.includes('light') || matchMedia('(prefers-color-scheme: dark)').matches);
   }
 
   function showOverlay(block, d) {
@@ -256,14 +289,25 @@
       const sr = ov.attachShadow({ mode: 'open' });
       sr.innerHTML = `<style>${OVERLAY_CSS}</style><div class="b" role="group" aria-labelledby="l"><p id="l"></p>` +
         `<button type="button" data-a="once">Show once</button><button type="button" data-a="seen">I've seen it</button>` +
-        `<button type="button" data-a="menu" aria-label="SpolierBlock settings" title="SpolierBlock settings">⋮</button></div>`;
+        `<button type="button" data-a="menu" aria-label="SpolierBlock settings" title="SpolierBlock settings">⋮</button></div>` +
+        `<dialog class="pk" aria-labelledby="pt"><p id="pt" class="h">Which have you seen?</p><ul></ul><p class="note"></p>` +
+        `<div class="row"><button type="button" data-a="pk-all">All</button><button type="button" data-a="pk-cancel">Cancel</button>` +
+        `<button type="button" data-a="pk-ok" class="pri">Mark seen</button></div></dialog>`;
+      sr.querySelector('dialog').addEventListener('close', () => sr.querySelector('[data-a="seen"]')?.focus()); // Escape too
       for (const t of ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'keydown']) {
-        ov.addEventListener(t, (e) => { e.stopPropagation(); if (t === 'click') e.preventDefault(); });
+        ov.addEventListener(t, (e) => {
+          e.stopPropagation();
+          // no link navigation from the cover; a picker checkbox keeps its toggle (it, not the link, gets the click)
+          if (t === 'click' && !e.composedPath().some((n) => n.localName === 'input' || n.localName === 'label')) e.preventDefault();
+        });
       }
       sr.addEventListener('click', (e) => {
         const a = e.target.closest?.('button')?.dataset.a;
         if (a === 'once') { const st = scanned.get(block); if (st) shown.set(block, st.dom); unblock(block); }
-        if (a === 'seen') markSeen(ov.marks);
+        if (a === 'seen') seenClicked(ov);
+        if (a === 'pk-all') sr.querySelectorAll('.pk input').forEach((c) => { c.checked = true; });
+        if (a === 'pk-ok') markWorks([...sr.querySelectorAll('.pk input:checked')].map((c) => +c.value));
+        if (a === 'pk-cancel' || a === 'pk-ok') { sr.querySelector('dialog').close(); sr.querySelector('[data-a="seen"]').focus(); }
         if (a === 'menu') send({ type: 'ui.openSettings' }).catch(() => {});
       });
       block.toggleAttribute('data-sb-pos', getComputedStyle(block).position === 'static');
@@ -347,17 +391,32 @@
   }
 
   const migrateSeen = (seen) => Object.fromEntries(Object.entries(seen ?? {}).map(([id, e]) => [id, { ...e, state: 'seen', style: null }]));
-  async function markSeen(groups) { // every work of the groups, in one storage write
+  async function markWorks(xs) { // the works, in one storage write
+    if (!xs.length) return;
     const st = await api.storage.local.get(['works', 'seen']);
     const w = st.works ?? migrateSeen(st.seen);
     const ts = Date.now();
-    for (const g of groups) {
-      for (const x of meta.groups[g].slice(1)) {
-        const id = meta.ids[x];
-        w[id] = { ...w[id], state: 'seen', style: w[id]?.style ?? null, title: meta.titles[x], type: meta.types[x], year: meta.years[x] || null, ts };
-      }
+    for (const x of xs) {
+      const id = meta.ids[x];
+      w[id] = { ...w[id], state: 'seen', style: w[id]?.style ?? null, title: meta.titles[x], type: meta.types[x], year: meta.years[x] || null, ts };
     }
     await api.storage.local.set({ works: w }); // storage.onChanged re-evaluates every tab, including this one
+  }
+
+  // "I've seen it": one work is marked at once; several (a franchise name, an original and its remake) open the picker,
+  // a modal dialog in the cover's shadow root (top layer: it may be larger than the post and changes no layout).
+  const TYPE_NAMES = { movie: 'Film', tv: 'Series', game: 'Game', book: 'Book', anime: 'Anime', manga: 'Manga', comic: 'Comic' };
+  function seenClicked(ov) {
+    const all = [...new Set(ov.marks.flatMap((g) => meta.groups[g].slice(1)))];
+    const xs = all.filter((x) => workState.get(x)?.state !== 'seen');
+    if (all.length <= 1) return markWorks(all);
+    const dlg = ov.shadowRoot.querySelector('dialog');
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+    dlg.querySelector('ul').innerHTML = xs.map((x) => `<li><label><input type="checkbox" value="${x}"><span>${esc(meta.titles[x])}` +
+      `<small>${esc([TYPE_NAMES[meta.types[x]] ?? meta.types[x], meta.years[x]].filter(Boolean).join(' · '))}</small></span></label></li>`).join('');
+    dlg.querySelector('.note').textContent = `Posts that only say "${names(ov.marks)}" stay covered until every one is marked.`;
+    dlg.showModal();
+    dlg.querySelector('input')?.focus();
   }
 
   // ---------- document.title ----------
@@ -369,7 +428,7 @@
     if (!force && (cur === titleSet || (titleSet === null && cur === titleOrig))) return; // our own write, or unchanged
     if (cur !== titleSet) titleOrig = cur;
     const groups = active && titleOrig ? matcher.evaluate(titleOrig, isSeenGroup) : [];
-    const d = groups.length ? decide({ text: titleOrig, hits: [], groups }, () => scanTitle(true)) : null;
+    const d = groups.length ? decide({ text: titleOrig, dom: titleOrig, hits: [], groups }, () => scanTitle(true)) : null;
     const want = d?.label ?? titleOrig;
     titleSet = d ? want : null;
     if (cur !== want) document.title = want;
@@ -603,9 +662,10 @@
   }
 
   function rescanAll() {
-    for (const b of [...blocked.keys()]) unblock(b);
     scanTitle(true);
-    if (!active) return;
+    if (!active) { for (const b of [...blocked.keys()]) unblock(b); return; }
+    // covered blocks first, in place: a cover that stays keeps its element (and the keyboard focus in it)
+    for (const b of [...blocked.keys()]) if (b.isConnected) scanBlock(b, true); else unblock(b);
     collect(document.body ?? root);
     flush(true);
     // blocks that only a picture names (no text to queue them)
