@@ -211,6 +211,10 @@ for (const [text, want, seen] of PHONE) {
 }
 // rows the Android Scanner passed on YouTube search results (test/fixtures/yt-rows.jsonl)
 for (const l of fs.readFileSync(path.join(repo, 'test/fixtures/yt-rows.jsonl'), 'utf8').split('\n').filter(Boolean)) D.run(JSON.parse(l).text);
+// plain sentences naming the best-known works (test/fixtures/top-names.json, see test/catalog.test.js)
+for (const n of JSON.parse(fs.readFileSync(path.join(repo, 'test/fixtures/top-names.json'), 'utf8'))) {
+  for (const t of ['{X} is great', 'I finally finished {X}', 'the ending of {X} surprised me', 'honestly {X} is great']) D.run(t.replace('{X}', n));
+}
 // "<name> is a ... game", "beat <name>" (test/catalog.test.js)
 for (const [t, l] of [['Portal is a perfect game', 'Portal'], ['Us is such a creepy movie', 'Us'], ['Heat is the best heist movie ever made', 'Heat'],
   ['just beat Portal, GLaDOS is terrifying', 'Portal'], ['Dune is one of the best films ever', 'Dune'], ['Portal harika bir oyun', 'Portal'],
