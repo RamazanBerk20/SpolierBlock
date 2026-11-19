@@ -107,6 +107,17 @@ note `Posts that only say "{t}" stay covered until every one is marked.` When th
 lists the unseen works of all of them and the note is `This post names several works. It stays covered until each one is
 marked.` Only the ticked works are written.
 
+Below those rows the picker offers the rest of the franchise, so the user can mark everything they have seen in one
+place: a second section titled `More from this series`, listing the other works of the same series that are not yet seen
+(same row format, oldest first, nothing ticked), collapsed behind a `Show N more` row when there are more than six.
+Ticking them is optional: only the first section decides whether the post stays covered. `All` ticks the first section
+only; the second section has its own `All N`. Series membership comes from the catalog's `series` field, not from the
+matched name.
+
+`Show once` is remembered for the post, not for the view that happens to draw it: it is keyed by the post's own text, it
+survives the host recycling or rebinding the view and late picture verdicts, and it lasts until the page or app process
+ends.
+
 The cover and the pending-picture shade take their colours from the surface they sit on (the page or the host app's
 actual background), not from the system setting: dark on a dark surface, light on a light one, never a white flash on a
 dark app.
