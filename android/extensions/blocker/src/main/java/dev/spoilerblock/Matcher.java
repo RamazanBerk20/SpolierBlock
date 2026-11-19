@@ -223,7 +223,7 @@ public final class Matcher {
     // ---------- evaluate ----------
 
     private static final class Cand {
-        int g, i, n, s, e; boolean common, other, rare, caseOnly, weak, part, hashed, ocr; String key;
+        int g, i, n, s, e; boolean common, other, rare, caseOnly, weak, part, hashed, ocr, plain, wordy, bare; String key, typed;
     }
 
     /**
@@ -248,14 +248,18 @@ public final class Matcher {
                 A = mixA(A, ha[i + n - 1]); B = mixB(B, hb[i + n - 1]);
                 int v = lookup(A, B);
                 if (v < 0) continue;
-                int g = v >>> shift, kind = v & (fmt >= 1 ? 7 : 15);
+                int kind = v & (fmt >= 1 ? 7 : 15);
                 boolean ocrOk = fmt >= 2 && ((v >>> 8) & 1) != 0, rare = fmt >= 1 && ((v >>> 7) & 1) != 0, cap = ((v >>> 6) & 1) != 0;
                 boolean common = ((v >>> 5) & 1) != 0, amb = ((v >>> 4) & 1) != 0, other = fmt >= 1 && ((v >>> 3) & 1) != 0;
                 int s = tk.starts.get(i), e = tk.ends.get(i + n - 1);
+                boolean titleLike = kind == TITLE || kind == ALIAS || kind == SERIES;
+                String typed = typeNear(tk, text, i, n);
+                Integer narrowed = narrow(tk, i, n, titleLike, typed);
+                int g = narrowed != null ? narrowed : v >>> shift;
                 if (i >= ocrFrom) { // text read from pictures: only names strong without help count
                     if (ocrOk) {
                         Cand c = new Cand();
-                        c.g = g; c.i = i; c.n = n; c.s = s; c.e = e; c.ocr = true; c.key = String.join(" ", tk.toks.subList(i, i + n));
+                        c.g = g; c.i = i; c.n = n; c.s = s; c.e = e; c.ocr = true; c.typed = typed; c.key = String.join(" ", tk.toks.subList(i, i + n));
                         cands.add(c);
                     }
                     continue;
@@ -276,11 +280,14 @@ public final class Matcher {
                 if (loud == null) loud = caseless(text, tk, ocrFrom);
                 boolean caseOnly = false; // a capital proves nothing in an ALL-CAPS run or a Headline Case line
                 if (cap && (common || amb || rare || other) && (n == 1 || common && n == 2)) for (int j = i; j < i + n && !caseOnly; j++) caseOnly = loud[j];
-                boolean titleLike = kind == TITLE || kind == ALIAS || kind == SERIES;
                 Cand c = new Cand();
                 c.g = g; c.i = i; c.n = n; c.s = s; c.e = e; c.common = common; c.other = other; c.rare = rare; c.hashed = hashed;
-                c.caseOnly = caseOnly;
-                c.weak = caseOnly || common || other || rare || kind == CHAR1 || kind == PART || (titleLike && ((amb && n <= 2) || (n == 1 && firstTok.length() <= 3)));
+                c.caseOnly = caseOnly; c.typed = typed;
+                // a single word that is everyday, ambiguous or obscure; a bare number (".45" in "45 minutes")
+                c.plain = titleLike && n == 1 && (common || amb || rare);
+                c.wordy = c.plain && !rare;
+                c.bare = titleLike && n == 1 && DIGITS.matcher(tk.toks.get(i)).matches();
+                c.weak = caseOnly || common || other || rare || kind == CHAR1 || kind == PART || (titleLike && ((amb && n <= 2) || (n == 1 && firstTok.length() <= 3))) || c.bare;
                 c.part = kind == PART;
                 c.key = String.join(" ", tk.toks.subList(i, i + n));
                 cands.add(c);
@@ -298,22 +305,36 @@ public final class Matcher {
 
         LinkedHashSet<Integer> own = new LinkedHashSet<>(), pics = new LinkedHashSet<>();
         Map<Integer, Integer> longest = new HashMap<>();
-        int[] sent = null;
-        for (Cand c : kept) {
+        java.util.Set<Integer> named = new java.util.HashSet<>();
+        int[] line = lines(text, tk, ocrFrom), sent = null;
+        // a music title names a song: a single word there is no work
+        boolean music = MUSIC.matcher(mark >= 0 ? text.substring(0, mark) : text).find();
+        // everyday single words come last: a line that already names a work keeps its media words (see the JS)
+        List<Cand> queue = new ArrayList<>();
+        for (Cand c : kept) if (c.ocr || !c.wordy) queue.add(c);
+        for (Cand c : kept) if (!c.ocr && c.wordy) queue.add(c);
+        for (Cand c : queue) {
             boolean ok;
             if (c.ocr) ok = true;
             else {
-                ok = !c.weak || (!c.other && (c.hashed || isQuoted(text, c.s, c.e))); // #Palestine is no evidence
-                for (int k = 0; k < kept.size() && !ok; k++) {
+                // a hashtag or quotes are no evidence for a name that mostly means something else (#Palestine), and a
+                // hashtag alone does not make a plain single word a title (#verity)
+                boolean firm = !c.other && ((c.hashed && !c.plain) || isQuoted(text, c.s, c.e));
+                for (int k = 0; k < kept.size() && !firm; k++) {
                     Cand o = kept.get(k);
-                    ok = !o.ocr && !o.key.equals(c.key) && shares(o.g, c.g);
+                    firm = !o.ocr && !o.key.equals(c.key) && (shares(o.g, c.g) || apart(o.key, c.key) && (within(o.key, c.g) || within(c.key, o.g)));
                 }
-                if (!ok) ok = corroborated(c, text, tk, sent == null ? (sent = sentences(text, tk)) : sent, len);
+                if (music && c.n == 1) ok = firm;
+                else if (!c.weak || firm) ok = true;
+                else if (c.bare) ok = false; // a bare number is a title only in quotes or beside another name of its work
+                else ok = corroborated(c, text, tk, sent == null ? (sent = sentences(text, tk)) : sent, len,
+                    c.wordy && named.contains(line[c.i]) && c.typed == null);
             }
             if (ok) {
                 (c.ocr ? pics : own).add(c.g);
                 Integer l = longest.get(c.g);
                 longest.put(c.g, l == null ? c.n : Math.max(l, c.n));
+                if (!c.ocr && !c.wordy) named.add(line[c.i]);
             }
         }
         // The post's own text outranks its pictures: when it names a seen work and no other, OCR names do not count.
@@ -338,6 +359,79 @@ public final class Matcher {
         return r;
     }
 
+    // a song's title: "ft.", "feat.", "prod.", "official (music) video/audio", "music/lyric video", "(lyrics)", "klip"
+    private static final Pattern MUSIC = Pattern.compile(
+        "(?:^|[^\\p{L}])(?:ft|feat|prod)\\.|official (?:music )?(?:video|audio)|(?:music|lyric) video|\\(lyrics?\\)|(?:^|[^\\p{L}])klip(?:$|[^\\p{L}])",
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    // line number of each token before `end`
+    private static int[] lines(String text, Tokens tk, int end) {
+        int[] out = new int[end];
+        int n = 0;
+        for (int i = 0; i < end; i++) { if (i > 0 && lineBreak(text, tk.ends.get(i - 1), tk.starts.get(i))) n++; out[i] = n; }
+        return out;
+    }
+
+    // "Castle" and "Castle Rock" share a word: one name inside the other's title is no evidence then
+    private static boolean apart(String a, String b) {
+        java.util.Set<String> x = new java.util.HashSet<>(Arrays.asList(a.split(" ")));
+        for (String t : b.split(" ")) if (x.contains(t)) return false;
+        return true;
+    }
+
+    // the name (tokens joined by spaces) appears in the title of one of the group's works ("Fallout" and "New Vegas")
+    private boolean within(String key, int g) {
+        for (int w : groups[g]) if ((" " + titleKey(w) + " ").contains(" " + key + " ")) return true;
+        return false;
+    }
+
+    private final Map<Integer, String> tkeys = new HashMap<>();
+    private String titleKey(int w) {
+        String k = tkeys.get(w);
+        if (k == null) tkeys.put(w, k = String.join(" ", tokenize(titles[w]).toks));
+        return k;
+    }
+
+    // type words for narrowing (normalised tokens; Turkish suffixed forms by stem)
+    private static final Map<String, String> TYPE_WORDS = new HashMap<>();
+    static {
+        String[][] tw = {{"movie", "movie movies film films pelicula peliculas filme filmes"}, {"tv", "show tv dizi"},
+            {"game", "game games juego videojuego jogo spiel jeu gioco oyun"}, {"book", "book books novel novels kitap libro livro novela livre"},
+            {"anime", "anime"}, {"manga", "manga"}, {"comic", "comic comics"}};
+        for (String[] x : tw) for (String w : x[1].split(" ")) TYPE_WORDS.put(w, x[0]);
+    }
+    private static final String[][] TYPE_STEMS = {{"film", "movie"}, {"dizi", "tv"}, {"oyun", "game"}, {"kitap", "book"}, {"kitab", "book"}};
+    private static String typeWord(String t) {
+        String x = TYPE_WORDS.get(t);
+        if (x != null) return x;
+        for (String[] st : TYPE_STEMS) if (t.startsWith(st[0])) return st[1];
+        return null;
+    }
+
+    // the type word right after the name, else right before it, with no sentence break between
+    private static String typeNear(Tokens tk, String text, int i, int n) {
+        int j = i + n;
+        String type = j < tk.size() && !sentenceBreak(text, tk.ends.get(j - 1), tk.starts.get(j)) ? typeWord(tk.toks.get(j)) : null;
+        if (type == null && i > 0 && !sentenceBreak(text, tk.ends.get(i - 1), tk.starts.get(i))) type = typeWord(tk.toks.get(i - 1));
+        return type;
+    }
+
+    private static boolean sentenceBreak(String text, int from, int to) {
+        for (int k = from; k < to; k++) { char c = text.charAt(k); if (c == '.' || c == '!' || c == '?' || c == '\n' || c == '\u0001') return true; }
+        return false;
+    }
+
+    // a type word next to a work's name narrows its group: the index holds it under the name + "\u0002" + type
+    private Integer narrow(Tokens tk, int i, int n, boolean titleLike, String type) {
+        if (fmt < 3 || !titleLike || type == null) return null;
+        int A = SEED_A, B = SEED_B;
+        for (int k = i; k < i + n; k++) { int[] h = tokHash(tk.toks.get(k)); A = mixA(A, h[0]); B = mixB(B, h[1]); }
+        int[] h = tokHash("\u0002" + type);
+        A = mixA(A, h[0]); B = mixB(B, h[1]);
+        int v = lookup(A, B);
+        return v >= 0 ? v >>> 9 : null;
+    }
+
     // A group whose works are all inside another matched group adds nothing ("Potter" inside "Harry Potter").
     private boolean insideOther(int g, List<Integer> all) {
         for (int o : all) {
@@ -349,17 +443,22 @@ public final class Matcher {
         return false;
     }
 
-    /** The rules for a weak name of the post's own text: media words of its type in its sentence, a year... */
-    private boolean corroborated(Cand c, String text, Tokens tk, int[] sent, int len) {
+    /**
+     * The rules for a weak name of the post's own text: media words of its type in its sentence, a year...
+     * lined: an everyday single word in a line that already names a work (it takes only a media word joined to it by a
+     * space, see the JS).
+     */
+    private boolean corroborated(Cand c, String text, Tokens tk, int[] sent, int len, boolean lined) {
         if (c.part || !upperOrDigitAt(text, c.s)) return false; // the remaining rules need a capitalized form (or a number)
         int si = sent[c.i], mask = typeMask(c.g);
-        // the sentence says what it is ("Portal is a perfect game") or that someone consumed it ("just beat Portal")
         Integer verb = c.i > 0 && sent[c.i - 1] == si ? VERBS.get(tk.toks.get(c.i - 1)) : null;
         boolean said = (c.n > 1 || !SUBJECT.contains(c.key)) && described(tk, sent, c.i + c.n, si, mask, c.common) || verb != null && (verb & mask) != 0;
         boolean near = said;
         for (int j = Math.max(0, c.i - 3), hi = Math.min(len, c.i + c.n + 3); j < hi && !near; j++) near = fits(c, j, si, mask, sent, tk);
         int after = c.i + c.n + (c.i + c.n < len && DIGITS.matcher(tk.toks.get(c.i + c.n)).matches() ? 1 : 0); // "Lost 2. sezon"
         boolean adjacent = said || fits(c, c.i - 1, si, mask, sent, tk) || fits(c, after, si, mask, sent, tk);
+        if (lined && !(joined(text, tk, c.i - 1, c.i) && fits(c, c.i - 1, si, mask, sent, tk))
+            && !(joined(text, tk, c.i, c.i + 1) && fits(c, c.i + 1, si, mask, sent, tk))) return false;
         if (c.caseOnly) return adjacent;
         // a name that mostly means something else: a media word near it; as an everyday word at the start of a
         // sentence ("Go to channel TV"), right next to it
@@ -376,6 +475,13 @@ public final class Matcher {
         else if (!ok && c.common && c.n == 1) ok = near;
         else for (int j = 0; j < len && !ok; j++) ok = fits(c, j, si, mask, sent, tk);
         return ok;
+    }
+
+    // two tokens separated by spaces only
+    private static boolean joined(String text, Tokens tk, int a, int b) {
+        if (a < 0 || b >= tk.size()) return false;
+        String gap = text.substring(tk.ends.get(a), tk.starts.get(b));
+        return !gap.isEmpty() && gap.chars().allMatch(ch -> ch == ' ');
     }
 
     public boolean groupSeen(int g, boolean[] seenWork) {

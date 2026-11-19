@@ -84,6 +84,15 @@
     }
     return out;
   }
+  // line number of each token before `end` (a line break or the OCR marker starts a new one)
+  function lines(text, tk, end) {
+    const out = new Array(end);
+    let n = 0;
+    for (let i = 0; i < end; i++) { if (i > 0 && /[\n\u0001]/.test(text.slice(tk.ends[i - 1], tk.starts[i]))) n++; out[i] = n; }
+    return out;
+  }
+  // a song's title: "ft.", "feat.", "prod.", "official (music) video/audio", "music/lyric video", "(lyrics)", Turkish "klip"
+  const MUSIC = /(?:^|[^\p{L}])(?:ft|feat|prod)\.|official (?:music )?(?:video|audio)|(?:music|lyric) video|\(lyrics?\)|(?:^|[^\p{L}])klip(?:$|[^\p{L}])/iu;
   // Tokens [0, end) whose capital letters prove nothing: inside a run of ALL-CAPS words, or on a Headline Case line
   // (at least 4 words of 4+ letters, 70% of them capitalised: "Grace Ashcroft's Voice Actress Reacts to Thirst Comments").
   function caseless(text, tk, end) {
@@ -125,6 +134,7 @@
 
   // Binary index layout (Uint32Array): [magic, slotBits, format, ...table(slots*3: hashA, hashB, value+1)]
   // format 2: value = groupIdx << 9 | ocr << 8 | rare << 7 | cap << 6 | common << 5 | amb << 4 | other << 3 | kind (3 bits).
+  // format 3: as 2, and a name's group narrowed to one work type is stored under the name + "\u0002" + type.
   // format 1: no ocr bit, groupIdx << 8. format 0: groupIdx << 7 | cap << 6 | common << 5 | amb << 4 | kind.
   // Older formats read as ocr = other = rare = 0.
   // "ocr": the name is strong enough to count in text read from pictures (see build-index.js);
@@ -139,7 +149,7 @@
     let bits = 4; while ((1 << bits) < n * 1.6) bits++;
     const slots = 1 << bits, mask = slots - 1;
     const u = new Uint32Array(3 + slots * 3);
-    u[0] = MAGIC; u[1] = bits; u[2] = 2;
+    u[0] = MAGIC; u[1] = bits; u[2] = 3;
     for (const [key, v] of entries) {
       const [A, B] = keyHash(key.split(' '));
       let s = A & mask;
@@ -201,10 +211,11 @@
       const fmt = this.fmt, shift = fmt >= 2 ? 9 : fmt >= 1 ? 8 : 7;
       const cands = [];
       for (const h of hits) {
-        const v = h.v, g = v >>> shift, ocrOk = fmt >= 2 && (v >>> 8) & 1, rare = fmt >= 1 && (v >>> 7) & 1, cap = (v >>> 6) & 1;
+        const v = h.v, ocrOk = fmt >= 2 && (v >>> 8) & 1, rare = fmt >= 1 && (v >>> 7) & 1, cap = (v >>> 6) & 1;
         const amb = (v >>> 4) & 1, other = fmt >= 1 && (v >>> 3) & 1, kind = v & (fmt >= 1 ? 7 : 15);
         let common = (v >>> 5) & 1;
         const s = tk.starts[h.i], e = tk.ends[h.i + h.n - 1], ocr = h.i >= ocrFrom;
+        const typed = this.typeNear(tk, text, h), g = this.narrow(tk, h, kind, typed) ?? v >>> shift;
         // text read from pictures: only names strong without help count, whatever their case
         if (ocr) { if (ocrOk) cands.push({ g, ocr, h, s, e, key: tk.toks.slice(h.i, h.i + h.n).join(' ') }); continue; }
         if (h.i + h.n > ocrFrom) continue; // never across the marker
@@ -220,21 +231,35 @@
         loud ??= caseless(text, tk, ocrFrom);
         const caseOnly = cap && (common || amb || rare || other) && (h.n === 1 || (common && h.n === 2)) && loud.slice(h.i, h.i + h.n).some(Boolean);
         const weak = caseOnly || common || other || rare || kind === KIND.CHAR1 || kind === KIND.PART || (TITLE_LIKE(kind) && ((amb && h.n <= 2) || (h.n === 1 && firstTok.length <= 3)));
-        cands.push({ g, common, other, rare, caseOnly, weak, part: kind === KIND.PART, h, s, e, hashed, key: tk.toks.slice(h.i, h.i + h.n).join(' ') });
+        // a single word that is everyday, ambiguous or obscure ("Verity", "Bolt"); a bare number (".45" in "45 minutes")
+        const plain = TITLE_LIKE(kind) && h.n === 1 && (common || amb || rare), wordy = plain && !rare, bare = TITLE_LIKE(kind) && h.n === 1 && /^\d+$/.test(tk.toks[h.i]);
+        cands.push({ g, common, other, rare, caseOnly, weak: weak || bare, typed, plain, wordy, bare, part: kind === KIND.PART, h, s, e, hashed, key: tk.toks.slice(h.i, h.i + h.n).join(' ') });
       }
       // Longest match wins, seen or not: "Us" and "Last" inside "The Last of Us", "Assassin" inside "Assassin's Creed".
       const inside = (c, o) => o !== c && o.h.i <= c.h.i && o.h.i + o.h.n >= c.h.i + c.h.n && o.h.n > c.h.n;
       const drop = cands.map((c) => cands.some((o) => inside(c, o)));
       for (let k = cands.length - 1; k >= 0; k--) if (drop[k]) cands.splice(k, 1);
+      // two names of one work, or one name inside the title of the other's work ("Fallout" and "New Vegas")
       const shares = (a, b) => a === b || groups[a].some((w, i) => i > 0 && groups[b].includes(w, 1));
+      const apart = (a, b) => { const x = new Set(a.split(' ')); return !b.split(' ').some((t) => x.has(t)); }; // "Castle", "Castle Rock": no
+      const within = (key, g) => groups[g].some((w, i) => i > 0 && (' ' + this.titleKey(w) + ' ').includes(' ' + key + ' '));
       const longest = new Map(), own = new Set(), pics = new Set(); // group -> longest accepted name; tiers
-      const accept = (c) => { (c.ocr ? pics : own).add(c.g); longest.set(c.g, Math.max(longest.get(c.g) ?? 0, c.h.n)); };
+      const accept = (c) => { (c.ocr ? pics : own).add(c.g); longest.set(c.g, Math.max(longest.get(c.g) ?? 0, c.h.n)); if (!c.ocr && !everyday(c)) named.add(line[c.h.i]); };
       let sent = null;
-      for (const c of cands) {
+      // A music title ("Joker ft. Defkhan - Son Kale | official video") names a song: a single word there is no work.
+      const music = MUSIC.test(mark >= 0 ? text.slice(0, mark) : text);
+      // A line that already names a work gives its media words to that work: a single everyday word beside it
+      // ("DmC: Devil May Cry - All Boss Fights & Ending (No Damage") takes only a media word joined to it by a space
+      // ("Watching Cars For The First Time") or a type word. Such words come last.
+      const line = lines(text, tk, ocrFrom), named = new Set(), everyday = (c) => !c.ocr && c.wordy;
+      for (const c of [...cands.filter((x) => !everyday(x)), ...cands.filter(everyday)]) {
         if (c.ocr) { accept(c); continue; }
         // a hashtag or quotes are no evidence for a name that mostly means something else (#Palestine, a song title)
-        if (!c.weak || (!c.other && (c.hashed || isQuoted(text, c.s, c.e))) ||
-            cands.some((o) => !o.ocr && o.key !== c.key && shares(o.g, c.g))) { accept(c); continue; }
+        // a hashtag alone does not make a plain single word a title (#verity)
+        const firm = (!c.other && ((c.hashed && !c.plain) || isQuoted(text, c.s, c.e))) || cands.some((o) => !o.ocr && o.key !== c.key && (shares(o.g, c.g) || (apart(o.key, c.key) && (within(o.key, c.g) || within(c.key, o.g)))));
+        if (music && c.h.n === 1) { if (firm) accept(c); continue; }
+        if (!c.weak || firm) { accept(c); continue; }
+        if (c.bare) continue; // a bare number is a title only in quotes or beside another name of its work
         if (c.part || !/^[\p{Lu}\p{N}]/u.test(text.slice(c.s))) continue; // remaining rules need a capitalized form (or a number)
         // the rest only looks inside the name's own sentence, at words that fit the work's type
         sent ??= sentences(text, tk);
@@ -251,6 +276,9 @@
         // only a media word right next to it ("Lost season 6", "Lost 2. sezon")
         const after = c.h.i + c.h.n + (/^\d+$/.test(tk.toks[c.h.i + c.h.n] ?? '') ? 1 : 0);
         const adjacent = said || fits(c.h.i - 1) || fits(after);
+        const joined = (a, b) => a >= 0 && b < tk.toks.length && /^ +$/.test(text.slice(tk.ends[a], tk.starts[b]));
+        if (everyday(c) && named.has(line[c.h.i]) && !c.typed &&
+            !(joined(c.h.i - 1, c.h.i) && fits(c.h.i - 1)) && !(joined(c.h.i, c.h.i + 1) && fits(c.h.i + 1))) continue;
         if (c.caseOnly) { if (adjacent) accept(c); continue; }
         // a name that mostly means something else (Palestine, Napoleon) only takes a media word near it; as an everyday
         // word at the start of a sentence ("Go to channel TV") only one right next to it
@@ -277,6 +305,31 @@
         groups[g].every((w, i) => i === 0 || groups[o].includes(w, 1)));
       const order = (a, b) => longest.get(b) - longest.get(a) || a - b;
       return [...ownOpen.filter(keep).sort(order), ...picOnly.filter(keep).sort(order)];
+    }
+
+    // A type word right next to a work's name narrows its group to works of that type ("the Minecraft movie",
+    // "Assassin's Creed oyunu"): the index holds those groups under the name plus "\u0002" + type. -> group or undefined
+    narrow(tk, h, kind, type) {
+      if (this.fmt < 3 || !TITLE_LIKE(kind) || !type) return undefined;
+      const [A, B] = keyHash([...tk.toks.slice(h.i, h.i + h.n), '\u0002' + type]), v = this.lookup(A, B);
+      return v >= 0 ? v >>> 9 : undefined;
+    }
+
+    // the type word right after the name, else right before it, with no sentence break between -> type or undefined
+    typeNear(tk, text, h) {
+      const tight = (a, b) => !/[.!?\n\u0001]/.test(text.slice(tk.ends[a], tk.starts[b]));
+      const j = h.i + h.n;
+      let type = j < tk.toks.length && tight(j - 1, j) ? typeWord(tk.toks[j]) : undefined;
+      if (!type && h.i > 0 && tight(h.i - 1, h.i)) type = typeWord(tk.toks[h.i - 1]);
+      return type;
+    }
+
+    // a work's title as tokens joined by spaces (cached)
+    titleKey(w) {
+      this.tkeys ??= new Map();
+      let k = this.tkeys.get(w);
+      if (k === undefined) this.tkeys.set(w, k = tokenize(this.meta.titles[w]).toks.join(' '));
+      return k;
     }
 
     // bit set of the work types in a group (TYPE_BIT)
@@ -314,6 +367,20 @@
       if (STOP.has(t) && !(t === 'of' && tk.toks[k - 1] === 'one')) return false; // "one of the best films"
     }
     return false;
+  }
+  // type words for narrowing (normalised tokens; Turkish suffixed forms by stem)
+  const TYPE_WORDS = new Map();
+  for (const [type, words] of [['movie', 'movie movies film films pelicula peliculas filme filmes'],
+    ['tv', 'show tv dizi'], ['game', 'game games juego videojuego jogo spiel jeu gioco oyun'],
+    ['book', 'book books novel novels kitap libro livro novela livre'], ['anime', 'anime'], ['manga', 'manga'], ['comic', 'comic comics']]) {
+    for (const w of words.split(' ')) TYPE_WORDS.set(w, type);
+  }
+  const TYPE_STEMS = [['film', 'movie'], ['dizi', 'tv'], ['oyun', 'game'], ['kitap', 'book'], ['kitab', 'book']];
+  function typeWord(t) {
+    const x = TYPE_WORDS.get(t);
+    if (x) return x;
+    for (const [stem, type] of TYPE_STEMS) if (t.startsWith(stem)) return type;
+    return undefined;
   }
   function contextMask(t) {
     const m = CONTEXT.get(t);

@@ -122,9 +122,9 @@ const D = vectorsFor(dm, dmeta);
 const groups = []; // { text, label, members: [title], types: [type] }: group membership as the overlay sees it
 const series = {
   'Star Wars': ['Star Wars: Episode IV – A New Hope', 'Star Wars: Episode V – The Empire Strikes Back'],
-  'Harry Potter': ['Harry Potter', 'Harry Potter: Wizards Unite'],
-  'The Lord of the Rings': ['The Lord of the Rings', 'The Lord of the Rings: The Two Towers', 'The Lord of the Rings: The Rings of Power'],
-  'The Witcher': ['The Witcher', 'The Witcher: Blood Origin', 'The Witcher: Nightmare of the Wolf'],
+  'Harry Potter': ['Harry Potter'],
+  'The Lord of the Rings': ['The Lord of the Rings'],
+  'The Witcher': ['The Witcher'],
 };
 const groupOf = (text) => { const gs = dm.evaluate(text); assert.ok(gs.length, text); return dmeta.groups[gs[0]]; };
 for (const [name, members] of Object.entries(series)) {
@@ -192,6 +192,16 @@ const PHONE = [
   ['Telefon incelemesi: 6 ay sonra', []],
   ['x' + M + 'MINECRAFT', []],
   ['x' + M + 'OPPENHEIMER REVIEW', []],
+  // 0.2.3 phone cases: a bare name is the closest works; a type word narrows; a line's media word; music titles
+  ['Minecraft Easy Survival Base....🤔', [], '^Minecraft$'],
+  ['Minecraft Easy Survival Base....🤔', ['Minecraft']],
+  ['the Minecraft movie was fun', ['A Minecraft Movie']],
+  ['Is it Possible to Beat Half Life without Standing?' + M + 'HALF LIFE\nSTANDINGLESS%!!!!!', [], '^Half-Life$|^Half-Life 2'],
+  ['Is it Possible to Beat Half Life without Standing?' + M + 'HALF LIFE\nSTANDINGLESS%!!!!!', ['Half-Life']],
+  ["Assassin's Creed oyunu çok iyi", ["Assassin's Creed"]],
+  ['DmC: Devil May Cry - All Boss Fights & Ending (No Damage - Dante Must' + M + 'ALL BOSSES', ['DmC: Devil May Cry']],
+  ['Joker ft. Defkhan, Kurşun - Son Kale | official video\nJoker Resmi' + M + 'son kale (ft. Defkhan, Kurşun) official video', []],
+  ['Watching Cars For The First Time', ['The First Time', 'Cars']],
 ];
 for (const [text, want, seen] of PHONE) {
   const re = seen && new RegExp(seen), seenW = dmeta.titles.map((t, i) => (re && re.test(t) ? i : -1)).filter((i) => i >= 0);
@@ -199,6 +209,8 @@ for (const [text, want, seen] of PHONE) {
   if (want.length) assert.deepEqual(got.slice(0, want.length), want, text);
   else assert.deepEqual(got, [], text);
 }
+// rows the Android Scanner passed on YouTube search results (test/fixtures/yt-rows.jsonl)
+for (const l of fs.readFileSync(path.join(repo, 'test/fixtures/yt-rows.jsonl'), 'utf8').split('\n').filter(Boolean)) D.run(JSON.parse(l).text);
 // "<name> is a ... game", "beat <name>" (test/catalog.test.js)
 for (const [t, l] of [['Portal is a perfect game', 'Portal'], ['Us is such a creepy movie', 'Us'], ['Heat is the best heist movie ever made', 'Heat'],
   ['just beat Portal, GLaDOS is terrifying', 'Portal'], ['Dune is one of the best films ever', 'Dune'], ['Portal harika bir oyun', 'Portal'],

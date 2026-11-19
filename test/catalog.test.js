@@ -17,9 +17,9 @@ const seeAll = (g) => new Set(g.slice(1));
 test('derived series groups from the real catalog', { skip: !has && 'no data/catalog.json' }, () => {
   const cases = {
     'Star Wars': ['Star Wars: Episode IV – A New Hope', 'Star Wars: Episode V – The Empire Strikes Back'],
-    'Harry Potter': ['Harry Potter', 'Harry Potter: Wizards Unite'],
-    'The Lord of the Rings': ['The Lord of the Rings', 'The Lord of the Rings: The Two Towers', 'The Lord of the Rings: The Rings of Power'],
-    'The Witcher': ['The Witcher', 'The Witcher: Blood Origin', 'The Witcher: Nightmare of the Wolf'],
+    'Harry Potter': ['Harry Potter'],
+    'The Lord of the Rings': ['The Lord of the Rings'],
+    'The Witcher': ['The Witcher'],
   };
   for (const [name, members] of Object.entries(cases)) {
     const g = groupOf(`Talking about ${name} tonight`);
@@ -123,6 +123,16 @@ const PHONE = [
   ['Telefon incelemesi: 6 ay sonra', []],
   ['x' + M + 'MINECRAFT', []],
   ['x' + M + 'OPPENHEIMER REVIEW', []],
+  // 0.2.3 phone cases: a bare name is the closest works; a type word narrows; a line's media word; music titles
+  ['Minecraft Easy Survival Base....🤔', [], '^Minecraft$'],
+  ['Minecraft Easy Survival Base....🤔', ['Minecraft']],
+  ['the Minecraft movie was fun', ['A Minecraft Movie']],
+  ['Is it Possible to Beat Half Life without Standing?' + M + 'HALF LIFE\nSTANDINGLESS%!!!!!', [], '^Half-Life$|^Half-Life 2'],
+  ['Is it Possible to Beat Half Life without Standing?' + M + 'HALF LIFE\nSTANDINGLESS%!!!!!', ['Half-Life']],
+  ["Assassin's Creed oyunu çok iyi", ["Assassin's Creed"]],
+  ['DmC: Devil May Cry - All Boss Fights & Ending (No Damage - Dante Must' + M + 'ALL BOSSES', ['DmC: Devil May Cry']],
+  ['Joker ft. Defkhan, Kurşun - Son Kale | official video\nJoker Resmi' + M + 'son kale (ft. Defkhan, Kurşun) official video', []],
+  ['Watching Cars For The First Time', ['The First Time', 'Cars']],
 ];
 test('phone cases: text read from pictures, all caps, headline case, seen names, label order', { skip: !has && 'no data/catalog.json' }, () => {
   for (const [text, want, seen] of PHONE) {
@@ -131,4 +141,21 @@ test('phone cases: text read from pictures, all caps, headline case, seen names,
     if (want.length) assert.deepEqual(got.slice(0, want.length), want, text); // the label first
     else assert.deepEqual(got, [], text);
   }
+});
+
+test('a bare franchise name refers to its closest works; a type word narrows the group', { skip: !has && 'no data/catalog.json' }, () => {
+  // reviewed by hand: test/fixtures/franchises.json (title|type|year of each work the bare name refers to)
+  const want = JSON.parse(fs.readFileSync(new URL('./fixtures/franchises.json', import.meta.url), 'utf8'));
+  const members = (t) => { const g = m.evaluate(t)[0]; return g === undefined ? null : built.meta.groups[g].slice(1)
+    .map((w) => `${built.meta.titles[w]}|${built.meta.types[w]}|${built.meta.years[w]}`).sort(); };
+  for (const [name, works] of Object.entries(want)) assert.deepEqual(members(`${name} is great, the whole ${name} franchise`), works, name);
+  assert.deepEqual(members("Assassin's Creed game is great"), ["Assassin's Creed|game|2007"]);
+  assert.deepEqual(members("the Assassin's Creed film was bad"), ["Assassin's Creed|movie|2016"]);
+  assert.deepEqual(members('the Minecraft movie was fun'), ['A Minecraft Movie|movie|2025']);
+  assert.deepEqual(members('Dune book club tonight'), ['Dune|book|0', 'Dune|book|1965']);
+});
+
+test('rows the Android Scanner passed on YouTube search results (0.2.2 logs): labels as reviewed', { skip: !has && 'no data/catalog.json' }, () => {
+  const rows = fs.readFileSync(new URL('./fixtures/yt-rows.jsonl', import.meta.url), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  for (const r of rows) assert.deepEqual(m.evaluate(r.text).map((g) => built.meta.groups[g][0]), r.expect, r.text.slice(0, 80));
 });

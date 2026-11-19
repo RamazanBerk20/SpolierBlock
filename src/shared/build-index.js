@@ -75,6 +75,9 @@ export function numberedStem(title) {
 // function words that do not make a name strong in text read from pictures ("THE MASTER" has one real word)
 const LIGHT = new Set('the and for you are was his her its our not but all any who how why what with from this that new one two'.split(' '));
 
+const TIER = { [KIND.TITLE]: 0, [KIND.ALIAS]: 1, [KIND.SERIES]: 2, [KIND.CHAR]: 3, [KIND.CHAR1]: 4, [KIND.PART]: 4, [KIND.TAG]: 1 };
+const TYPES = ['movie', 'tv', 'game', 'book', 'anime', 'manga', 'comic'];
+
 // Kind precedence when one name plays several roles: the most title-like wins.
 const RANK = { [KIND.TITLE]: 0, [KIND.SERIES]: 1, [KIND.ALIAS]: 2, [KIND.CHAR]: 3, [KIND.CHAR1]: 4, [KIND.PART]: 5, [KIND.TAG]: 6 };
 
@@ -84,7 +87,9 @@ export function buildIndex(catalog) {
   // oth: this name of work w mostly means something else in the world (work.other, see tools/catalog/build.mjs). A key
   // is "other" only when that holds for every work carrying it: a more popular work of the same name outweighs it.
   // orig: the name as written (not a sequel-number swap or a joined form, which never count in OCR text)
-  const add = (str, w, kind, label, free = false, numbered = false, oth = false, orig = true) => {
+  // tier: how close the name is to work w: 0 its title, 1 an alternative name, 2 the series it was derived from,
+  // 3 a character, 4 a part of a character's name. A bare name refers to its closest works only (contract).
+  const add = (str, w, kind, label, free = false, numbered = false, oth = false, orig = true, tier = TIER[kind]) => {
     const t = tokenize(String(str)).toks;
     if (!t.length || t.length > MAX_N || (t.length === 1 && t[0].length < 2)) return;
     if ((kind === KIND.CHAR || kind === KIND.PART) && t.length === 1) {
@@ -94,8 +99,9 @@ export function buildIndex(catalog) {
     if (RULES && kind === KIND.ALIAS && t.length === 1 && isCommon(t[0])) return; // "Ultimate", "Family": never evidence
     const key = kind === KIND.TAG ? t.join('') : t.join(' ');
     let e = keys.get(key);
-    if (!e) keys.set(key, e = { works: new Set(), kind, amb: 0, label, labelRank: RANK[kind], oth: true });
+    if (!e) keys.set(key, e = { works: new Set(), tiers: [], kind, amb: 0, label, labelRank: RANK[kind], oth: true });
     e.works.add(w);
+    (e.tiers[tier] ??= new Set()).add(w);
     if (kind !== KIND.PART && kind !== KIND.CHAR1) e.oth &&= oth;
     if (free) e.free = true;
     if (numbered) e.numbered = true;
@@ -110,17 +116,25 @@ export function buildIndex(catalog) {
     const p = seriesPrefix(w.title) ?? numberedStem(w.title);
     if (p) { const k = tokenize(p).toks.join(' '); prefixCount.set(k, (prefixCount.get(k) ?? 0) + 1); }
   }
+  // the series names that qualify; a title whose part before the colon is one of them joins it even when that part is
+  // a single everyday word ("Halo: Reach" joins the series "Halo" of "Halo 2", "Halo 3"...)
+  const qualified = new Set();
+  for (const w of works) {
+    const sp = seriesPrefix(w.title), p = sp ?? numberedStem(w.title), k = p && tokenize(p).toks.join(' ');
+    if (p && prefixCount.get(k) >= (sp ? 2 : 3)) qualified.add(k);
+  }
   const seriesOf = new Map(); // workIdx -> series label
   works.forEach((w, i) => {
     const low = (w.pop ?? 0) < COMMON_POP, other = new Set(w.other ?? []);
     for (const v of possessive(w.title).flatMap((f) => nameVariants(f, low))) {
-      add(v.text, i, v.joined ? KIND.ALIAS : KIND.TITLE, w.title, v.free, v.numbered, other.has(w.title), !!v.orig);
-      if (!v.joined && v.text.includes(' ')) add(v.text, i, KIND.TAG, w.title, false, false, other.has(w.title)); // #GrandTheftAuto6
+      add(v.text, i, v.joined ? KIND.ALIAS : KIND.TITLE, w.title, v.free, v.numbered, other.has(w.title), !!v.orig, 0);
+      if (!v.joined && v.text.includes(' ')) add(v.text, i, KIND.TAG, w.title, false, false, other.has(w.title), true, 0); // #GrandTheftAuto6
     }
     // a series: the part before a colon shared by 2+ titles ("Star Wars"), or a name numbered in 3+ titles ("Battlefield")
-    const sp = seriesPrefix(w.title), p = sp ?? numberedStem(w.title);
-    if (p && prefixCount.get(tokenize(p).toks.join(' ')) >= (sp ? 2 : 3)) {
-      add(p, i, KIND.SERIES, p, false, false, other.has(p)); add(p, i, KIND.TAG, p, false, false, other.has(p)); seriesOf.set(i, p);
+    const sp = seriesPrefix(w.title), raw = w.title.split(SERIES_SPLIT)[0].trim();
+    const p = sp ?? numberedStem(w.title) ?? (raw !== w.title.trim() && qualified.has(tokenize(raw).toks.join(' ')) ? raw : null);
+    if (p && qualified.has(tokenize(p).toks.join(' '))) {
+      add(p, i, KIND.SERIES, p, false, false, other.has(p)); add(p, i, KIND.TAG, p, false, false, other.has(p), true, 2); seriesOf.set(i, p);
     }
     for (const a of w.aliases ?? []) for (const v of possessive(a).flatMap((f) => nameVariants(f, low))) add(v.text, i, KIND.ALIAS, w.title, v.free, v.numbered, other.has(a), !!v.orig);
     for (const c of w.characters ?? []) {
@@ -132,20 +146,45 @@ export function buildIndex(catalog) {
     }
   });
 
+  // The works a bare name refers to: its closest tier. The name of a franchise also takes its series when the closest
+  // works are entries of that series ("Star Wars" is an alternative name of Episode IV) or the series' best work is
+  // at least 1.5 times as popular ("Halo": a TV series titled "Halo", the games "Halo: Combat Evolved", "Halo 3"...).
+  const pop = (set) => Math.max(...[...set].map((w) => works[w].pop ?? 0));
+  const closest = (e) => {
+    const k = e.tiers.findIndex(Boolean), s = e.tiers[2];
+    if (k < 2 && s && ([...e.tiers[k]].every((w) => s.has(w)) || pop(s) >= 1.5 * pop(e.tiers[k]))) return new Set([...e.tiers[k], ...s]);
+    return e.tiers[k];
+  };
   // Groups: dedupe identical (label, works); order by most popular member, bigger group first on ties.
   const gmap = new Map(), groups = [];
-  for (const e of keys.values()) {
-    const ws = [...e.works].sort((a, b) => a - b);
+  const groupOf = (label, ws, titleLike) => {
+    const id = label + '\u0001' + ws.join(',');
+    if (!gmap.has(id)) { gmap.set(id, groups.length); groups.push({ label, ws, titleLike: false }); }
+    const g = gmap.get(id);
+    if (titleLike) groups[g].titleLike = true;
+    return g;
+  };
+  const typed = []; // [key, group]: a type word next to the name narrows its group ("the Minecraft movie")
+  for (const [key, e] of keys) {
+    const near = closest(e), ws = [...near].sort((a, b) => a - b);
     // a character/alias spanning several works mostly of one series is labelled with it ("Darth Vader" -> "Star Wars")
     if (e.labelRank > RANK[KIND.SERIES] && ws.length > 1 && seriesOf.has(ws[0])) {
       const sl = seriesOf.get(ws[0]);
       if (ws.filter((w) => seriesOf.get(w) === sl || works[w].title === sl).length * 2 >= ws.length) e.label = sl; // majority
     }
-    const id = e.label + '\u0001' + ws.join(',');
-    if (!gmap.has(id)) { gmap.set(id, groups.length); groups.push({ label: e.label, ws, titleLike: false }); }
-    e.g = gmap.get(id);
-    if (e.kind === KIND.TITLE || e.kind === KIND.SERIES) groups[e.g].titleLike = true;
+    if (e.kind !== KIND.TAG && e.tiers.slice(0, 3).some(Boolean)) {
+      const all = new Set(e.tiers.slice(0, 3).flatMap((x) => (x ? [...x] : [])));
+      for (const type of TYPES) {
+        // the closest works of that type, else any works of that type the name belongs to ("Minecraft movie")
+        let tw = ws.filter((w) => works[w].type === type);
+        if (!tw.length) tw = [...all].filter((w) => works[w].type === type).sort((a, b) => a - b);
+        if (!tw.length || (tw.length === ws.length && tw.every((w, i) => w === ws[i]))) continue;
+        typed.push([key + ' \u0002' + type, tw.length === 1 ? works[tw[0]].title : e.label, tw]);
+      }
+    }
+    e.g = groupOf(e.label, ws, e.kind === KIND.TITLE || e.kind === KIND.SERIES);
   }
+  for (const x of typed) x[1] = groupOf(x[1], x[2], false);
   const order = groups.map((_, i) => i).sort((a, b) => groups[a].ws[0] - groups[b].ws[0] || groups[b].ws.length - groups[a].ws.length);
   const newIdx = new Array(groups.length);
   order.forEach((old, i) => { newIdx[old] = i; });
@@ -157,7 +196,9 @@ export function buildIndex(catalog) {
   // a single everyday-word title of a less popular work.
   for (const [key, e] of keys) {
     const t = key.split(' ');
-    const low = (works[groups[e.g].ws[0]].pop ?? 0) < COMMON_POP, titleLike = e.kind === KIND.TITLE || e.kind === KIND.ALIAS || e.kind === KIND.SERIES;
+    // popularity of a name: its most popular work at any tier (a name's flags do not depend on which works it names)
+    const top = works[Math.min(...e.works)].pop ?? 0;
+    const low = top < COMMON_POP, titleLike = e.kind === KIND.TITLE || e.kind === KIND.ALIAS || e.kind === KIND.SERIES;
     const one = t.length === 1;
     // single-word titles are already flagged by the catalog's own ambiguity rule; aliases/series are not
     // a character name made of everyday words only ("The Sheep", "Thing One") is treated like such a title
@@ -166,7 +207,6 @@ export function buildIndex(catalog) {
     const common = plainChar || (RULES && titleLike && (numeric || (!e.free && !e.numbered && (one ? isCommon(t[0]) && (low || e.kind !== KIND.TITLE || isTop3k(t[0])) : low && t.every(isCommon))))) ? 1 : 0;
     // "rare": a single uncommon word naming a less popular work ("Bloodborne", "Telefon"). Not an everyday word, but
     // weak: it needs a media word in its sentence. When it mostly names something else the "other" flag says so.
-    const top = works[groups[e.g].ws[0]].pop ?? 0;
     // "rare" (weak): a single uncommon word of a work below DISTINCT_POP. From DISTINCT_POP up such a word ("Arcane",
     // "Minecraft") is a title however it is written, headline or all caps (chosen with tools/fp-posts.mjs on
     // test/fixtures/headlines.jsonl and fp-posts.jsonl, and tools/fp-text.mjs; 45 keeps Arcane)
@@ -186,6 +226,7 @@ export function buildIndex(catalog) {
        (num && real.some((x) => x.length >= 4 && !isTop3k(x)))) ? 1 : 0;
     entries.set(key, (newIdx[e.g] << 9) | (ocr << 8) | (rare << 7) | (cap << 6) | (common << 5) | (e.amb << 4) | (other << 3) | e.kind);
   }
+  for (const [key, g] of typed) entries.set(key, (newIdx[g] << 9) | KIND.TITLE); // looked up only next to a type word
   const sorted = order.map((i) => groups[i]);
   const meta = {
     ids: works.map((w) => w.id),
