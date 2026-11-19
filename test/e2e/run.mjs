@@ -29,14 +29,16 @@ fs.writeFileSync(path.join(EXT, 'data/update-config.json'), JSON.stringify({ end
 const mf = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
 Object.assign(mf.content_scripts[0], { all_frames: true, match_about_blank: true });
 fs.writeFileSync(path.join(EXT, 'manifest.json'), JSON.stringify(mf, null, 2));
-// Test-only `series` column in the index meta (per work: a series label or null), the shape the picker's "More from this
-// series" section reads until the catalog carries series data: Dune's two works plus eight other fixture works.
+// The fixture catalog has no series, so the picker's "More from this series" section gets a test-only series in the index
+// meta (`series`: one array of work indices per series, oldest first): Dune's two works plus eight other fixture works.
 const SERIES_EXTRA = ['Inception', 'Interstellar', 'Ratatouille', 'Cars', 'Rocky II', 'Chernobyl', 'Severance', 'Napoleon'];
 {
   const f = path.join(EXT, 'data/index.json'), m = JSON.parse(fs.readFileSync(f, 'utf8'));
-  const dune = m.groups.find((g) => g[0] === 'Dune').slice(1);
-  m.series = m.ids.map((_, w) => (dune.includes(w) || SERIES_EXTRA.includes(m.titles[w]) ? 'Dune saga' : null));
-  fs.writeFileSync(f, JSON.stringify(m));
+  if (!m.series?.length) {
+    const ws = [...m.groups.find((g) => g[0] === 'Dune').slice(1), ...SERIES_EXTRA.map((t) => m.titles.indexOf(t))];
+    m.series = [ws.sort((a, b) => (m.years[a] || 1e4) - (m.years[b] || 1e4) || a - b)];
+    fs.writeFileSync(f, JSON.stringify(m));
+  }
 }
 // SB_CONTENT=<dir with content.js/content.css>: run another content script (e.g. 0.1) against the same pages
 if (process.env.SB_CONTENT) for (const f of ['content.js', 'content.css']) fs.copyFileSync(path.join(process.env.SB_CONTENT, f), path.join(EXT, 'src/content', f));

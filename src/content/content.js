@@ -431,18 +431,9 @@
   // "I've seen it": one work is marked at once; several (a franchise name, an original and its remake) open the picker,
   // a modal dialog in the cover's shadow root (top layer: it may be larger than the post and changes no layout).
   const TYPE_NAMES = { movie: 'Film', tv: 'Series', game: 'Game', book: 'Book', anime: 'Anime', manga: 'Manga', comic: 'Comic' };
-  // The other not-yet-seen works of the same series as the groups' works, oldest first (picker's second section).
-  // shortcut: reads a per-work `series` column of the index meta, which the catalog does not carry yet; until it does
-  // (or if its API differs) this returns nothing and the section stays hidden.
-  function moreFromSeries(groups) {
-    const ser = meta.series;
-    if (!Array.isArray(ser)) return [];
-    const own = new Set(groups.flatMap((g) => meta.groups[g].slice(1)));
-    const names = new Set([...own].map((w) => ser[w]).filter((x) => x != null));
-    const out = [];
-    for (let w = 0; w < ser.length; w++) if (names.has(ser[w]) && !own.has(w) && workState.get(w)?.state !== 'seen') out.push(w);
-    return out.sort((a, b) => (meta.years[a] || 1e4) - (meta.years[b] || 1e4) || a - b);
-  }
+  // The other not-yet-seen works of the same series as the groups' works, oldest first (picker's second section);
+  // series come from the catalog (index meta `series`, read by the matcher).
+  const moreFromSeries = (groups) => (matcher.moreFromSeries?.(groups) ?? []).filter((w) => workState.get(w)?.state !== 'seen');
   const MORE_SHOWN = 6;
   function seenClicked(ov) {
     const all = [...new Set(ov.marks.flatMap((g) => meta.groups[g].slice(1)))];
