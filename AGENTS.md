@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Entry point for coding agents working on SpolierBlock 0.2.3. Humans: start with [README.md](README.md).
+Entry point for coding agents working on SpolierBlock 0.2.4. Humans: start with [README.md](README.md).
 
 ## The project in five lines
 
