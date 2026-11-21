@@ -43,19 +43,18 @@ const SERIES_EXTRA = ['Inception', 'Interstellar', 'Ratatouille', 'Cars', 'Rocky
 // SB_CONTENT=<dir with content.js/content.css>: run another content script (e.g. 0.1) against the same pages
 if (process.env.SB_CONTENT) for (const f of ['content.js', 'content.css']) fs.copyFileSync(path.join(process.env.SB_CONTENT, f), path.join(EXT, 'src/content', f));
 // The test build reads the image server's host (127.0.0.1) as youtube.com, so test/e2e/yt.html gets the youtube.com
-// selectors and the uploader part, and the page /x as x.com (rule 10's caption element) (no real site is opened).
+// selectors and the uploader part (no real site is opened).
 {
   const f = path.join(EXT, 'src/content/content.js'), src = fs.readFileSync(f, 'utf8');
   const at = "const host = hostname.replace(/^www\\.|^mobile\\.|^m\\./, '');";
   if (!src.includes(at)) throw new Error('content.js: host line not found for the youtube.com test mapping');
-  fs.writeFileSync(f, src.replace(at, at.replace("= hostname", "= location.pathname === '/x' ? 'x.com' : hostname")
-    .replace(";", ".replace(/^127\\.0\\.0\\.1$/, 'youtube.com');")));
+  fs.writeFileSync(f, src.replace(at, at.replace(";", ".replace(/^127\\.0\\.0\\.1$/, 'youtube.com');")));
 }
 const only = process.env.ONLY; // ONLY=1: skip the 0.1 flow and run the 0.2 cases only; ONLY=feed,coverage: those cases
 const want = (s) => !only || only === '1' || only.split(',').includes(s);
 
 const types = { '.jpg': 'image/jpeg', '.png': 'image/png', '.webm': 'video/webm', '.html': 'text/html' };
-const PAGES = { '/': 'fixture.html', '/feed': 'feed.html', '/coverage': 'coverage.html', '/videos': 'videos.html', '/x': 'videos.html' };
+const PAGES = { '/': 'fixture.html', '/feed': 'feed.html', '/coverage': 'coverage.html' };
 let PICS = null; // pictures the shipped engine titles / calls generic media, chosen at run time (see the 0.2 cases)
 // a long static feed for the scan-cost measurement: 3,000 posts, one in ten names a work
 const longPage = () => '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>long feed</title></head><body><main id="feed">' +
@@ -377,7 +376,7 @@ await extGo('/src/popup/popup.html');
 const META = JSON.parse(fs.readFileSync(path.join(EXT, 'data/index.json'), 'utf8'));
 const worksOf = (label, entry) => Object.fromEntries(META.groups.find((g) => g[0] === label).slice(1)
   .map((w) => [META.ids[w], { title: META.titles[w], type: META.types[w], year: META.years[w] || null, ts: 1, style: null, ...entry }]));
-const DEF = { enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], captionlessVideos: [], catalogUpdate: 'off' };
+const DEF = { enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], catalogUpdate: 'off' };
 const setConfig = async (works, s = {}) => {
   await storage((a) => (globalThis.browser ?? chrome).storage.local.set(a), { works, settings: { ...DEF, ...s } });
   await sleep(1000);
@@ -393,7 +392,7 @@ const INFO = `(el) => {
   const ov = [...el.children, ...(el.shadowRoot?.children ?? [])].find((c) => c.localName === 'sb-overlay');
   const sr = ov?.shadowRoot;
   return { label: sr?.querySelector('p')?.textContent ?? null, seen: sr ? !sr.querySelector('[data-a="seen"]').hidden : null,
-    not: sr ? !sr.querySelector('[data-a="not"]').hidden : null,
+    not: sr ? !!sr.querySelector('.b [data-a="not"]') : null, // a cover has no "Not this" (only the pill does)
     menu: sr?.querySelector('[data-a="menu"]')?.getAttribute('aria-label') ?? null, dark: !!ov?.hasAttribute('data-dark'),
     oh: ov ? Math.round(ov.getBoundingClientRect().height) : null, bh: Math.round(el.getBoundingClientRect().height) };
 }`;
@@ -491,7 +490,8 @@ await settle();
 c = await covered(POSTS);
 report.push(`## 0.2 defaults\n${JSON.stringify(c)}`);
 check('style all: "Mentions {t}"', lab(c['t-breaking']) === 'Mentions Breaking Bad' && lab(c['t-neutral']) === 'Mentions Star Wars', c['t-breaking']);
-check('buttons: Show once, I\'ve seen it, Not this, settings', c['t-breaking']?.seen === true && c['t-breaking']?.not === true && c['t-breaking']?.menu === 'SpolierBlock settings');
+check('buttons: Show once, I\'ve seen it, settings, and no "Not this" on the cover', c['t-breaking']?.seen === true && c['t-breaking']?.not === false && c['t-breaking']?.menu === 'SpolierBlock settings' &&
+  await page.evaluate(() => !!document.querySelector('#t-breaking > sb-overlay')?.shadowRoot.querySelector('.b [data-a="once"]:not([hidden])')), c['t-breaking']);
 if (TITLED) check('image identified: "Image from {t}"', lab(c['x-titled']) === TITLED.label, { got: c['x-titled'], want: TITLED.label });
 else skip('image identified: "Image from {t}"', NO_TITLE);
 if (GENERIC) check('unknownImages off: unidentified media image not covered', c['x-generic'] === null, c['x-generic']);
@@ -752,13 +752,8 @@ await inOv('pl-a', '.pill [data-a="again"]');
 await sleep(300);
 c = await covered(['pl-a']);
 check('"Cover again": the cover returns with the same label', lab(c['pl-a']) === 'Mentions Breaking Bad' && (await pill('pl-a')) === 'cover', c['pl-a']);
-// "Not this": the cover's button on pl-b, then (after forgetting it) the pill's on pl-a write the same learned.not
+// "Not this" exists only on the pill (Show once, then the pill): it records the group's works for this site
 const bbIds = Object.keys(worksOf('Breaking Bad', {}));
-await inOv('pl-b', '[data-a="not"]');
-await sleep(1500);
-const fromCover = (await learnedNow()).not ?? {};
-await storage(() => (globalThis.browser ?? chrome).storage.local.remove('learned'));
-await sleep(1000);
 await inOv('pl-a', '[data-a="once"]');
 await sleep(300);
 await inOv('pl-a', '.pill [data-a="not"]');
@@ -766,9 +761,8 @@ await sleep(1500);
 const fromPill = (await learnedNow()).not ?? {};
 await setConfig({}, { unknownImages: true }); // a real change re-decides every post
 const p3 = await pill('pl-a');
-check('"Not this" on the pill writes the same learned.not as the cover\'s button; after a re-scan the post has no cover and no pill',
-  bbIds.length > 0 && bbIds.every((id) => fromPill[id]?.length === 1) && JSON.stringify(fromPill) === JSON.stringify(fromCover) && p3 === null,
-  { fromCover, fromPill, p3 });
+check('"Not this" on the pill writes learned.not (one key per work of the group); after a re-scan the post has no cover and no pill',
+  bbIds.length > 0 && bbIds.every((id) => fromPill[id]?.length === 1) && p3 === null, { fromPill, p3 });
 await storage(() => (globalThis.browser ?? chrome).storage.local.remove('learned'));
 await setConfig({});
 // a post narrower than the pill: only the ⋯ button, which opens the two
@@ -1112,16 +1106,18 @@ const fit = await page.evaluate((ids) => ids.map((id) => {
   const ov = document.querySelector(`#${id} > sb-overlay`), o = ov.getBoundingClientRect();
   return [...ov.shadowRoot.querySelectorAll('.b > button:not([hidden])')].every((b) => { const r = b.getBoundingClientRect(); return r.width >= 20 && r.left >= o.left - 0.5 && r.right <= o.right + 0.5; }) && o.height <= 76;
 }), NT);
-check('"Not this" on every cover that names works; compact one-row covers (wide and 260 px) keep all four buttons inside',
-  NT.every((id) => lab(c[id]) === 'Mentions Breaking Bad' && c[id].not === true) && fit.every(Boolean), { c, fit });
-await page.evaluate(() => document.querySelector('#nt-a > sb-overlay').shadowRoot.querySelector('[data-a="not"]').click());
+check('no "Not this" on a cover that names works; compact one-row covers (wide and 260 px) keep their three buttons inside',
+  NT.every((id) => lab(c[id]) === 'Mentions Breaking Bad' && c[id].not === false && c[id].seen === true && c[id].menu === 'SpolierBlock settings') && fit.every(Boolean), { c, fit });
+await page.evaluate(() => document.querySelector('#nt-b > sb-overlay').shadowRoot.querySelector('[data-a="once"]').click());
+await sleep(300);
+await page.evaluate(() => document.querySelector('#nt-b > sb-overlay').shadowRoot.querySelector('.pill [data-a="not"]').click());
 await sleep(150);
-const at150 = (await covered(['nt-a']))['nt-a'];
+const at150 = await page.evaluate(() => !!document.querySelector('#nt-b > sb-overlay')); // neither cover nor pill
 await sleep(1500);
 c = await covered(NT);
 const nl = await learnedNow(), bbIds = Object.keys(worksOf('Breaking Bad', {}));
-check('"Not this": the cover goes at once; learned.not gets youtube.com/recap lab for the group\'s works; the same channel\'s other post uncovers, another channel\'s stays',
-  at150 === null && c['nt-a'] === null && c['nt-b'] === null && lab(c['nt-c']) === 'Mentions Breaking Bad' &&
+check('Show once, then "Not this" on the pill: the pill goes at once; learned.not gets youtube.com/recap lab for the group\'s works; the same channel\'s other post uncovers, another channel\'s stays',
+  at150 === false && c['nt-a'] === null && c['nt-b'] === null && lab(c['nt-c']) === 'Mentions Breaking Bad' &&
   bbIds.every((id) => JSON.stringify(nl.not?.[id]) === '["youtube.com/recap lab"]'), { at150, c, not: nl.not });
 await extGo(OPTIONS);
 const nui = await extEval(async () => {
@@ -1209,61 +1205,6 @@ check('settings: the "Other names" editor of a library row adds a name, trimmed'
 await storage(() => (globalThis.browser ?? chrome).storage.local.remove(['learned']));
 await sleep(3000); // the background drops the rebuilt index again
 await extGo('/src/popup/popup.html');
-}
-
-if (want('videos')) {
-// K) rule 10, videos with no caption: on a listed site a video post with no caption and no work named is covered
-const VIDS = ['v-bare', 'v-cap', 'v-seen', 'v-late', 'v-shadow', 'v-novideo'];
-// the settings page's list: a typed URL is stored as its host name and shown as a chip
-await setConfig({});
-await extGo(OPTIONS);
-const ui = await extEval(async () => {
-  const f = document.getElementById('vsite-form');
-  document.getElementById('vsite').value = 'https://www.X.com/home';
-  f.requestSubmit();
-  await new Promise((r) => setTimeout(r, 800));
-  return { stored: (await (globalThis.browser ?? chrome).storage.local.get('settings')).settings.captionlessVideos,
-    chips: [...document.querySelectorAll('#vsites li span')].map((e) => e.textContent), paused: document.querySelectorAll('#sites li.none').length };
-});
-check('settings page: "Cover videos with no caption on these sites" stores and shows the host name; paused sites untouched',
-  JSON.stringify(ui.stored) === '["x.com"]' && JSON.stringify(ui.chips) === '["x.com"]' && ui.paused === 1, ui);
-await extGo('/src/popup/popup.html');
-const seenBB = worksOf('Breaking Bad', { state: 'seen' });
-await setConfig(seenBB, { captionlessVideos: ['localhost'] });
-await open('/videos');
-await sleep(1500); // the lazy player arrives after 0.5 s
-c = await covered(VIDS);
-report.push(`## videos with no caption, site listed\n${JSON.stringify(c)}`);
-const bareV = () => page.evaluate(() => { const v = document.getElementById('v-bare-v'); return { muted: v.muted, paused: v.paused }; });
-const bv1 = await bareV();
-check('captionless video post covered: exact label, no "I\'ve seen it" or "Not this", settings button, video muted and paused',
-  lab(c['v-bare']) === 'Video with no caption' && c['v-bare'].seen === false && c['v-bare'].not === false && c['v-bare'].menu === 'SpolierBlock settings' &&
-  bv1.muted && bv1.paused, { ...c['v-bare'], ...bv1 });
-check('a video added to a post later (lazy player) and a video in an open shadow root: covered',
-  lab(c['v-late']) === 'Video with no caption' && lab(c['v-shadow']) === 'Video with no caption', c);
-check('video post with a 6-word caption, one whose caption names a seen work, and a post with no video: not covered',
-  c['v-cap'] === null && c['v-seen'] === null && c['v-novideo'] === null, c);
-await page.evaluate(() => document.querySelector('#v-bare > sb-overlay').shadowRoot.querySelector('[data-a="once"]').click());
-await sleep(300);
-const noPill = await page.evaluate(() => !document.querySelector('#v-bare > sb-overlay'));
-check('"Show once" on a "Video with no caption" cover leaves no pill', noPill);
-await setConfig(seenBB, { captionlessVideos: ['localhost'], scanImages: false }); // a settings change re-decides every post
-const once = (await covered(['v-bare', 'v-late']));
-const hNow = await page.evaluate(() => Math.round(document.getElementById('v-bare').getBoundingClientRect().height));
-check('the cover did not change the post\'s measured height (covered vs shown)', hNow === c['v-bare']?.bh, { covered: c['v-bare']?.bh, shown: hNow });
-check('"Show once" reveals the captionless video post and it stays revealed after a re-decision', once['v-bare'] === null && lab(once['v-late']) === 'Video with no caption', once);
-await setConfig(seenBB);
-c = await covered(VIDS);
-check('list empty: no video post covered', VIDS.every((id) => c[id] === null), c);
-// the page at /x is read as x.com by the test build: the caption is [data-testid="tweetText"], not a 4-word run
-await setConfig({}, { captionlessVideos: ['x.com'] });
-await open('/x');
-await sleep(1000);
-c = await covered(['x-bare', 'x-cap', 'v-cap']);
-report.push(`## videos with no caption, x.com\n${JSON.stringify(c)}`);
-check('x.com: a video article with a 5-word name line and no tweet text is covered; with 2 words of tweet text it is not',
-  lab(c['x-bare']) === 'Video with no caption' && c['x-cap'] === null && lab(c['v-cap']) === 'Video with no caption', c);
-await setConfig({});
 }
 
 if (want('perf')) {

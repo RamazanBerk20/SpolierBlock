@@ -304,19 +304,6 @@ public final class SettingsActivity extends Activity {
         t.setPadding(0, 0, dp(64), dp(12));
     }
 
-    /** A switch bound to one site's presence in settings.captionlessVideos (rule 10); other sites in the list are kept. */
-    private void siteToggle(LinearLayout l, String site, String label) {
-        Switch s = makeSwitch(l, label);
-        s.setOnCheckedChangeListener((v, on) -> {
-            if (binding) return;
-            org.json.JSONArray now = store.get().settings.optJSONArray("captionlessVideos"), out = new org.json.JSONArray();
-            for (int i = 0; now != null && i < now.length(); i++) if (!site.equals(now.optString(i))) out.put(now.optString(i));
-            if (on) out.put(site);
-            store.patch(Config.settingPatch("captionlessVideos", out));
-        });
-        binders.add(() -> s.setChecked(store.get().captionless(site)));
-    }
-
     private Switch makeSwitch(LinearLayout l, String label) {
         Switch s = new Switch(this);
         s.setText(label);
@@ -892,13 +879,8 @@ public final class SettingsActivity extends Activity {
         body(l, "“Only spoilers” runs a small model on this device. A post stays covered while it is checked.").setPadding(0, dp(8), 0, dp(8));
         heading(l, "Images");
         toggle(l, "scanImages", "Scan images", "Recognises posters, stills and screenshots, and reads the text in them, on this device.");
-        toggle(l, "unknownImages", "Cover unrecognised film, show or game images",
-            "Covers an image that looks like a film, show or game but could not be named. Off by default: it also covers many harmless images.");
-        heading(l, "Cover videos with no caption");
-        body(l, "For footage the picture check cannot identify, such as raw gameplay clips. Covers every video post that has no text.");
-        siteToggle(l, "x.com", "X");
-        siteToggle(l, "instagram.com", "Instagram");
-        siteToggle(l, "youtube.com", "YouTube");
+        toggle(l, "unknownImages", "Cover unrecognised film, show and game footage",
+            "Videos and images that look like footage of a game, an anime, an animation or a film but that nothing names. This also covers works you have finished, unless the post names one you marked seen.");
         corrections(l);
         return scroll(l);
     }
@@ -907,7 +889,7 @@ public final class SettingsActivity extends Activity {
 
     private void corrections(LinearLayout l) {
         heading(l, "Corrections");
-        body(l, "What your reports taught SpolierBlock: “Not this” on a cover and names you added. It stays on this device.");
+        body(l, "What your reports taught SpolierBlock: “Not this” on a post you showed once and names you added. It stays on this device.");
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         l.addView(list);
@@ -930,7 +912,7 @@ public final class SettingsActivity extends Activity {
                     list.addView(twoLine(t, "Not this on " + key, rm));
                 }
             }
-            if (not.length() == 0) body(list, "Nothing yet. Use “Not this” on a wrong cover.");
+            if (not.length() == 0) body(list, "Nothing yet. After “Show once” on a wrong cover, use “Not this”.");
             subheading(list, "Other names");
             body(list, "Extra names a work is matched by. Add them from a work's row in the library or the search.");
             JSONObject names = c.learned.optJSONObject("names");
@@ -1182,7 +1164,7 @@ public final class SettingsActivity extends Activity {
         body(l, SpoilerBlock.I != null ? SpoilerBlock.I.images.accel.status()
             : "Each app with SpolierBlock checks images itself, on its own device processor; its settings show how.");
         heading(l, "On a cover");
-        body(l, "Show once: shows the post until the app restarts.\nI've seen it: adds the work to your library as seen, so nothing about it is covered again.\nNot this: the name in that post is not the work; posts from the same channel or account (or this app, when it shows none) are not covered for it again. Undo it under Blocking, Corrections.\n⋮: opens these settings.");
+        body(l, "Show once: shows the post until the app restarts.\nI've seen it: adds the work to your library as seen, so nothing about it is covered again.\nNot this (on the small box a post keeps after Show once): the name in that post is not the work; posts from the same channel or account (or this app, when it shows none) are not covered for it again. Undo it under Blocking, Corrections.\n⋮: opens these settings.");
         heading(l, "Licence");
         body(l, "Free software under the GNU General Public License, version 3.");
         return scroll(l);

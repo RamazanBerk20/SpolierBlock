@@ -158,6 +158,10 @@ Also part of `npm run build`. The prompts are in `tools/clip-prompts.mjs`: three
 
 The cut-offs `minScore`, `margin`, `titleGap` and `mediaGate` are the `CUT` constant in `tools/build.mjs`. The row count is `--clip-n` (`npm run build -- --clip-n=N`). Change a cut-off only after running `tools/calibrate-clip.mjs` with the real catalog and the research image sets (`SB_RESEARCH=research`), and read the held-out line, not the fixture line: the shipped values are fitted on all images.
 
+### Footage head
+
+`data/footage-head.json` is the footage head of contract rule 6: `{ version, dim: 768, cut, b, w: [768 numbers], note }`, one linear layer `score = w · e + b` on the L2-normalised `pooler_output` of the vision tower; an image or video frame is footage of a made work when `score >= cut`. `npm run build` and `npm run build:fixture` check its shape (the build fails otherwise) and copy it into `clip-meta.json` as `foot: { w, b, cut }`. `node research/scripts/refframes/head.mjs` retrains it and rewrites the file from the cached frame embeddings under `research/data/refframes/` (not in git); it sets `cut` to the score that 0.5% of the left-out real-life frames reach. Rebuild the extension to pick up a new file.
+
 ### Retraining the spoiler classifier
 
 ```sh

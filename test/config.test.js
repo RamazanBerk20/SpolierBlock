@@ -54,16 +54,13 @@ test('import keeps only well-formed entries and ignores unknown keys', () => {
   assert.equal(r.skipped, 4 + 3);
 });
 
-test('captionlessVideos: host names, lower-case, deduplicated; defaults, export and merge carry it', () => {
-  assert.deepEqual(withDefaults({}).captionlessVideos, []);
-  assert.deepEqual(withDefaults({ captionlessVideos: 'x.com' }).captionlessVideos, []);
-  const r = parseImport(file({ settings: { captionlessVideos: ['X.com', 'https://www.x.com/home', 'twitter.com', 'bad host!', 3, null] } }));
-  assert.deepEqual(r.data.settings, { captionlessVideos: ['x.com', 'twitter.com'] });
-  const out = exportFile({ settings: { captionlessVideos: ['x.com'] } });
-  assert.deepEqual(parseImport(JSON.stringify(out)).data.settings.captionlessVideos, ['x.com']);
-  const cur = { settings: { captionlessVideos: ['reddit.com'] } };
-  assert.deepEqual(applyImport(cur, r.data, { mode: 'merge', withSettings: true }).settings.captionlessVideos, ['x.com', 'twitter.com']);
-  assert.deepEqual(applyImport(cur, r.data, { mode: 'merge', withSettings: false }).settings.captionlessVideos, ['reddit.com']);
+test('captionlessVideos (rule 10, removed): an older config or export file is accepted and the key is dropped', () => {
+  const r = parseImport(file({ settings: { captionlessVideos: ['x.com'], pausedSites: ['x.com'] } }));
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.data.settings, { pausedSites: ['x.com'] });
+  const stored = withDefaults({ captionlessVideos: ['x.com'] });
+  assert.equal('captionlessVideos' in stored, false);
+  assert.equal('captionlessVideos' in exportFile({ settings: { captionlessVideos: ['x.com'] } }).settings, false);
 });
 
 test('merge: imported wins per id, settings only when asked; replace: everything from the file', () => {

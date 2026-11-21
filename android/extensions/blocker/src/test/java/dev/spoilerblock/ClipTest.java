@@ -30,12 +30,19 @@ public class ClipTest {
     @Test public void verdictsMatchExtension() throws Exception {
         JSONArray cases = new JSONArray(new String(Files.readAllBytes(new File(V, "clip-cases.json").toPath()), StandardCharsets.UTF_8));
         assertTrue(cases.length() >= 70);
-        Clip clip = new Clip(Files.readAllBytes(new File(DIST, "clip-text.bin").toPath()),
-            new String(Files.readAllBytes(new File(DIST, "clip-meta.json").toPath()), StandardCharsets.UTF_8));
+        byte[] bin = Files.readAllBytes(new File(DIST, "clip-text.bin").toPath());
+        JSONObject meta = new JSONObject(new String(Files.readAllBytes(new File(DIST, "clip-meta.json").toPath()), StandardCharsets.UTF_8));
+        Clip clip = new Clip(bin, meta.toString());
+        boolean head = meta.has("foot");
+        // the same meta without the footage head: the media gate alone, the rule before the head
+        JSONObject plain = new JSONObject(meta.toString());
+        plain.remove("foot");
+        Clip noHead = new Clip(bin, plain.toString());
+        int byHead = 0;
         try (OrtSession.SessionOptions o = Images.cpuOptions();
              OrtSession s = OrtEnvironment.getEnvironment().createSession(new File(DIST, "../models/vision/model.onnx").getPath(), o)) {
             int differ = 0, differResize = 0, bytesOff = 0, maxByte = 0;
-            double worst = 0, worstResize = 0, worstScore = 0;
+            double worst = 0, worstResize = 0, worstScore = 0, worstFoot = 0;
             long t0 = System.nanoTime();
             for (int i = 0; i < cases.length(); i++) {
                 JSONObject c = cases.getJSONObject(i);
@@ -45,6 +52,14 @@ public class ClipTest {
                 List<double[]> hits = clip.verdict(v);
                 if (!js.equals(kind(hits))) { differ++; System.err.println("VERDICT DIFFERS " + c.getString("file") + " js=" + js + " java=" + kind(hits)); }
                 else if (!hits.isEmpty()) worstScore = Math.max(worstScore, Math.abs(hits.get(0)[1] - c.getJSONArray("hits").getJSONArray(0).getDouble(1)));
+                if (head) worstFoot = Math.max(worstFoot, Math.abs(clip.foot(v) - c.getDouble("foot")));
+                else assertTrue("no head, no footage score", Double.isNaN(clip.foot(v)) && c.isNull("foot"));
+                // without the head a verdict is the media gate's: only a generic verdict the head alone gave can go
+                String plainKind = kind(noHead.verdict(v));
+                if (!plainKind.equals(kind(hits))) {
+                    byHead++;
+                    assertTrue(c.getString("file") + ": the head changed more than a missing generic verdict", "generic".equals(kind(hits)) && "none".equals(plainKind) && clip.foot(v) >= meta.getJSONObject("foot").getDouble("cut"));
+                }
 
                 // Java's resize, from the picture at <= 512 px
                 byte[] src = Files.readAllBytes(new File(V, c.getString("file") + ".src.rgba").toPath());
@@ -58,12 +73,14 @@ public class ClipTest {
                 String jr = kind(clip.verdict(vr));
                 if (!js.equals(jr)) { differResize++; System.err.println("RESIZED VERDICT DIFFERS " + c.getString("file") + " js=" + js + " java=" + jr); }
             }
-            System.out.printf("image titles: %d images in %d ms; extension's pixels: %d verdicts differ, embedding 1-cos max %.1e, top score max diff %.3f; " +
+            System.out.printf("image titles: %d images in %d ms; extension's pixels: %d verdicts differ, embedding 1-cos max %.1e, top score max diff %.3f, " +
+                "footage score max diff %.1e (%s), %d generic verdicts from the head alone; " +
                 "Java resize: %d differ, 1-cos max %.1e, %d pixel values off the engine's (by at most %d)%n", cases.length(), (System.nanoTime() - t0) / 1_000_000,
-                differ, worst, worstScore, differResize, worstResize, bytesOff, maxByte);
+                differ, worst, worstScore, worstFoot, head ? "head" : "no head in the meta", byHead, differResize, worstResize, bytesOff, maxByte);
             // the same model and ORT version (1.22) natively on x86-64 against the extension's WASM: measured 1-cos 1.3e-8
             assertEquals("verdicts differ on the extension's own pixels", 0, differ);
             assertTrue("embedding drifted: 1-cos " + worst, worst < 1e-4);
+            assertTrue("footage score drifted: " + worstFoot, worstFoot < 1e-3);
             // the same resize as the engine (src/background/pixels.js, ported in Images.visionPixels)
             assertEquals("verdicts differ after Java's resize", 0, differResize);
             assertTrue("Java's resize is not the engine's: values off by up to " + maxByte, maxByte <= 1);

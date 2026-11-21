@@ -16,13 +16,11 @@ final class TextCapture extends ViewStructure {
     static final class Texts {
         final StringBuilder sb = new StringBuilder();
         private final java.util.Set<String> seen = new java.util.HashSet<>();
-        int maxWords; // rule 10: the most words in one piece (one TextView, description or node); a caption has 4 or more
         String handle; // rule 11: the first piece that is exactly one "@handle" (X's author), or null
 
         void add(CharSequence s) {
             if (s == null || s.length() == 0) return;
             String k = s.toString();
-            maxWords = Math.max(maxWords, Scanner.words(k));
             if (handle == null && HANDLE.matcher(k).matches()) handle = k;
             if (seen.add(k)) sb.append(k).append('\n');
         }

@@ -5,7 +5,7 @@
 // usage (repo root): node research/scripts/refframes/analyze.mjs [--refs=trailers|all] > research/results/refframes.txt
 import fs from 'node:fs';
 
-const D = 'research/data/refframes', E = `${D}/emb`, DIM = 768;
+const D = 'research/data/refframes', E = process.env.EMB ?? `${D}/emb`, DIM = 768; // EMB: another embedding of the same frames (embed-dino.mjs)
 const REFS = process.argv.find((a) => a.startsWith('--refs='))?.slice(7) ?? 'trailers';
 const vids = JSON.parse(fs.readFileSync('research/scripts/refframes/videos.json', 'utf8'));
 const crc = (s) => { let c = ~0; for (const b of Buffer.from(s)) { c ^= b; for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; };

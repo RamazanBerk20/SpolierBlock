@@ -279,7 +279,7 @@ $('enabled').addEventListener('change', (e) => saveSettings({ enabled: e.target.
 for (const id of ['blockUnlisted', 'scanImages', 'unknownImages']) $(id).addEventListener('change', (e) => saveSettings({ [id]: e.target.checked }));
 for (const r of document.querySelectorAll('input[name="style"]')) r.addEventListener('change', () => saveSettings({ style: r.value }));
 
-// A list of host names in settings: paused sites, sites where videos with no caption are covered.
+// A list of host names in settings (paused sites).
 function siteList(key, listId, verb, none) {
   const list = settings[key];
   $(listId).replaceChildren(...list.map((s) => el('li', {}, el('span', {}, s),
@@ -291,7 +291,6 @@ function siteList(key, listId, verb, none) {
 }
 function renderSites() {
   siteList('pausedSites', 'sites', 'Resume', 'No paused sites.');
-  siteList('captionlessVideos', 'vsites', 'Remove', 'No sites.');
 }
 function siteForm(form, input, msg, key) {
   $(form).addEventListener('submit', (e) => {
@@ -304,7 +303,6 @@ function siteForm(form, input, msg, key) {
   });
 }
 siteForm('site-form', 'site', 'site-msg', 'pausedSites');
-siteForm('vsite-form', 'vsite', 'vsite-msg', 'captionlessVideos');
 
 // ---------- data ----------
 $('export').addEventListener('click', async () => {

@@ -1,4 +1,4 @@
-// Toolbar popup: a quick panel. On/off, pause this site, cover caption-less videos on this site, the page's cover count,
+// Toolbar popup: a quick panel. On/off, pause this site, the page's cover count,
 // search-and-mark, the page's text selection as a new name for a work (rule 11), a link to settings.
 import { api, el, describe, toast, siteOf, pausedBy, catalogSearch } from '../options/ui.js';
 import { withDefaults, addName } from '../options/config.js';
@@ -18,9 +18,8 @@ const saveSettings = (patch) => api.storage.local.set({ settings: { ...settings,
 function render() {
   $('enabled').checked = settings.enabled;
   document.body.classList.toggle('off', !settings.enabled);
-  $('pause-row').hidden = $('bare-row').hidden = !host;
+  $('pause-row').hidden = !host;
   if (host) {
-    $('bare').checked = pausedBy(host, settings.captionlessVideos).length > 0;
     $('pause-label').textContent = 'Pause on ' + host;
     $('pause').checked = pausedBy(host, settings.pausedSites).length > 0;
   }
@@ -71,10 +70,6 @@ $('enabled').addEventListener('change', (e) => saveSettings({ enabled: e.target.
 $('pause').addEventListener('change', (e) => {
   const rest = settings.pausedSites.filter((s) => !pausedBy(host, [s]).length);
   saveSettings({ pausedSites: e.target.checked ? [...rest, host] : rest });
-});
-$('bare').addEventListener('change', (e) => {
-  const rest = settings.captionlessVideos.filter((s) => !pausedBy(host, [s]).length);
-  saveSettings({ captionlessVideos: e.target.checked ? [...rest, host] : rest });
 });
 $('settings').addEventListener('click', async () => {
   await api.runtime.openOptionsPage();

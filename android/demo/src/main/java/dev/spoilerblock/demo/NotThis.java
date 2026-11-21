@@ -17,15 +17,17 @@ import org.json.JSONObject;
 /**
  * Rule 11, "Not this" (--es screen notthis; tools/demo-notthis.sh). Rows by kind: 0 "@alpha_fan" about Breaking Bad,
  * 1 "@beta_fan" about Breaking Bad, 2 "@alpha_fan" about The Last of Us; all covered at first. The demo clears
- * learned.not, then logs where the first covered kind-0 row's "Not this" button is ("NOTTHIS tap x y"); the script taps
- * it. Checked every frame: once demo.test/@alpha_fan is in learned.not, kind 0 is uncovered and kinds 1 and 2 stay
- * covered; 6 s later the demo removes the key (as the settings' remove control does) and every row is covered again.
+ * learned.not, then logs where to tap ("NOTTHIS tap <what> x y"): a covered kind-0 row's "Show once", then the "Not this"
+ * of the pill it keeps (a cover has no "Not this"); the script taps in order. Checked every frame: once
+ * demo.test/@alpha_fan is in learned.not, kind 0 is uncovered and kinds 1 and 2 stay covered; 6 s later the demo removes
+ * the key (as the settings' remove control does) and every row is covered again, but the one shown once.
  * The blocker's state is read by reflection (present only in the patched build).
  */
 final class NotThis {
     static final String KEY = "demo.test/@alpha_fan";
     private static int phase, uncoveredChecks, coveredAgainChecks;
     private static long since;
+    private static String target; // the body of the row shown once
 
     static Object store(android.content.Context c) throws Exception {
         Class<?> k = Class.forName("dev.spoilerblock.Store");
@@ -74,8 +76,8 @@ final class NotThis {
         return false;
     }
 
-    /** The screen centre of the "Not this" button of the cover on item, or null. */
-    private static int[] button(View item) throws Exception {
+    /** The screen centre of a visible button (a Cover field: "once", "not") of the cover on item, or null. */
+    private static int[] button(View item, String field) throws Exception {
         Class<?> sbk = Class.forName("dev.spoilerblock.SpoilerBlock");
         java.lang.reflect.Field fi = sbk.getDeclaredField("I"), fs = sbk.getDeclaredField("scanners");
         fi.setAccessible(true);
@@ -85,7 +87,7 @@ final class NotThis {
             java.lang.reflect.Field fc = scanner.getClass().getDeclaredField("covers");
             fc.setAccessible(true);
             for (Object cover : (java.util.List<?>) fc.get(scanner)) {
-                java.lang.reflect.Field it = cover.getClass().getDeclaredField("item"), nt = cover.getClass().getDeclaredField("not");
+                java.lang.reflect.Field it = cover.getClass().getDeclaredField("item"), nt = cover.getClass().getDeclaredField(field);
                 it.setAccessible(true);
                 nt.setAccessible(true);
                 if (it.get(cover) != item) continue;
@@ -134,6 +136,7 @@ final class NotThis {
         }
         Object store = st;
         phase = 0;
+        target = null;
         since = SystemClock.uptimeMillis();
         RecyclerView rv = new MainActivity.FeedList(a);
         rv.setLayoutManager(new LinearLayoutManager(a));
@@ -150,34 +153,38 @@ final class NotThis {
             }
         });
         Runnable tick = new Runnable() { // a still list draws no frames: keep the per-frame check running until the summary
-            @Override public void run() { rv.invalidate(); if (phase < 4) rv.postDelayed(this, 100); }
+            @Override public void run() { rv.invalidate(); if (phase < 5) rv.postDelayed(this, 100); }
         };
         rv.post(tick);
         rv.getViewTreeObserver().addOnDrawListener(() -> {
             long now = SystemClock.uptimeMillis();
             try {
-                if (phase == 1 && hasKey(store)) { phase = 2; since = now; Log.i(MainActivity.TAG, "notthis: key " + KEY + " written"); }
-                if (phase == 2 && now - since > 6000) { dropKey(store); phase = 3; since = now; Log.i(MainActivity.TAG, "notthis: key removed"); }
-                if (phase == 3 && now - since > 4500) {
-                    phase = 4;
+                if (phase == 2 && hasKey(store)) { phase = 3; since = now; Log.i(MainActivity.TAG, "notthis: key " + KEY + " written"); }
+                if (phase == 3 && now - since > 6000) { dropKey(store); phase = 4; since = now; Log.i(MainActivity.TAG, "notthis: key removed"); }
+                if (phase == 4 && now - since > 4500) {
+                    phase = 5;
                     Log.i(MainActivity.TAG, "notthis summary: uncovered checks " + uncoveredChecks + ", covered-again checks " + coveredAgainChecks + ", mismatches " + MainActivity.mismatches);
                 }
-                if (phase <= 1 && now - since > 20000) { Log.e(MainActivity.TAG, "MISMATCH notthis: phase " + phase + " timed out"); MainActivity.mismatches++; phase = 4; }
+                if (phase <= 2 && now - since > 20000) { Log.e(MainActivity.TAG, "MISMATCH notthis: phase " + phase + " timed out"); MainActivity.mismatches++; phase = 5; }
                 for (int i = 0; i < rv.getChildCount(); i++) {
                     if (!(rv.getChildAt(i) instanceof Row)) continue;
                     Row r = (Row) rv.getChildAt(i);
                     if (r.getTop() < 0 || r.getBottom() > rv.getHeight() || now - r.boundAt < 800) continue; // settled, fully shown rows
                     boolean covered = MainActivity.covered(r);
-                    String why = null;
-                    if (phase == 0 && covered && r.kind == 0) {
-                        int[] b = button(r);
-                        if (b != null) { Log.i(MainActivity.TAG, "NOTTHIS tap " + b[0] + " " + b[1]); phase = 1; since = now; }
+                    String body = String.valueOf(((TextView) r.getChildAt(1)).getText()), why = null;
+                    // not the top row: edge to edge, its pill lies under the status bar, which takes the tap
+                    if (phase == 0 && covered && r.kind == 0 && r.getTop() > rv.getHeight() / 5) {
+                        int[] b = button(r, "once");
+                        if (b != null) { Log.i(MainActivity.TAG, "NOTTHIS tap once " + b[0] + " " + b[1]); target = body; phase = 1; since = now; }
+                    } else if (phase == 1 && body.equals(target) && now - since > 600) {
+                        int[] b = button(r, "not"); // visible only on the pill
+                        if (b != null) { Log.i(MainActivity.TAG, "NOTTHIS tap not " + b[0] + " " + b[1]); phase = 2; since = now; }
                     }
-                    if (phase == 2 && now - since > 1000) {
+                    if (phase == 3 && now - since > 1000) {
                         if (covered != (r.kind != 0)) why = r.kind == 0 ? "still covered after Not this" : "uncovered by another source's or work's Not this";
                         else uncoveredChecks++;
                     }
-                    if (phase == 3 && now - since > 1500) {
+                    if (phase == 4 && now - since > 1500 && !body.equals(target)) { // the row shown once keeps its pill
                         if (!covered) why = "not covered again after the key was removed";
                         else coveredAgainChecks++;
                     }
@@ -186,7 +193,7 @@ final class NotThis {
             } catch (Exception e) {
                 Log.e(MainActivity.TAG, "MISMATCH notthis: reflection failed", e);
                 MainActivity.mismatches++;
-                phase = 4;
+                phase = 5;
             }
         });
         return rv;

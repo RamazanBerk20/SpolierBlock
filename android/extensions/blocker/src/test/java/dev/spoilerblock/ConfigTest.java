@@ -39,21 +39,17 @@ public class ConfigTest {
         assertEquals("garbage gives defaults", new Config().json(), cfg("not json").json());
     }
 
-    @Test public void captionlessVideos() throws Exception {
-        assertEquals("empty by default", "[]", new Config().settings.getJSONArray("captionlessVideos").toString());
-        Config c = cfg("{\"settings\":{\"captionlessVideos\":[\" X.com \",\"x.com\",\"https://www.Instagram.com/reels\",\"youtube.com.\",3,\"no host\",\"nodot\",\"localhost\"]}}");
-        assertEquals("[\"x.com\",\"instagram.com\",\"youtube.com\",\"localhost\"]", c.settings.getJSONArray("captionlessVideos").toString());
-        assertTrue(c.captionless("x.com"));
-        assertFalse(c.captionless("demo.test"));
-        assertFalse(c.captionless(null));
-        assertEquals("a non-array keeps the list", c.json(), c.copy().apply(Config.settingPatch("captionlessVideos", "x.com")).json());
-        assertEquals("[]", c.copy().apply(Config.settingPatch("captionlessVideos", new JSONArray())).settings.getJSONArray("captionlessVideos").toString());
-        assertEquals("exported and read back", c.json(), Config.fromExport(c.export("2026-11-21T00:00:00Z")).json());
+    @Test public void captionlessVideosDropped() throws Exception { // rule 10 removed: an older config or export is accepted, the key dropped
+        String old = "{\"settings\":{\"captionlessVideos\":[\"x.com\"],\"unknownImages\":true}}";
+        assertFalse(cfg(old).settings.has("captionlessVideos"));
+        assertTrue("the rest is read", cfg(old).bool("unknownImages"));
         Config mine = new Config();
-        mine.mergeImport(c, false);
-        assertFalse("merge keeps settings unless ticked", mine.captionless("x.com"));
-        mine.mergeImport(c, true);
-        assertTrue(mine.captionless("x.com"));
+        mine.mergeImport(Config.fromExport("{\"format\":\"spolierblock\",\"version\":1," + old.substring(1)), true);
+        assertFalse(mine.settings.has("captionlessVideos"));
+        assertFalse(new Config().apply(Config.settingPatch("captionlessVideos", new JSONArray("[\"x.com\"]"))).settings.has("captionlessVideos"));
+    }
+
+    @Test public void sites() {
         assertEquals("x.com", Config.site("com.twitter.android"));
         assertEquals("instagram.com", Config.site("com.instagram.android"));
         assertEquals("youtube.com", Config.site("app.morphe.android.youtube"));

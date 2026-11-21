@@ -20,12 +20,12 @@
   const MIN_MEDIA = 96; // px; smaller images are icons/avatars and are never scanned
   const MAX_BLOCK_TEXT = 3000; // a "post-like" container larger than this is a page section, not a post
   const FRAME_EVERY_MS = 5000; // video re-check period during playback
-  const DEFAULTS = { enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], captionlessVideos: [], catalogUpdate: 'off' };
+  const DEFAULTS = { enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], catalogUpdate: 'off' };
 
   let matcher = null, meta = null;
   let settings = DEFAULTS, works = {}, workState = new Map(); // workIdx -> works entry
   let learned = {}, notMap = new Map(); // storage `learned` (rule 11); workIdx -> where its names are not this work
-  let active = false, bareVideos = false; // bareVideos: this site is in settings.captionlessVideos (rule 10)
+  let active = false;
 
   // Fail-safe: never leave a page invisible if something below throws or the index fails to load.
   const failSafe = setTimeout(() => root.setAttribute('data-sb-ready', ''), 2500);
@@ -226,8 +226,6 @@
     if (tg.length && v === undefined) return { label: `Checking ${names(tg)} for spoilers…`, marks };
     if (settings.unknownImages && st.hits.some((h) => fromClip(h) === UNKNOWN) &&
         (tg.length || !ownSeenOnly())) return { label: 'Possible film, show or game image', marks: [] };
-    // rule 10: on a listed site, a video post whose own text names no work, seen or not, and that has no caption
-    if (st.bare && !own.length) return { label: 'Video with no caption', marks: [] };
     return null;
   }
 
@@ -259,25 +257,25 @@
     const dom = domText(block), mi = mediaInfo(block), channel = uploader(block);
     const typed = channel ? dom + UP_MARK + channel : dom; // rule 9: the uploader's name follows the own text
     const text = mi.ocr ? typed + OCR_MARK + mi.ocr.trim() : typed; // rule 8: the matcher reads OCR text more strictly
-    const bare = bareVideos && hasVideo(block) && !hasCaption(block);
     const where = whereOf(isX ? xHandle(block) : channel); // rule 11: "Not this" keys, the most specific first
-    const key = text + '\0' + mi.hits.join() + (bare ? '\0bare' : '') + '\0' + where[0];
+    const key = text + '\0' + mi.hits.join() + '\0' + where[0];
     if (!force && scanned.get(block)?.key === key) return;
     let groups = matcher.evaluate(text, isSeenGroup), own = null;
     // before any other evaluate: unsure() reuses this scan
     const yes = contextGroups(text, dom, () => { if (block.isConnected && scanned.get(block)?.dom === dom) scanBlock(block, true); });
-    if (mi.ocr || mi.hits.length || bare) {
-      own = [...matcher.evaluate(typed), ...yes]; // every work the post's own text names, seen or not (rules 7 and 10)
+    if (mi.ocr || mi.hits.length) {
+      own = [...matcher.evaluate(typed), ...yes]; // every work the post's own text names, seen or not (rule 7)
       // own-text groups before OCR-only ones, keeping the matcher's order (a no-op once the matcher orders them so)
       groups = [...groups.filter((g) => own.includes(g)), ...groups.filter((g) => !own.includes(g))];
     }
     if (yes.length) groups = [...groups, ...yes];
-    scanned.set(block, { dom, text, key, hits: mi.hits, groups, own, bare, where, show: showKey(block, dom) });
+    scanned.set(block, { dom, text, key, hits: mi.hits, groups, own, where, show: showKey(block, dom) });
     apply(block);
   }
 
   // ---------- rule 11: "Not this" ----------
   // Keys: "{site}/{source}" (the YouTube channel, the x.com author's handle with its @) and "{site}", lower-case.
+  const isX = host === 'x.com' || host === 'twitter.com';
   const xHandle = (block) => { const h = block.querySelector('[data-testid="User-Name"] a[href^="/"]')?.getAttribute('href')?.split('/')[1]; return h ? '@' + h : ''; };
   const whereOf = (src) => (src ? [`${site}/${src.toLowerCase()}`, site] : [site]);
   function notHere(g, where) {
@@ -288,33 +286,11 @@
   async function notThis(block, ov) {
     const key = (scanned.get(block)?.where ?? [site])[0], xs = [...new Set(ov.marks.flatMap((g) => meta.groups[g].slice(1)))];
     for (const x of xs) (notMap.get(x) ?? notMap.set(x, new Set()).get(x)).add(key);
-    apply(block); // the cover goes at once
+    apply(block); // the pill goes at once
     const { learned: l } = await api.storage.local.get('learned');
     const not = { ...(l?.not ?? {}) };
     for (const x of xs) not[meta.ids[x]] = [...new Set([...(Array.isArray(not[meta.ids[x]]) ? not[meta.ids[x]] : []), key])];
     await api.storage.local.set({ learned: { names: l?.names ?? {}, ...l, not } }); // re-judges every tab
-  }
-
-  // ---------- rule 10: videos with no caption ----------
-  const hasVideo = (b) => !!b.querySelector('video') || hostsIn(b).some((h) => !!shadowOf(h)?.querySelector('video'));
-  const isX = host === 'x.com' || host === 'twitter.com';
-  // A caption: on x.com the tweet text; elsewhere one run of 4+ words, a run being the text of one element's own text
-  // nodes, not counting buttons, times and hidden text (names, handles, counters and button labels are short).
-  function hasCaption(block) {
-    if (isX) return !!block.querySelector('[data-testid="tweetText"]')?.textContent.trim();
-    const runs = new Map(); // element -> its own text
-    const visit = (n) => {
-      const tw = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
-      for (let t; (t = tw.nextNode());) {
-        const p = t.parentElement;
-        if (!p || SKIP_TEXT.has(p.tagName) || p.closest('button, [role="button"], time, [aria-hidden="true"]')) continue;
-        runs.set(p, (runs.get(p) ?? '') + ' ' + t.data);
-      }
-    };
-    visit(block);
-    for (const h of hostsIn(block)) { const sr = shadowOf(h); if (sr) visit(sr); }
-    for (const t of runs.values()) if (t.trim().split(/\s+/).length >= 4) return true;
-    return false;
   }
 
   function apply(block) {
@@ -444,7 +420,6 @@
       const sr = ov.attachShadow({ mode: 'open' });
       sr.innerHTML = `<style>${OVERLAY_CSS}</style><div class="b" role="group" aria-labelledby="l"><p id="l"></p>` +
         `<button type="button" data-a="once">Show once</button><button type="button" data-a="seen">I've seen it</button>` +
-        `<button type="button" data-a="not">Not this</button>` +
         `<button type="button" data-a="menu" aria-label="SpolierBlock settings" title="SpolierBlock settings">⋮</button></div>` +
         `<div class="pill" role="group" aria-labelledby="l"><button type="button" data-a="more" aria-expanded="false" ` +
         `aria-label="SpolierBlock: Not this, Cover again" title="SpolierBlock">⋯</button>` +
@@ -514,8 +489,7 @@
     if (pill) unsilence(block); else silence(block); // also media added to the post since it was covered
     const p = ov.shadowRoot.querySelector('p');
     if (p.textContent !== d.label) p.textContent = p.title = d.label; // the title: a narrow cover cuts the label short
-    // nothing to mark or report for an unidentified image or a video with no caption
-    for (const b of ov.shadowRoot.querySelectorAll('[data-a="seen"], [data-a="not"]')) b.hidden = !d.marks.length;
+    ov.shadowRoot.querySelector('[data-a="seen"]').hidden = !d.marks.length; // nothing to mark for an unidentified image
   }
 
   function unblock(block) {
@@ -665,7 +639,7 @@
       if (n.nodeType === 3) { addText(n); continue; }
       if (n.nodeType !== 1 || n.localName === 'sb-overlay') continue;
       // a label with no text node under it (an end-screen card, a thumbnail link) has nothing else to queue its block
-      if (n.hasAttribute('alt') || n.hasAttribute('aria-label') || (bareVideos && n.localName === 'video')) pending.add(n);
+      if (n.hasAttribute('alt') || n.hasAttribute('aria-label')) pending.add(n);
       const sr = shadowOf(n);
       if (sr) { adopt(n, sr); collect(sr); } else if (n.localName.includes('-') && !later.has(n) && n.matches(':not(:defined)')) {
         later.set(n, Date.now() + 30000);
@@ -878,9 +852,8 @@
     const paused = (settings.pausedSites ?? []).some((s) => hostname === s || hostname.endsWith('.' + s));
     return settings.enabled !== false && !paused;
   }
-  // x.com and twitter.com are one site (SITE_BLOCKS); an entry covers its subdomains, as in pausedSites
+  // x.com and twitter.com are one site (SITE_BLOCKS)
   const xcom = (h) => h.replace(/(^|\.)twitter\.com$/, '$1x.com');
-  const listed = (list) => (list ?? []).some((s) => xcom(host) === xcom(s) || xcom(host).endsWith('.' + xcom(s)));
   const site = xcom(host).toLowerCase(); // the site of a "Not this" key (rule 11)
 
   function rescanAll() {
@@ -906,7 +879,6 @@
 
   function applySettings() {
     active = computeActive();
-    bareVideos = listed(settings.captionlessVideos);
     root.toggleAttribute('data-sb-off', !active);
     root.toggleAttribute('data-sb-noimg', !settings.scanImages);
     workState = new Map();

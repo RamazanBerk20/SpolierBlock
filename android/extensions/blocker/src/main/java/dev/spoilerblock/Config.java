@@ -34,7 +34,7 @@ final class Config {
     Config(JSONObject o) {
         try {
             settings.put("enabled", true).put("scanImages", true).put("blockUnlisted", true).put("style", ALL)
-                .put("unknownImages", false).put("pausedSites", new JSONArray()).put("captionlessVideos", new JSONArray())
+                .put("unknownImages", false).put("pausedSites", new JSONArray())
                 .put("catalogUpdate", "off");
             JSONObject w = o.optJSONObject("works");
             if (w != null) for (Iterator<String> i = w.keys(); i.hasNext(); ) {
@@ -128,12 +128,6 @@ final class Config {
             for (int i = 0; i < ps.length(); i++) if (ps.opt(i) instanceof String) out.put(ps.opt(i));
             settings.put("pausedSites", out);
         }
-        JSONArray cv = s.optJSONArray("captionlessVideos");
-        if (cv != null) {
-            Set<String> hosts = new java.util.LinkedHashSet<>();
-            for (int i = 0; i < cv.length(); i++) { String h = normHost(cv.opt(i)); if (h != null) hosts.add(h); }
-            settings.put("captionlessVideos", new JSONArray(hosts));
-        }
     }
 
     private static final java.util.regex.Pattern HOST = java.util.regex.Pattern.compile("[a-z0-9.-]{1,253}");
@@ -150,19 +144,12 @@ final class Config {
         return HOST.matcher(h).matches() && h.contains(".") || h.equals("localhost") ? h : null;
     }
 
-    /** Rule 10: the site a patched app answers to (contract), or null. The demo apps answer to demo.test. */
+    /** Rule 11: the site a patched app answers to (contract), or null. The demo apps answer to demo.test. */
     static String site(String pkg) {
         if (pkg.contains("twitter")) return "x.com";
         if (pkg.contains("instagram")) return "instagram.com";
         if (pkg.contains("youtube")) return "youtube.com";
         return pkg.startsWith("dev.spoilerblock.demo") ? "demo.test" : null;
-    }
-
-    /** Rule 10: whether video items with no caption are covered on this site. */
-    boolean captionless(String site) {
-        JSONArray a = settings.optJSONArray("captionlessVideos");
-        if (site != null && a != null) for (int i = 0; i < a.length(); i++) if (site.equals(a.optString(i))) return true;
-        return false;
     }
 
     // ---------- reading ----------

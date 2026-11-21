@@ -19,7 +19,8 @@ import ai.onnxruntime.OrtSession;
 /**
  * The image title check of src/background/engine.js (titleChecks + verdict): the SigLIP 2 vision tower's embedding of
  * the whole image squashed to size x size, scored against the shipped int8 title rows (dist data/clip-text.bin) with
- * the cut-offs and prompts of data/clip-meta.json. The session is passed in (CPU or accelerated, see Accel).
+ * the cut-offs and prompts of data/clip-meta.json, and the optional footage head (meta `foot`) of
+ * src/background/image-verdict.js. The session is passed in (CPU or accelerated, see Accel).
  */
 final class Clip {
     static final int UNKNOWN = -1; // media with no certain title: "Possible film, show or game image", never "I've seen it"
@@ -32,6 +33,8 @@ final class Clip {
     final int[] rowGroup;
     private final int[] rowFamily;
     private final double minScore, margin, mediaGate, titleGap;
+    private final double[] footW; // footage head: score = w . e + b on the L2-normalised embedding; null: no head in the meta
+    private final double footB, footCut;
 
     Clip(byte[] textBin, String metaJson) throws Exception {
         JSONObject m = new JSONObject(metaJson);
@@ -49,6 +52,11 @@ final class Clip {
         margin = m.getDouble("margin");
         mediaGate = m.getDouble("mediaGate");
         titleGap = m.getDouble("titleGap");
+        JSONObject f = m.optJSONObject("foot");
+        footW = f == null ? null : doubles(new JSONArray().put(f.getJSONArray("w")))[0];
+        footB = f == null ? 0 : f.getDouble("b");
+        footCut = f == null ? 0 : f.getDouble("cut");
+        if (footW != null && footW.length != dim) throw new IllegalArgumentException("clip-meta.json foot.w: " + footW.length + " numbers, want " + dim);
         if (textBin.length != n * dim) throw new IllegalArgumentException("clip-text.bin: " + textBin.length + " bytes, want " + n * dim);
         mat = textBin;
     }
@@ -73,7 +81,7 @@ final class Clip {
     }
 
     /**
-     * engine.js verdict(): hits as {group, score} (best first, up to 3 groups of one title family), {UNKNOWN, score}
+     * image-verdict.js scores() + verdict(): hits as {group, score} (best first, up to 3 groups of one title family), {UNKNOWN, score}
      * for media with no certain title, empty for an ordinary image. Scores are float32 like the JS Float32Array.
      */
     List<double[]> verdict(float[] v) {
@@ -81,6 +89,7 @@ final class Clip {
         for (float a : v) n2 += (double) a * a;
         double inv = 1 / Math.sqrt(n2);
         double ng = best(neg, v, inv), md = best(media, v, inv) - ng;
+        double foot = footW == null ? Double.NaN : dot(footW, v, inv) + footB;
         float[] sc = new float[n];
         int top = 0;
         for (int r = 0; r < n; r++) {
@@ -101,10 +110,18 @@ final class Clip {
             Map<Integer, Double> groups = new LinkedHashMap<>(); // new Map(...): first position, last value per group
             for (int r : rows) groups.put(rowGroup[r], fixed3(sc[r]));
             for (Map.Entry<Integer, Double> e : groups.entrySet()) if (hits.size() < 3) hits.add(new double[]{e.getKey(), e.getValue()});
-        } else if (md >= mediaGate) {
+        } else if (md >= mediaGate || (footW != null && foot >= footCut)) { // media-looking (posters, stills) or footage of a made work
             hits.add(new double[]{UNKNOWN, fixed3(sc[top])});
         }
         return hits;
+    }
+
+    /** The footage head's score of a raw embedding, as in verdict(); NaN when the meta has no head. */
+    double foot(float[] v) {
+        if (footW == null) return Double.NaN;
+        double n2 = 0;
+        for (float a : v) n2 += (double) a * a;
+        return dot(footW, v, 1 / Math.sqrt(n2)) + footB;
     }
 
     /** Number.prototype.toFixed(3), back to a number. */
@@ -112,12 +129,14 @@ final class Clip {
 
     private double best(double[][] vs, float[] v, double inv) {
         double m = -1;
-        for (double[] t : vs) {
-            double s = 0;
-            for (int j = 0; j < dim; j++) s += t[j] * v[j];
-            m = Math.max(m, s * inv);
-        }
+        for (double[] t : vs) m = Math.max(m, dot(t, v, inv));
         return m;
+    }
+
+    private double dot(double[] t, float[] v, double inv) {
+        double s = 0;
+        for (int j = 0; j < dim; j++) s += t[j] * v[j];
+        return s * inv;
     }
 
     private static double[][] doubles(JSONArray a) throws Exception {

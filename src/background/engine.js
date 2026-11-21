@@ -5,6 +5,7 @@ import { env, AutoTokenizer } from '../../vendor/transformers.js';
 import * as ort from '../../vendor/ort.wasm.bundle.min.mjs'; // the same module instance transformers.js uses
 import { recognize } from './ocr.js';
 import { squashCHW } from './pixels.js';
+import { scores, verdict } from './image-verdict.js';
 import '../shared/context-input.js'; // globalThis.SBContext
 
 const api = globalThis.browser ?? globalThis.chrome;
@@ -107,46 +108,13 @@ async function embed(bmps) {
   const out = (await sess.run({ [sess.inputNames[0]]: new ort.Tensor('float32', x, [bmps.length, 3, S, S]) }))[meta.output].data;
   return { meta, mat, out };
 }
-// an embedding -> cosine of every title row (int8), the best row, its margin over the generic prompts, its gap to the
-// best row of an unrelated title family, and how much the media prompts beat the generic ones
-function scores(meta, mat, v) {
-  let n2 = 0; for (const a of v) n2 += a * a;
-  const inv = 1 / Math.sqrt(n2), D = meta.dim;
-  const best = (vs) => { let m = -1; for (const t of vs) { let s = 0; for (let j = 0; j < D; j++) s += t[j] * v[j]; m = Math.max(m, s * inv); } return m; };
-  const neg = best(meta.neg), media = best(meta.media) - neg;
-  const sc = new Float32Array(meta.n);
-  let top = 0;
-  for (let r = 0; r < meta.n; r++) {
-    let s = 0; const o = r * D;
-    for (let j = 0; j < D; j++) s += mat[o + j] * v[j];
-    sc[r] = (s * inv) / 127;
-    if (sc[r] > sc[top]) top = r;
-  }
-  let second = -1;
-  for (let r = 0; r < meta.n; r++) if (meta.rowFamily[r] !== meta.rowFamily[top] && sc[r] > second) second = sc[r];
-  return { sc, top, neg, media, margin: sc[top] - neg, gap: sc[top] - second };
-}
-function verdict(meta, { sc, top, neg, media, margin, gap }, key) {
-  let hits = [];
-  if (sc[top] >= meta.minScore && margin >= meta.margin && gap >= meta.titleGap) {
-    // a title: up to 3 groups of the best row's family (rows within the gap) that also clear the margin
-    const rows = [];
-    for (let r = 0; r < meta.n; r++) if (sc[r] - neg >= meta.margin && sc[top] - sc[r] < gap) rows.push(r);
-    rows.sort((a, b) => sc[b] - sc[a]);
-    hits = [...new Map(rows.map((r) => [meta.rowGroup[r], +sc[r].toFixed(3)]))].slice(0, 3);
-  } else if (media >= meta.mediaGate) {
-    hits = [[-1, +sc[top].toFixed(3)]]; // looks like film/show/game media, no certain title (covered only if settings.unknownImages)
-  }
-  if (hits.length) console.debug('[SpolierBlock] image', key.slice(0, 80), hits, 'margin', margin.toFixed(3), 'gap', gap.toFixed(3));
-  return hits;
-}
 // Tools only (tools/bench-engine.mjs --stats): the verdict inputs for these image URLs, embedded as one batch, uncached.
 export async function titleStats(srcs) {
   const bmps = await Promise.all(srcs.map((u) => fetch(u, { cache: 'no-store' }).then((r) => r.blob()).then((b) => createImageBitmap(b))));
   const { meta, mat, out } = await embed(bmps);
   return srcs.map((_, b) => {
-    const { sc, top, media, margin, gap } = scores(meta, mat, out.subarray(b * meta.dim, (b + 1) * meta.dim));
-    return { group: meta.rowGroup[top], score: sc[top], margin, gap, media };
+    const { sc, top, media, foot, margin, gap } = scores(meta, mat, out.subarray(b * meta.dim, (b + 1) * meta.dim));
+    return { group: meta.rowGroup[top], score: sc[top], margin, gap, media, foot };
   });
 }
 

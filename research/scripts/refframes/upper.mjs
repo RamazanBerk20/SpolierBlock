@@ -4,7 +4,7 @@
 // usage (repo root): node research/scripts/refframes/upper.mjs
 import fs from 'node:fs';
 
-const E = 'research/data/refframes/emb', DIM = 768;
+const E = process.env.EMB ?? 'research/data/refframes/emb', DIM = 768;
 const vids = JSON.parse(fs.readFileSync('research/scripts/refframes/videos.json', 'utf8'));
 const crc = (s) => { let c = ~0; for (const b of Buffer.from(s)) { c ^= b; for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; };
 const dot = (a, b) => { let s = 0; for (let i = 0; i < DIM; i++) s += a[i] * b[i]; return s; };

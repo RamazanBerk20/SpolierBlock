@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
-# Rule 11, "Not this", on the installed demo (first flavour, NotThis.java): taps "Not this" on a covered Breaking Bad
-# row from @alpha_fan; every such row must uncover while @beta_fan's Breaking Bad rows and @alpha_fan's The Last of Us
-# rows stay covered, and once the demo removes the key every row is covered again. The demo checks every frame.
+# Rule 11, "Not this", on the installed demo (first flavour, NotThis.java): taps "Show once" on a covered Breaking Bad
+# row from @alpha_fan, then the "Not this" of its pill (a cover has none); every such row must uncover while @beta_fan's
+# Breaking Bad rows and @alpha_fan's The Last of Us rows stay covered, and once the demo removes the key every row is
+# covered again (but the one shown once, which keeps its pill). The demo checks every frame.
 set -euo pipefail
+export LC_ALL=C # [a-z] leaves out "i" in a Turkish locale
 p=dev.spoilerblock.demo
 adb shell am force-stop $p
 adb logcat -c
 adb shell am start -W -n $p/.MainActivity --es screen notthis >/dev/null
-xy=""
-for i in $(seq 1 25); do
-  xy=$(adb logcat -d -s SBDemo:I | sed -n 's/.*NOTTHIS tap \([0-9]*\) \([0-9]*\).*/\1 \2/p' | tail -1)
-  [ -n "$xy" ] && break
-  sleep 1
+n=0
+for i in $(seq 1 75); do # the demo logs each tap it wants: Show once, then the pill's Not this
+  taps=$(adb logcat -d -s SBDemo:I | sed -n 's/.*NOTTHIS tap \([a-z]*\) \([0-9]*\) \([0-9]*\).*/\1 \2 \3/p')
+  c=$(grep -c . <<<"$taps" || true)
+  if [ "$c" -gt "$n" ]; then
+    n=$((n + 1))
+    read -r what x y <<<"$(sed -n "${n}p" <<<"$taps")"
+    echo "tap $what at $x $y"
+    adb shell input tap "$x" "$y"
+  fi
+  [ "$n" = 2 ] && break
+  sleep 0.4
 done
-[ -n "$xy" ] || { echo "no covered @alpha_fan row with a Not this button"; adb logcat -d -s SBDemo:* | tail -5; echo FAIL; exit 1; }
-echo "tap Not this at $xy"
-adb shell input tap $xy
+[ "$n" = 2 ] || { echo "no Show once and pill Not this on an @alpha_fan row"; adb logcat -d -s SBDemo:* | tail -5; echo FAIL; exit 1; }
 sleep 2.5
 adb shell input swipe 540 1600 540 900 400; sleep 2 # other rows of the same source, bound after the tap
 adb shell input swipe 540 900 540 1600 400

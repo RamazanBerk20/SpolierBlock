@@ -3,16 +3,16 @@
 
 export const TYPES = ['movie', 'tv', 'game', 'book', 'anime', 'manga', 'comic'];
 export const DEFAULTS = Object.freeze({
-  enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], captionlessVideos: [],
-  catalogUpdate: 'off',
+  enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], catalogUpdate: 'off',
 });
 const UPDATES = ['off', 'daily', 'weekly', 'monthly'];
-const SITE_LISTS = ['pausedSites', 'captionlessVideos']; // host names: normHost, deduplicated
+const SITE_LISTS = ['pausedSites']; // host names: normHost, deduplicated
 export const FORMAT = 'spolierblock', VERSION = 1;
 
 export const withDefaults = (s) => {
   const out = { ...DEFAULTS, ...(s && typeof s === 'object' ? s : {}) };
   for (const k of SITE_LISTS) if (!Array.isArray(out[k])) out[k] = [];
+  delete out.captionlessVideos; // rule 10, removed after 0.2.5: an older stored config drops it
   return out;
 };
 

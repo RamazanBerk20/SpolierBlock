@@ -48,8 +48,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     volatile Matcher matcher;
     volatile Config.Works works; // the config seen through the matcher's work list
     boolean enabled, scanImages, blockUnlisted, unknownImages;
-    boolean captionless; // rule 10 is on for this app's site
-    final String site; // the site this app answers to in settings.captionlessVideos, or null
+    final String site; // the site this app answers to (rule 11's keys), or null
     int generation; // bumped when the config, the index or a verdict changes: every item is re-evaluated
     // "Show once": posts shown this session (Scanner.shownKey), the last 500
     final Set<String> revealed = Collections.newSetFromMap(new java.util.LinkedHashMap<String, Boolean>() {
@@ -116,7 +115,6 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         scanImages = c.bool("scanImages");
         blockUnlisted = c.bool("blockUnlisted");
         unknownImages = c.bool("unknownImages");
-        captionless = c.captionless(site);
         Matcher m = matcher;
         if (m != null) works = new Config.Works(c, m.ids);
     }

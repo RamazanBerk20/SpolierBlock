@@ -45,6 +45,14 @@ console.log(`index: ${keys} keys, ${meta.groups.length} groups, ${(bin.byteLengt
 const { items, rowGroup } = clipRows(built, clipN);
 const clip = packClipText(await buildClipText(items), rowGroup, rowFamilies(meta.groups, rowGroup),
   { ...CUT, size: VISION.size, mean: VISION.mean, std: VISION.std, output: VISION.output });
+// the footage head (research/scripts/refframes/head.mjs): one linear layer on the same normalised image embedding
+const head = JSON.parse(fs.readFileSync('data/footage-head.json', 'utf8'));
+if (head.dim !== clip.meta.dim || !Array.isArray(head.w) || head.w.length !== clip.meta.dim || !head.w.every(Number.isFinite)
+  || !Number.isFinite(head.b) || !Number.isFinite(head.cut)) {
+  console.error(`data/footage-head.json: expected dim ${clip.meta.dim}, w of ${clip.meta.dim} finite numbers, finite b and cut`);
+  process.exit(1);
+}
+clip.meta.foot = { w: head.w, b: head.b, cut: head.cut };
 fs.writeFileSync(`${data}/clip-text.bin`, Buffer.from(clip.bin.buffer));
 fs.writeFileSync(`${data}/clip-meta.json`, JSON.stringify(clip.meta));
 console.log(`image title matrix: ${clip.meta.n} names`);

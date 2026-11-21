@@ -62,17 +62,18 @@ final class Cover {
         row.setPadding(0, dp(8), 0, 0);
         once = button(ctx, p, "Show once");
         seen = button(ctx, p, "I've seen it");
-        not = button(ctx, p, "Not this");
         manage = button(ctx, p, "⋮"); // vertical ellipsis
         manage.setContentDescription("SpolierBlock settings");
         manage.setPadding(dp(12), 0, dp(12), 0);
         row.addView(once);
         row.addView(seen);
-        row.addView(not);
         row.addView(manage);
+        // the pill's buttons (contract: a cover has no "Not this", the post cannot be judged unseen)
+        not = button(ctx, p, "Not this");
         again = button(ctx, p, "Cover again");
         more = button(ctx, p, "⋯"); // a pill too wide for its item: tapped, it shows the two buttons
         more.setContentDescription("SpolierBlock: Not this or Cover again");
+        row.addView(not);
         row.addView(again);
         row.addView(more);
         again.setVisibility(View.GONE);
@@ -98,7 +99,7 @@ final class Cover {
         once.setVisibility(on ? View.GONE : View.VISIBLE);
         manage.setVisibility(on ? View.GONE : View.VISIBLE);
         seen.setVisibility(!on && marks.length > 0 ? View.VISIBLE : View.GONE);
-        not.setVisibility(marks.length > 0 && notKey != null ? View.VISIBLE : View.GONE);
+        not.setVisibility(on && marks.length > 0 && notKey != null ? View.VISIBLE : View.GONE);
         again.setVisibility(on ? View.VISIBLE : View.GONE);
         more.setVisibility(View.GONE);
         if (on) {
@@ -122,7 +123,6 @@ final class Cover {
         } else if (was) {
             root.setBackgroundColor(palette.cover);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            not.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
             compact = null; // compact() and fit() set the cover's sizes again
             expanded = false;
         }
@@ -144,7 +144,7 @@ final class Cover {
     java.util.List<View> a11yParts() {
         java.util.List<View> l = new java.util.ArrayList<>();
         if (!pill) l.add(msg);
-        for (View b : new View[]{once, seen, not, manage, again, more}) if (b.getVisibility() == View.VISIBLE && b.getWidth() > 0) l.add(b);
+        for (View b : new View[]{once, seen, manage, not, again, more}) if (b.getVisibility() == View.VISIBLE && b.getWidth() > 0) l.add(b);
         return l;
     }
 
@@ -159,7 +159,7 @@ final class Cover {
     void press(View b) {
         if (b == once) scanner.revealOnce(this);
         else if (b == seen && marks.length > 0) seen();
-        else if (b == not && marks.length > 0 && notKey != null) scanner.notThis(this, marks);
+        else if (b == not && pill && marks.length > 0 && notKey != null) scanner.notThis(this, marks);
         else if (b == again && pill) scanner.coverAgain(this);
         else if (b == more && pill) { expanded = true; layout(true); }
         else if (b == manage) {
@@ -215,7 +215,7 @@ final class Cover {
 
     /**
      * Returns true when what the cover says, or whether it is a pill, changed. marks: the name groups "I've seen it" and
-     * "Not this" act on; pill: the item is shown once and only the pill is drawn.
+     * the pill's "Not this" act on; pill: the item is shown once and only the pill is drawn.
      */
     boolean show(String message, int[] marks, String text, boolean pill) {
         this.text = text;
@@ -251,7 +251,7 @@ final class Cover {
      */
     private void compact(boolean on) {
         int h = item.getHeight();
-        for (TextView b : new TextView[]{once, seen, not, manage}) b.setMinHeight(on ? Math.max(dp(24), Math.min(dp(44), h - dp(4))) : dp(44));
+        for (TextView b : new TextView[]{once, seen, manage}) b.setMinHeight(on ? Math.max(dp(24), Math.min(dp(44), h - dp(4))) : dp(44));
         if (compact != null && compact == on) return;
         compact = on;
         root.setOrientation(on ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
@@ -308,17 +308,17 @@ final class Cover {
     }
 
     /**
-     * Four buttons can be wider than a narrow item: their side padding shrinks first, then the text buttons share
+     * Three buttons can be wider than a narrow item: their side padding shrinks first, then the text buttons share
      * what is left after the settings button (ellipsized), so the settings button is never pushed out.
      */
     private void fit(int w) {
         int avail = Math.max(0, w - root.getPaddingLeft() - root.getPaddingRight() - (compact ? dp(96) : 0)); // compact: room for the message
         boolean squeeze = false;
         for (int pad : new int[]{16, 8, 4}) {
-            for (TextView b : new TextView[]{once, seen, not}) b.setPadding(dp(pad), 0, dp(pad), 0);
+            for (TextView b : new TextView[]{once, seen}) b.setPadding(dp(pad), 0, dp(pad), 0);
             manage.setPadding(dp(Math.min(pad, 12)), 0, dp(Math.min(pad, 12)), 0);
             int need = 0;
-            for (TextView b : new TextView[]{once, seen, not, manage}) {
+            for (TextView b : new TextView[]{once, seen, manage}) {
                 if (b.getVisibility() != View.VISIBLE) continue;
                 b.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
                 need += b.getMeasuredWidth() + dp(8);
@@ -326,7 +326,7 @@ final class Cover {
             if (need <= avail) break;
             squeeze = pad == 4;
         }
-        for (TextView b : new TextView[]{once, seen, not}) {
+        for (TextView b : new TextView[]{once, seen}) {
             LinearLayout.LayoutParams lp = squeeze ? new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1)
                 : new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.setMargins(dp(4), 0, dp(4), 0);
@@ -351,7 +351,7 @@ final class Cover {
 
     /** x, y in screen coordinates; the gesture was already taken away from the app. */
     void tap(float x, float y) {
-        for (View b : new View[]{once, seen, not, manage, again, more}) if (hit(b, x, y)) { press(b); return; }
+        for (View b : new View[]{once, seen, manage, not, again, more}) if (hit(b, x, y)) { press(b); return; }
     }
 
     private boolean hit(View b, float x, float y) {

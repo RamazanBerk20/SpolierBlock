@@ -15,6 +15,7 @@ import sharp from 'sharp';
 import * as ort from 'onnxruntime-web';
 import { recognize } from '../../src/background/ocr.js';
 import { squashCHW } from '../../src/background/pixels.js';
+import { scores, verdict as verdictOf } from '../../src/background/image-verdict.js';
 
 ort.env.wasm.numThreads = 1;
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -34,33 +35,13 @@ async function embed(px) {
   for (let i = 0; i < P; i++) for (let c = 0; c < 3; c++) x[c * P + i] = (px[i * 3 + c] / 255 - meta.mean[c]) / meta.std[c];
   return (await sess.run({ [sess.inputNames[0]]: new ort.Tensor('float32', x, [1, 3, S, S]) }))[meta.output].data;
 }
-// engine.js verdict(), verbatim but for the log line
-function verdict(v) {
-  let n2 = 0; for (const a of v) n2 += a * a;
-  const inv = 1 / Math.sqrt(n2), D = meta.dim;
-  const best = (vs) => { let m = -1; for (const t of vs) { let s = 0; for (let j = 0; j < D; j++) s += t[j] * v[j]; m = Math.max(m, s * inv); } return m; };
-  const neg = best(meta.neg), media = best(meta.media) - neg;
-  const sc = new Float32Array(meta.n);
-  let top = 0;
-  for (let r = 0; r < meta.n; r++) {
-    let s = 0; const o = r * D;
-    for (let j = 0; j < D; j++) s += mat[o + j] * v[j];
-    sc[r] = (s * inv) / 127;
-    if (sc[r] > sc[top]) top = r;
-  }
-  let second = -1;
-  for (let r = 0; r < meta.n; r++) if (meta.rowFamily[r] !== meta.rowFamily[top] && sc[r] > second) second = sc[r];
-  const margin = sc[top] - neg, gap = sc[top] - second;
-  let hits = [];
-  if (sc[top] >= meta.minScore && margin >= meta.margin && gap >= meta.titleGap) {
-    const rows = [];
-    for (let r = 0; r < meta.n; r++) if (sc[r] - neg >= meta.margin && sc[top] - sc[r] < gap) rows.push(r);
-    rows.sort((a, b) => sc[b] - sc[a]);
-    hits = [...new Map(rows.map((r) => [meta.rowGroup[r], +sc[r].toFixed(3)]))].slice(0, 3);
-  } else if (media >= meta.mediaGate) {
-    hits = [[-1, +sc[top].toFixed(3)]];
-  }
-  return { hits, top: sc[top], neg, media, margin, gap };
+// the shipped verdict (src/background/image-verdict.js), without its debug log line
+console.debug = () => {};
+// (and the verdict without the footage head, the rule before it: how many fixtures the head changes)
+const noFoot = { ...meta, foot: undefined };
+function verdict(v, file) {
+  const s = scores(meta, mat, v);
+  return { hits: verdictOf(meta, s, file), old: verdictOf(noFoot, s, file), top: s.sc[s.top], neg: s.neg, media: s.media, foot: s.foot, margin: s.margin, gap: s.gap };
 }
 
 const fit = async (file, max, alpha) => {
@@ -76,6 +57,7 @@ const DIR = path.join(repo, 'test/fixtures/images');
 const labels = JSON.parse(fs.readFileSync(path.join(DIR, 'labels.json'), 'utf8'));
 const cases = [], ocrCases = [];
 const tally = { titled: 0, generic: 0, wrong: 0, missed: 0, ordinaryBlocked: 0 };
+const byHead = [];
 const det = await session('models/ocr/det.onnx'), rec = await session('models/ocr/rec.onnx');
 const chars = fs.readFileSync(path.join(dist, 'models/ocr/dict.txt'), 'utf8').split('\n');
 for (const [file, want] of Object.entries(labels)) {
@@ -89,12 +71,13 @@ for (const [file, want] of Object.entries(labels)) {
   for (let i = 0; i < S * S; i++) for (let c = 0; c < 3; c++) px[i * 3 + c] = Math.round(u8[c * S * S + i]);
   fs.writeFileSync(path.join(out, file + '.rgb'), px);
   const v = await embed(px);
-  const { hits, top, neg, media, margin, gap } = verdict(v);
+  const { hits, old, top, neg, media, foot, margin, gap } = verdict(v, file);
+  if (JSON.stringify(old) !== JSON.stringify(hits)) byHead.push(`${file} (${want ? 'media' : 'ordinary'}, foot ${foot.toFixed(3)})`);
   let n2 = 0; for (const a of v) n2 += a * a;
   let kind = 'missed';
   if (hits.length) kind = hits[0][0] === -1 ? 'generic' : index.groups[hits[0][0]][0].toLowerCase() === String(want).toLowerCase() || index.groups[hits[0][0]].slice(1).some((w) => index.titles[w] === want) ? 'titled' : 'wrong';
   if (!want) { if (hits.length) tally.ordinaryBlocked++; } else tally[kind]++;
-  cases.push({ file, want, hits, kind: want ? kind : hits.length ? 'blocked' : 'ok', srcW: src.w, srcH: src.h, top, neg, media, margin, gap,
+  cases.push({ file, want, hits, kind: want ? kind : hits.length ? 'blocked' : 'ok', srcW: src.w, srcH: src.h, top, neg, media, foot, margin, gap,
     embed: Array.from(v, (a) => a / Math.sqrt(n2)) });
 }
 // OCR: the text fixtures (not all of them are labelled) and the labelled spoiler pictures
@@ -109,6 +92,8 @@ fs.writeFileSync(path.join(out, 'clip-cases.json'), JSON.stringify(cases));
 fs.writeFileSync(path.join(out, 'ocr-cases.json'), JSON.stringify(ocrCases));
 const media = cases.filter((c) => c.want).length;
 console.log(`image vectors: ${media} media: ${tally.titled} titled / ${tally.generic} generic / ${tally.wrong} wrong / ${tally.missed} missed; ` +
-  `${tally.ordinaryBlocked} of ${cases.length - media} ordinary blocked; ${ocrCases.length} OCR images -> ${out}`);
+  `${tally.ordinaryBlocked} of ${cases.length - media} ordinary blocked; ${ocrCases.length} OCR images; ` +
+  `footage head${meta.foot ? ` (cut ${meta.foot.cut})` : ' absent'} changes ${byHead.length} verdicts -> ${out}`);
+for (const b of byHead) console.log(`  footage head: ${b}`);
 for (const c of cases) if (c.hits.length) console.log(`  ${c.kind.padEnd(8)} ${c.file} -> ${c.hits.map(([g, s]) => `${g === -1 ? '(unrecognised)' : index.groups[g][0]} ${s}`).join(', ')}`);
 for (const o of ocrCases) console.log(`  ocr ${o.file}: ${JSON.stringify(o.text)}`);

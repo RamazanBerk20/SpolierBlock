@@ -8,14 +8,16 @@
 set -u
 D=research/data/refframes
 mkdir -p "$D/frames" "$D/dl" "$D/claim"
-node -e 'for (const v of require("./research/scripts/refframes/videos.json")) console.log(v.slice(0, 4).join("\t"))' |
+# VIDEOS=videos2.json LEN=150 for the wider set of footage.mjs (search2.mjs)
+V=${VIDEOS:-videos.json} LEN=${LEN:-360}
+node -e 'for (const v of require("./research/scripts/refframes/" + process.argv[1])) console.log(v.slice(0, 4).join("\t"))' "$V" |
 while IFS=$'\t' read -r id cat split sec; do
   out="$D/frames/$id"
   [ -f "$out/.done" ] && continue
   mkdir "$D/claim/$id" 2>/dev/null || continue
   rm -rf "$out" "$D/dl/$id".*; mkdir -p "$out"
-  args=(); [ -n "$sec" ] && args=(--download-sections "*${sec%-*}-$(( ${sec%-*} + 360 ))")
-  yt-dlp -q --no-warnings --no-playlist -f 'bv*[height<=360]/b[height<=360]/wv*' "${args[@]}" -o "$D/dl/$id.%(ext)s" -- "$id" < /dev/null \
+  args=(); [ -n "$sec" ] && args=(--download-sections "*${sec%-*}-$(( ${sec%-*} + LEN ))")
+  timeout 300 yt-dlp -q --no-warnings --no-playlist --socket-timeout 30 -f 'bv*[height<=360]/b[height<=360]/wv*' "${args[@]}" -o "$D/dl/$id.%(ext)s" -- "$id" < /dev/null \
     || { echo "FAIL download $id ($cat)"; continue; }
   fps=0.4; [ "$split" = ref ] && fps=1
   f=$(ls "$D/dl/$id".* | head -1)

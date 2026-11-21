@@ -134,7 +134,6 @@ public class MainActivity extends Activity {
             return;
         }
         if ("reels".equals(getIntent().getStringExtra("screen"))) { setContentView(Reels.build(this)); return; }
-        if ("captionless".equals(getIntent().getStringExtra("screen"))) { setContentView(Captionless.build(this, getIntent().getBooleanExtra("listed", true))); return; } // rule 10
         if ("notthis".equals(getIntent().getStringExtra("screen"))) { setContentView(NotThis.build(this)); return; } // rule 11
         if ("pill".equals(getIntent().getStringExtra("screen"))) { setContentView(Pill.build(this)); return; } // the pill after Show once
         if ("watch".equals(getIntent().getStringExtra("screen"))) { setContentView(Watch.build(this)); return; } // a pinned player over a list
@@ -155,7 +154,7 @@ public class MainActivity extends Activity {
         if (Watch.playerTaps > 0 || Watch.playerShades > 0) Log.i(TAG, "watch: " + Watch.playerTaps + " taps reached the player, " + Watch.playerShades + " shades on it");
         Log.i(TAG, "frame check summary: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches, " +
             blockerLayouts + " blocker layouts, " + blockerDraws + " blocker draws; audio: " + Sound.checks + " checks, " + Sound.mismatches + " mismatches; " +
-            "model rows covered: " + modelCovered + "; captionless rows covered: " + Captionless.coveredBinds + " of " + Captionless.binds + " bound");
+            "model rows covered: " + modelCovered);
     }
 
     /** Every drawn frame: each visible post is covered iff expected (the blocker hides covered items from a11y). */

@@ -22,7 +22,6 @@ same JSON (local preferences, or the companion app's provider when it is install
     "style": "all",                // default style: "all" | "spoilers"
     "unknownImages": false,        // cover film/show/game-looking images that no title could be put on
     "pausedSites": [],             // extension only
-    "captionlessVideos": [],       // sites where a video post with no caption is covered (rule 10): "x.com", ...
     "catalogUpdate": "off"         // "off" | "daily" | "weekly" | "monthly"
   },
   "learned": {                     // what the user's reports taught it (rule 11); everything stays on the device
@@ -80,6 +79,13 @@ group to works of that type ("the Minecraft movie", "Assassin's Creed film").
 5. An image identified as a covered group's work covers regardless of style.
 6. An image that looks like film/show/game media but has no title covers only when `settings.unknownImages`, and never
    when the post's text names a seen work and no covered one.
+   "Looks like" is either of two checks on the picture model's embedding of an image or a sampled video frame, the
+   same on both platforms: the media prompts beat the generic prompts by `mediaGate` (posters, stills), or the footage
+   head scores at or above its cut-off. The footage head is one linear layer, `score = w · e + b` on the L2-normalised
+   embedding `e`, shipped as `foot: { w, b, cut }` in `clip-meta.json` (source: `data/footage-head.json`). It answers
+   "is this footage of a game, an anime, an animation or a film" and never which one, so it needs no knowledge of the
+   work and covers footage of works that did not exist when it was trained. A build without `foot` uses the first
+   check alone.
 7. Text outranks pictures, and typed text outranks text read from pictures.
    - When the post's own text names a seen work and no covered one, a title put on its picture (rule 5) and names found
      only in text read from its pictures (OCR) do not cover.
@@ -105,21 +111,17 @@ group to works of that type ("the Minecraft movie", "Assassin's Creed film").
    no media word from a channel named like the work ("Minecraft" from the channel "Minecraft"). Both platforms strip
    U+0002 from page and app text. No uploader known means no U+0002 part and the rules as before.
 
-10. Videos with no caption (0.2.4). The picture model cannot tell which game or film bare footage is from, so the user
-    may list sites in `settings.captionlessVideos` where a post that holds a video and says nothing is covered. Sites
-    are host names as in `pausedSites` (`x.com`, `instagram.com`, `youtube.com`, `reddit.com`, any other host in the
-    extension); on Android the patched apps answer to `x.com`, `instagram.com` and `youtube.com`. On a listed site a
-    post covers when all of these hold: it holds a video (extension: a `video` element in the block; Android: a video
-    surface in the item); no rule above covers it; its own text names no work, seen or not; and it has no caption. No
-    caption means: no single run of the post's own text has 4 or more words (a run is one text element; names,
-    handles, times, counters and button labels are short), or, where the site marks the caption, that element is
-    missing or empty (x.com: `[data-testid="tweetText"]`). The label is `Video with no caption`, with `Show once` and
-    the settings button and no `I've seen it`. `Show once` works as for every cover. Default: the list is empty.
+10. Removed. Until 0.2.5 a post that held a video and no caption could be covered on sites the user listed
+    (`settings.captionlessVideos`, label `Video with no caption`). It judged a post by what it did not say, so it
+    covered unrelated videos and missed footage posted under an unrelated caption. The key is no longer read or
+    written; an older config or export file that has it is accepted and the key is dropped. The number stays so that
+    rule 11 keeps its name.
 
 11. Reports (0.2.4). Two things the user can teach it. All of them are stored in `learned`, exported and imported
     with the config (`Merge` unions them), listed in the settings with a way to remove each, and never leave the device.
-    - **Wrong cover.** Every cover that names works (not the unidentified image, not the video with no caption) has a
-      fourth button, `Not this`. It records, for every work of the cover's groups, where the name does not mean that
+    - **Wrong cover.** `Not this` is offered only for a post the user has looked at: on the pill of a post shown once
+      from a cover that names works (see "Cover wording"), never on the cover itself, where the post cannot be judged.
+      It records, for every work of the cover's groups, where the name does not mean that
       work: the post's source when the platform knows it, otherwise the whole site. The key is `{site}/{source}` or
       `{site}`, lower-case; the site is the host name as in `pausedSites` (on Android the app's site: `x.com`,
       `instagram.com`, `youtube.com`); the source is the YouTube channel name (the uploader of rule 9) or, on x.com,
@@ -173,14 +175,13 @@ Identical strings on both platforms. `{t}` is the group label; with several grou
 | style `spoilers`, classifier said spoiler | `Spoiler about {t}` |
 | image identified as the work | `Image from {t}` |
 | unidentified media image | `Possible film, show or game image` |
-| video with no caption on a listed site (rule 10) | `Video with no caption` |
 
 Pictures still being judged: both platforms shade the picture itself (the extension dims it, Android paints an opaque
 shade over it, with no text and no buttons) and leave the post's text readable; only a verdict covers the post. A picture
 whose check fails stays shaded on Android; the extension reveals it after its retries.
 
-Buttons: `Show once`, `I've seen it` and `Not this` (both absent for the unidentified image and the video with no caption; rule 11) and a settings button (`⋮`, accessible name
-`SpolierBlock settings`).
+Buttons: `Show once`, `I've seen it` (absent for the unidentified image) and a settings button (`⋮`, accessible name
+`SpolierBlock settings`). A cover has no `Not this`: that button is on the pill below, after `Show once`.
 
 `I've seen it` on a group with one work marks it seen at once when its series has no other work that is not yet seen. When
 the series has more unseen works (a post about "Resident Evil Village"), the picker opens instead, so the user can tick
@@ -202,9 +203,9 @@ matched name.
 
 After `Show once` on a cover that names works, the shown post keeps a small pill in its top corner at the end of the
 line (right in left-to-right layouts), so the user can judge the post after seeing it (0.2.5): the buttons `Not this`
-(rule 11, exactly as on the cover) and `Cover again` (forgets the `Show once` for this post, the cover returns). The pill
+(rule 11) and `Cover again` (forgets the `Show once` for this post, the cover returns). The pill
 is drawn over the post like the cover is (it never changes a measured size), takes taps only on itself, and stays as long
-as the post is shown once. A post shown from the unidentified-image cover or the video-with-no-caption cover has no pill.
+as the post is shown once. A post shown from the unidentified-image cover has no pill.
 
 `Show once` is remembered for the post, not for the view that happens to draw it: it is keyed by the post's own text, it
 survives the host recycling or rebinding the view and late picture verdicts, and it lasts until the page or app process

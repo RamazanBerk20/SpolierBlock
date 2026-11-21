@@ -47,9 +47,6 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     private final List<View> media = new ArrayList<>();
     private final List<View> loose = new ArrayList<>(); // cards outside every list (an end screen's, an overlay's): items too
     private final List<View> videos = new ArrayList<>(); // the window's video surfaces now (uncoveredVideo)
-    // rule 10: per item view, the text (shownKey) it was covered for as a video with no caption, kept while its player
-    // comes and goes and across a detach (a list's cached row comes back without a rebind, before its player)
-    private final Map<View, String> noCaption = new WeakHashMap<>();
     // stats for logcat
     private long statFrames, statNs, statMaxNs, statReads, statReadNs, statEvals, statEvalNs, statLast = SystemClock.uptimeMillis();
 
@@ -86,7 +83,6 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         shades.clear();
         for (View v : new ArrayList<>(pictureShades.keySet())) unshade(v);
         items.clear();
-        noCaption.clear();
     }
 
     // ---------- pictures still being judged (as the extension dims unjudged media) ----------
@@ -168,7 +164,6 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         }
         Matcher m = sb.matcher;
         sb.images.capturedThisFrame = false;
-        videosFresh = false;
         // index of the containers list grows while we read items: nested lists found inside items are judged too
         for (int ci = 0; ci < containers.size(); ci++) {
             View c = containers.get(ci);
@@ -551,12 +546,6 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         } else if (unknown && Config.coverUnknownImage(sb.unknownImages, st.ownSeenOnly, !all.isEmpty() || !spoilers.isEmpty())) {
             msg = "Possible film, show or game image";
         }
-        // rule 10, lowest: on a listed site, a video item whose text has no run of 4+ words and names no work, seen or not
-        if (msg == null && sb.captionless && texts.maxWords < 4) {
-            String k = shownKey(typed, ""); // counters tick: the post stays the same
-            if (hasVideo(it) || floatingVideo(it)) noCaption.put(it, k);
-            if (k.equals(noCaption.get(it)) && !(media.isEmpty() ? namesWork(m, text, typed, v, where) : st.ownNames)) msg = "Video with no caption";
-        }
         shadePictures(it, msg == null ? toShade : new ArrayList<>()); // pending pictures are shaded, not the whole post
         String reveal = shownKey(text, key); // "Show once" is for this post, whatever its counters, players and pictures do next
         Cover cv = coverOf(it);
@@ -588,33 +577,6 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         String k = own.replaceAll("\\d[\\d.,:]*", "#").replaceAll("\\s+", " ").trim();
         for (int i = 0; i < k.length(); i++) if (Character.isLetter(k.charAt(i))) return k;
         return "\u0000" + media;
-    }
-
-    /** Rule 10 when no picture made judge ask ownNames: whether the own text names any work, seen or not. */
-    private boolean namesWork(Matcher m, String text, String typed, Config.Works v, String[] where) {
-        List<int[]> unsure = new ArrayList<>();
-        for (int g : m.evaluate(typed, noneSeen(m), unsure)) if (!Config.notHere(m.groupWorks(g), v, where)) return true;
-        for (int g : sb.contextGroups(m, text, unsure, false)) if (!Config.notHere(m.groupWorks(g), v, where)) return true;
-        return false;
-    }
-
-    private boolean videosFresh; // videos holds this frame's surfaces (floatingVideo)
-
-    /**
-     * Rule 10: a video surface outside the item that lies (>= 90 %) over its visible part and is at least 40 % of its
-     * size: the app's shared player floating over the row (YouTube's inline preview), as shadeFloaters sees it.
-     */
-    private boolean floatingVideo(View it) {
-        Rect ri = new Rect(), rv = new Rect();
-        if (!visibleOnScreen(it, ri)) return false;
-        if (!videosFresh) { videos.clear(); surfaces(decor); videosFresh = true; }
-        long ia = (long) it.getWidth() * it.getHeight();
-        for (View v : videos) {
-            if (inside(v, it) || (long) v.getWidth() * v.getHeight() * 10 < ia * 4 || !visibleOnScreen(v, rv)) continue;
-            long va = (long) rv.width() * rv.height();
-            if (rv.intersect(ri) && (long) rv.width() * rv.height() * 10 >= va * 9) return true;
-        }
-        return false;
     }
 
     private boolean[] noneSeen; // for rules 6 and 7's "names a work", seen or not
