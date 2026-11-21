@@ -27,7 +27,7 @@ final class NotThis {
     private static int phase, uncoveredChecks, coveredAgainChecks;
     private static long since;
 
-    private static Object store(android.content.Context c) throws Exception {
+    static Object store(android.content.Context c) throws Exception {
         Class<?> k = Class.forName("dev.spoilerblock.Store");
         java.lang.reflect.Method get = k.getDeclaredMethod("get", android.content.Context.class);
         get.setAccessible(true);
@@ -49,23 +49,27 @@ final class NotThis {
         m.invoke(store, p);
     }
 
-    /** Every learned.not entry with KEY removed (keep = false), as the settings' remove control writes it. */
-    private static void dropKey(Object store) throws Exception {
+    /** Every learned.not entry with the key removed (keep = false), as the settings' remove control writes it. */
+    static void dropKey(Object store) throws Exception { dropKey(store, KEY); }
+
+    static void dropKey(Object store, String key) throws Exception {
         JSONObject not = not(store), out = new JSONObject();
         for (java.util.Iterator<String> i = not.keys(); i.hasNext(); ) {
             String id = i.next();
             JSONArray a = not.getJSONArray(id), rest = new JSONArray();
-            for (int k = 0; k < a.length(); k++) if (!KEY.equals(a.getString(k))) rest.put(a.getString(k));
+            for (int k = 0; k < a.length(); k++) if (!key.equals(a.getString(k))) rest.put(a.getString(k));
             if (rest.length() != a.length()) out.put(id, rest.length() == 0 ? JSONObject.NULL : rest);
         }
         if (out.length() > 0) patch(store, new JSONObject().put("learned", new JSONObject().put("not", out)));
     }
 
-    private static boolean hasKey(Object store) throws Exception {
+    static boolean hasKey(Object store) throws Exception { return hasKey(store, KEY); }
+
+    static boolean hasKey(Object store, String key) throws Exception {
         JSONObject not = not(store);
         for (java.util.Iterator<String> i = not.keys(); i.hasNext(); ) {
             JSONArray a = not.getJSONArray(i.next());
-            for (int k = 0; k < a.length(); k++) if (KEY.equals(a.getString(k))) return true;
+            for (int k = 0; k < a.length(); k++) if (key.equals(a.getString(k))) return true;
         }
         return false;
     }

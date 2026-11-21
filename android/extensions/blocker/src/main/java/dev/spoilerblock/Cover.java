@@ -18,13 +18,19 @@ import android.widget.TextView;
  * popups) hit-test the buttons, and CoverA11y gives them to TalkBack. Nothing here touches
  * the item's layout: the overlay is outside the host's measure/layout pass, so the item keeps its size and the list
  * never re-lays out because of a cover.
+ * After "Show once" on a cover that names works the same object turns into a pill (contract, cover wording): a small
+ * translucent box in the item's top corner at the end of the line with "Not this" and "Cover again", drawn over the
+ * shown content; the scanner gives it only the taps inside it.
  */
 final class Cover {
     final Scanner scanner;
     final View item;
     private final ViewGroup host; // item itself, or its list when the item is a plain View (no ViewGroupOverlay)
     private final LinearLayout root, row;
-    private final TextView msg, once, seen, not, manage;
+    private final TextView msg, once, seen, not, manage, again, more;
+    boolean pill; // shown once: only the pill is drawn
+    private boolean expanded; // a narrow item's pill after its "⋯" was tapped
+    private int lw = -1, lh, lx, ly; // the item's size and position at the last layout
     String notKey; // rule 11: the item's most specific "Not this" key ("{site}/{source}" or "{site}"), or null
     private String message;
     private int[] marks = new int[0]; // the name groups "I've seen it" marks; none for an unidentified image
@@ -64,6 +70,13 @@ final class Cover {
         row.addView(seen);
         row.addView(not);
         row.addView(manage);
+        again = button(ctx, p, "Cover again");
+        more = button(ctx, p, "⋯"); // a pill too wide for its item: tapped, it shows the two buttons
+        more.setContentDescription("SpolierBlock: Not this or Cover again");
+        row.addView(again);
+        row.addView(more);
+        again.setVisibility(View.GONE);
+        more.setVisibility(View.GONE);
         root.addView(row, Ui.wrap());
         host.getOverlay().add(root);
         // TalkBack reads the cover (its message and buttons), never what it hides
@@ -77,22 +90,67 @@ final class Cover {
         if (a11y == null) item.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS); // hidden at least
     }
 
+    /** The cover or the pill: which parts show, how they look, and whether TalkBack may read the item's content. */
+    private void mode(boolean on) {
+        boolean was = pill;
+        pill = on;
+        msg.setVisibility(on ? View.GONE : View.VISIBLE);
+        once.setVisibility(on ? View.GONE : View.VISIBLE);
+        manage.setVisibility(on ? View.GONE : View.VISIBLE);
+        seen.setVisibility(!on && marks.length > 0 ? View.VISIBLE : View.GONE);
+        not.setVisibility(marks.length > 0 && notKey != null ? View.VISIBLE : View.GONE);
+        again.setVisibility(on ? View.VISIBLE : View.GONE);
+        more.setVisibility(View.GONE);
+        if (on) {
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(palette.cover & 0x00FFFFFF | 0xD8000000); // slightly translucent, the surface's own tone
+            bg.setStroke(dp(1), palette.outline);
+            bg.setCornerRadius(dp(18));
+            root.setBackground(bg);
+            root.setOrientation(LinearLayout.HORIZONTAL);
+            root.setPadding(dp(3), dp(3), dp(3), dp(3));
+            row.setPadding(0, 0, 0, 0);
+            row.setLayoutParams(Ui.wrap());
+            for (TextView b : new TextView[]{not, again, more}) {
+                b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                b.setMinHeight(dp(28));
+                b.setPadding(dp(10), 0, dp(10), 0);
+                LinearLayout.LayoutParams lp = Ui.wrap();
+                lp.setMargins(dp(2), 0, dp(2), 0);
+                b.setLayoutParams(lp);
+            }
+        } else if (was) {
+            root.setBackgroundColor(palette.cover);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            not.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            compact = null; // compact() and fit() set the cover's sizes again
+            expanded = false;
+        }
+        if (was != on) { // TalkBack: the content while shown once, only the cover's nodes while covered
+            item.setImportantForAccessibility(on ? savedA11y : a11y != null ? View.IMPORTANT_FOR_ACCESSIBILITY_YES : View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+            if (item.getParent() != null) {
+                try { item.getParent().notifySubtreeAccessibilityStateChanged(item, item, android.view.accessibility.AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE); }
+                catch (RuntimeException ignored) { } // a parent that cannot take it: TalkBack catches up on the next change
+            }
+        }
+    }
+
     private CoverA11y a11y;
 
     /** The scanner reads the item's real text through accessibility: the cover's nodes step aside meanwhile. */
     void a11yPause(boolean on) { if (a11y != null) a11y.paused = on; }
 
-    /** For TalkBack: the message, then the buttons on show. */
+    /** For TalkBack: the message, then the buttons on show (a pill: its buttons only). */
     java.util.List<View> a11yParts() {
         java.util.List<View> l = new java.util.ArrayList<>();
-        l.add(msg);
-        for (View b : new View[]{once, seen, not, manage}) if (b.getVisibility() == View.VISIBLE && b.getWidth() > 0) l.add(b);
+        if (!pill) l.add(msg);
+        for (View b : new View[]{once, seen, not, manage, again, more}) if (b.getVisibility() == View.VISIBLE && b.getWidth() > 0) l.add(b);
         return l;
     }
 
     /** A part's bounds relative to the item. */
     android.graphics.Rect boundsOf(View part) {
-        int x = 0, y = 0;
+        int x = root.getLeft() - lx, y = root.getTop() - ly; // 0 for a cover, the corner for a pill
         for (View v = part; v != root; v = (View) v.getParent()) { x += v.getLeft(); y += v.getTop(); }
         return new android.graphics.Rect(x, y, x + part.getWidth(), y + part.getHeight());
     }
@@ -102,6 +160,8 @@ final class Cover {
         if (b == once) scanner.revealOnce(this);
         else if (b == seen && marks.length > 0) seen();
         else if (b == not && marks.length > 0 && notKey != null) scanner.notThis(this, marks);
+        else if (b == again && pill) scanner.coverAgain(this);
+        else if (b == more && pill) { expanded = true; layout(true); }
         else if (b == manage) {
             Activity a = activity(item.getContext());
             if (a == null) a = scanner.sb.resumedActivity(); // a dialog's or popup's context may not be the activity
@@ -153,17 +213,34 @@ final class Cover {
         return b;
     }
 
-    /** Returns true when what the cover says changed. marks: the name groups "I've seen it" marks. */
-    boolean show(String message, int[] marks, String text) {
+    /**
+     * Returns true when what the cover says, or whether it is a pill, changed. marks: the name groups "I've seen it" and
+     * "Not this" act on; pill: the item is shown once and only the pill is drawn.
+     */
+    boolean show(String message, int[] marks, String text, boolean pill) {
         this.text = text;
-        if (message.equals(this.message) && java.util.Arrays.equals(marks, this.marks)) return false;
+        if (message.equals(this.message) && java.util.Arrays.equals(marks, this.marks) && pill == this.pill && this.message != null) return false;
         this.message = message;
         this.marks = marks;
         msg.setText(message);
-        seen.setVisibility(marks.length > 0 ? View.VISIBLE : View.GONE);
-        not.setVisibility(marks.length > 0 && notKey != null ? View.VISIBLE : View.GONE);
+        mode(pill);
         layout(true);
         return true;
+    }
+
+    /** "Show once" (on) or "Cover again" (off) on this cover, before the scanner judges the item again. */
+    void pill(boolean on) { show(message, marks, text, on); }
+
+    /** Whether the cover names works (only those leave a pill after "Show once"). */
+    boolean names() { return marks.length > 0; }
+
+    /** The pill's rectangle on screen. */
+    android.graphics.Rect pillOnScreen() {
+        android.graphics.Rect r = boundsOf(root);
+        int[] l = new int[2];
+        item.getLocationOnScreen(l);
+        r.offset(l[0], l[1]);
+        return r;
     }
 
     private Boolean compact;
@@ -195,15 +272,39 @@ final class Cover {
     private void layout(boolean force) {
         int w = item.getWidth(), h = item.getHeight();
         int x = host == item ? 0 : item.getLeft(), y = host == item ? 0 : item.getTop();
-        if (!force && root.getWidth() == w && root.getHeight() == h && root.getLeft() == x && root.getTop() == y) {
-            if (host != item) { root.setTranslationX(item.getTranslationX()); root.setTranslationY(item.getTranslationY()); }
-            return;
+        if (force || w != lw || h != lh || x != lx || y != ly) {
+            lw = w; lh = h; lx = x; ly = y;
+            if (pill) placePill(w, h, x, y);
+            else {
+                compact(h < dp(120));
+                fit(w);
+                root.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY));
+                root.layout(x, y, x + w, y + h);
+            }
         }
-        compact(h < dp(120));
-        fit(w);
-        root.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY));
-        root.layout(x, y, x + w, y + h);
         if (host != item) { root.setTranslationX(item.getTranslationX()); root.setTranslationY(item.getTranslationY()); }
+    }
+
+    /**
+     * The pill, its own size, in the item's top corner at the end of the line. On an item narrower than the pill only
+     * the "⋯" button shows; tapped, the two buttons show one above the other.
+     */
+    private void placePill(int w, int h, int x, int y) {
+        int m = dp(4), unspec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
+        not.setVisibility(marks.length > 0 && notKey != null ? View.VISIBLE : View.GONE);
+        again.setVisibility(View.VISIBLE);
+        more.setVisibility(View.GONE);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        root.measure(unspec, unspec);
+        if (root.getMeasuredWidth() > w - 2 * m) {
+            if (expanded) row.setOrientation(LinearLayout.VERTICAL);
+            else { not.setVisibility(View.GONE); again.setVisibility(View.GONE); more.setVisibility(View.VISIBLE); }
+        }
+        root.measure(View.MeasureSpec.makeMeasureSpec(Math.max(0, w - 2 * m), View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(Math.max(0, h - 2 * m), View.MeasureSpec.AT_MOST));
+        int pw = root.getMeasuredWidth(), ph = root.getMeasuredHeight();
+        int px = x + (item.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL ? m : w - m - pw);
+        root.layout(px, y + m, px + pw, y + m + ph);
     }
 
     /**
@@ -234,7 +335,13 @@ final class Cover {
         row.setLayoutParams(squeeze ? new LinearLayout.LayoutParams(avail, ViewGroup.LayoutParams.WRAP_CONTENT) : Ui.wrap());
     }
 
-    void drawInto(android.graphics.Canvas c) { root.draw(c); }
+    /** Draws the cover (or the pill, at its corner) with the item's top left at the canvas origin. */
+    void drawInto(android.graphics.Canvas c) {
+        c.save();
+        c.translate(root.getLeft() - lx, root.getTop() - ly);
+        root.draw(c);
+        c.restore();
+    }
 
     void remove() {
         host.getOverlay().remove(root);
@@ -244,17 +351,17 @@ final class Cover {
 
     /** x, y in screen coordinates; the gesture was already taken away from the app. */
     void tap(float x, float y) {
-        for (View b : new View[]{once, seen, not, manage}) if (hit(b, x, y)) { press(b); return; }
+        for (View b : new View[]{once, seen, not, manage, again, more}) if (hit(b, x, y)) { press(b); return; }
     }
 
     private boolean hit(View b, float x, float y) {
         if (b.getWidth() == 0 || b.getVisibility() != View.VISIBLE) return false;
         int[] l = new int[2];
         item.getLocationOnScreen(l);
-        float bx = l[0], by = l[1]; // the cover sits exactly on the item
-        for (View v = b; v != root; v = (View) v.getParent()) { bx += v.getLeft(); by += v.getTop(); }
+        android.graphics.Rect r = boundsOf(b);
+        r.offset(l[0], l[1]);
         int slack = dp(4);
-        return x >= bx - slack && x < bx + b.getWidth() + slack && y >= by - slack && y < by + b.getHeight() + slack;
+        return x >= r.left - slack && x < r.right + slack && y >= r.top - slack && y < r.bottom + slack;
     }
 
     private static Activity activity(Context c) {

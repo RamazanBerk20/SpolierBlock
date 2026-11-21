@@ -229,10 +229,10 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         long window = (long) decor.getWidth() * decor.getHeight();
         boolean hides = false;
         for (Cover c : covers) {
-            if (!c.item.isShown()) continue;
+            if (c.pill || !c.item.isShown()) continue; // a pill shows the item: its video is the user's
             if ((long) c.item.getWidth() * c.item.getHeight() * 10 >= window * 6 || hasVideo(c.item)) { hides = true; break; }
         }
-        if (!hides) for (View v : shades.keySet()) if (v.isShown() && hasVideo(v)) { hides = true; break; }
+        if (!hides) for (Map.Entry<View, Shade> e : shades.entrySet()) if (!e.getValue().pill() && e.getKey().isShown() && hasVideo(e.getKey())) { hides = true; break; }
         return hides && !uncoveredVideo();
     }
 
@@ -250,9 +250,14 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         for (View v : videos) {
             if (!v.isAttachedToWindow() || !visibleOnScreen(v, r) || (long) r.width() * r.height() * 2 < (long) v.getWidth() * v.getHeight()) continue;
             boolean hidden = false;
-            for (Object p = v; p instanceof View && !hidden; p = ((View) p).getParent()) hidden = shades.containsKey(p) || coverOf((View) p) != null;
+            for (Object p = v; p instanceof View && !hidden; p = ((View) p).getParent()) {
+                Shade sh = shades.get(p);
+                Cover cp = coverOf((View) p);
+                hidden = sh != null && !sh.pill() || cp != null && !cp.pill;
+            }
             long va = (long) r.width() * r.height();
             for (int k = 0; k < coverRects.size() && !hidden; k++) {
+                if (rectCovers.get(k).pill) continue;
                 Rect in = new Rect(r);
                 hidden = in.intersect(coverRects.get(k)) && (long) in.width() * in.height() * 10 >= va * 9;
             }
@@ -555,15 +560,17 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         shadePictures(it, msg == null ? toShade : new ArrayList<>()); // pending pictures are shaded, not the whole post
         String reveal = shownKey(text, key); // "Show once" is for this post, whatever its counters, players and pictures do next
         Cover cv = coverOf(it);
-        boolean block = msg != null && !sb.revealed.contains(reveal);
+        boolean shown = msg != null && sb.revealed.contains(reveal);
+        boolean block = msg != null && !shown;
+        boolean pill = shown && label != null; // shown once from a cover that names works: the pill stays (contract, cover wording)
         boolean log = Log.isLoggable(SpoilerBlock.TAG, Log.DEBUG);
-        if (block) {
+        if (block || pill) {
             if (cv == null) { covers.add(cv = new Cover(this, it, parent)); if (!activityWindow) catcher(); }
             int[] marks = new int[label != null ? named.size() : 0];
             for (int i = 0; i < marks.length; i++) marks[i] = named.get(i);
             cv.notKey = where.length > 0 ? where[0] : null;
-            if (cv.show(msg, marks, reveal) && log) {
-                Log.d(SpoilerBlock.TAG, "block \"" + msg + "\" " + (st.loose ? "loose " : "") + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)) + " text=" + full.replace('\n', '|'));
+            if (cv.show(msg, marks, reveal, pill) && log) {
+                Log.d(SpoilerBlock.TAG, (pill ? "pill \"" : "block \"") + msg + "\" " + (st.loose ? "loose " : "") + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)) + " text=" + full.replace('\n', '|'));
             }
         } else if (cv != null) {
             cv.remove();
@@ -811,7 +818,9 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         Rect vis = new Rect();
         for (int i = covers.size() - 1; i >= 0; i--) {
             Cover c = covers.get(i);
-            if (visibleOnScreen(c.item, vis) && vis.contains((int) x, (int) y)) return appOnTop(c.item, (int) x, (int) y) ? null : c;
+            if (!visibleOnScreen(c.item, vis) || !vis.contains((int) x, (int) y)) continue;
+            if (c.pill && !c.pillOnScreen().contains((int) x, (int) y)) continue; // a pill takes taps only on itself
+            return appOnTop(c.item, (int) x, (int) y) ? null : c;
         }
         return null;
     }
@@ -853,28 +862,45 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         covers.remove(c);
     }
 
-        void revealOnce(Cover c) {
+    /** "Show once": the post is remembered as shown; a cover that names works becomes its pill, any other goes. */
+    void revealOnce(Cover c) {
         sb.revealed.add(c.text);
-        c.remove();
-        covers.remove(c);
+        if (c.names()) c.pill(true);
+        else { c.remove(); covers.remove(c); }
         Log.i(SpoilerBlock.TAG, "shown once");
     }
 
-    /** Opaque shade over a floating view, repeating the part of the item's cover underneath (so its buttons stay visible). */
+    /** The pill's "Cover again": the post is no longer shown once; the cover is back at once and the item judged again. */
+    void coverAgain(Cover c) {
+        sb.revealed.remove(c.text);
+        c.pill(false);
+        Item st = items.get(c.item);
+        if (st != null) st.stale = true;
+        Log.i(SpoilerBlock.TAG, "covered again");
+    }
+
+    /**
+     * Opaque shade over a floating view, repeating the part of the item's cover underneath (so its buttons stay visible);
+     * over a pill item's floater, just the pill.
+     */
     private static final class Shade extends Drawable {
         private final View host;
         private Cover cover;
         private int dx, dy; // host position relative to the covered item
+        private boolean wasPill;
 
         Shade(View host) { this.host = host; }
 
         void update(Cover c, int dx, int dy) {
-            if (c != cover || dx != this.dx || dy != this.dy) { cover = c; this.dx = dx; this.dy = dy; invalidateSelf(); host.invalidate(); }
+            if (c != cover || dx != this.dx || dy != this.dy || c.pill != wasPill) { cover = c; this.dx = dx; this.dy = dy; wasPill = c.pill; invalidateSelf(); host.invalidate(); }
         }
+
+        /** Over a pill item's floater only the pill is drawn: the floater (its player) stays visible. */
+        boolean pill() { return cover != null && cover.pill; }
 
         @Override public void draw(Canvas canvas) {
             if (cover == null) { canvas.drawColor(0xFF111111); return; }
-            canvas.drawColor(cover.palette.cover);
+            if (!cover.pill) canvas.drawColor(cover.palette.cover);
             canvas.save();
             canvas.translate(-dx, -dy);
             cover.drawInto(canvas);
@@ -882,6 +908,6 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         }
         @Override public void setAlpha(int a) { }
         @Override public void setColorFilter(ColorFilter f) { }
-        @Override public int getOpacity() { return PixelFormat.OPAQUE; }
+        @Override public int getOpacity() { return pill() ? PixelFormat.TRANSLUCENT : PixelFormat.OPAQUE; }
     }
 }

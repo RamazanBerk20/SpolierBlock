@@ -200,6 +200,12 @@ Ticking them is optional: only the first section decides whether the post stays 
 only; the second section has its own `All N`. Series membership comes from the catalog's `series` field, not from the
 matched name.
 
+After `Show once` on a cover that names works, the shown post keeps a small pill in its top corner at the end of the
+line (right in left-to-right layouts), so the user can judge the post after seeing it (0.2.5): the buttons `Not this`
+(rule 11, exactly as on the cover) and `Cover again` (forgets the `Show once` for this post, the cover returns). The pill
+is drawn over the post like the cover is (it never changes a measured size), takes taps only on itself, and stays as long
+as the post is shown once. A post shown from the unidentified-image cover or the video-with-no-caption cover has no pill.
+
 `Show once` is remembered for the post, not for the view that happens to draw it: it is keyed by the post's own text, it
 survives the host recycling or rebinding the view and late picture verdicts, and it lasts until the page or app process
 ends.

@@ -136,6 +136,7 @@ public class MainActivity extends Activity {
         if ("reels".equals(getIntent().getStringExtra("screen"))) { setContentView(Reels.build(this)); return; }
         if ("captionless".equals(getIntent().getStringExtra("screen"))) { setContentView(Captionless.build(this, getIntent().getBooleanExtra("listed", true))); return; } // rule 10
         if ("notthis".equals(getIntent().getStringExtra("screen"))) { setContentView(NotThis.build(this)); return; } // rule 11
+        if ("pill".equals(getIntent().getStringExtra("screen"))) { setContentView(Pill.build(this)); return; } // the pill after Show once
         if ("watch".equals(getIntent().getStringExtra("screen"))) { setContentView(Watch.build(this)); return; } // a pinned player over a list
         if ("settings".equals(getIntent().getStringExtra("screen"))) { startActivity(new android.content.Intent(this, DemoSettings.class)); finish(); return; }
         list = new FeedList(this);
@@ -202,7 +203,8 @@ public class MainActivity extends Activity {
     static boolean covered(View v) {
         if (v.getImportantForAccessibility() == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) return true;
         android.view.accessibility.AccessibilityNodeProvider p = v.getAccessibilityNodeProvider();
-        return p != null && p.getClass().getName().startsWith("dev.spoilerblock.") && !p.getClass().getName().startsWith("dev.spoilerblock.demo.");
+        return p != null && p.getClass().getName().startsWith("dev.spoilerblock.") && !p.getClass().getName().startsWith("dev.spoilerblock.demo.")
+            && !p.getClass().getName().endsWith("$PillNodes"); // shown once: the pill's nodes, the content readable
     }
 
     /** One post shown outside a list (a dialog's text, a suggestion row): covered iff expected, checked on every frame drawn. */

@@ -72,6 +72,7 @@ Defined in the `OVERLAY_CSS` string in `content.js`. It lives in a shadow root, 
 - Light: background `#eef1f4`, text `#1f2328`, border `#b9c0c8`, focus ring `#0b57d0`. Dark (when the covered block is dark): `#22272e`, `#e6e8eb`, `#59616b`, `#8ab4f8`.
 - A flex row: the label on its own line, then the pill buttons (1 px border, 28 px minimum height, 12 px side padding, hover tint of the current colour). The ⋮ button has no border and a 16 px glyph.
 - Two compact layouts by container query: at 76 px of height or less everything sits on one row with the label truncated; at 34 px or less the buttons shrink to 22 px.
+- The pill (since 0.2.5, a post shown once from a cover that names works): the same overlay in a `data-pill` state, transparent and click-through, with a small box in the top corner at the inline end, 4 px from the edges: the cover's background, a 1 px border in the cover's border colour, a 12 px radius, 1 px padding, 12 px text, and two borderless 20 px buttons (`Not this`, `Cover again`, 8 px side padding, 2 px gap), about 24 px high. It is at 75% opacity until hovered or a button has keyboard focus (`:has(:focus-visible)`). At 170 px of width or less only a `⋯` button shows, which opens the two.
 
 Known inconsistency: `base.css` says its `--cover` colour is "the near-black of the in-page cover", and the Blocking section's preview draws a near-black cover. The real cover is the light or dark grey panel above. If you touch either, make the preview match the cover, or the cover match the preview, in one change.
 

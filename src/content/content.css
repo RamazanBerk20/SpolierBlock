@@ -13,7 +13,8 @@ html:not([data-sb-off]):not([data-sb-noimg]) :is(img, video, [data-sb-bg]):not([
    its visibility, so a cover inside a container the page hides stays hidden too.
    position: relative only on a static block, so the cover has it as containing block; it does not change the block's size. */
 [data-sb-blocked] > :not(sb-overlay) { visibility: hidden !important; }
-[data-sb-blocked][data-sb-pos] { position: relative !important; }
+/* [data-sb-pill]: a post shown once keeps the same overlay as a small pill (content visible, clicks pass through). */
+:is([data-sb-blocked], [data-sb-pill])[data-sb-pos] { position: relative !important; }
 /* The cover's z-index stays inside its block: a site's fixed or sticky bar drawn over the feed stays on top and takes its
    clicks. isolation changes no size. */
-[data-sb-blocked] { isolation: isolate !important; }
+:is([data-sb-blocked], [data-sb-pill]) { isolation: isolate !important; }

@@ -76,7 +76,7 @@
   const roots = new WeakSet();
   let anyRoot = false; // most pages have no shadow roots: skip the per-block host lookups
   const ROOT_CSS = '[data-sb-blocked]>:not(sb-overlay),:host([data-sb-blocked])>:not(sb-overlay){visibility:hidden!important}' +
-    '[data-sb-blocked][data-sb-pos]{position:relative!important}[data-sb-blocked]{isolation:isolate!important}';
+    ':is([data-sb-blocked],[data-sb-pill])[data-sb-pos]{position:relative!important}:is([data-sb-blocked],[data-sb-pill]){isolation:isolate!important}';
   function adopt(hostEl, sr) {
     if (roots.has(sr)) return;
     roots.add(sr);
@@ -170,14 +170,15 @@
   const verdict = new WeakMap(); // media element -> { src, hits: raw groups, ocr } for the picture it showed when judged
   let haveVerdicts = false;
   // "Show once" is remembered for the post, not the element drawing it (sites recycle and replace nodes): keyed by the
-  // post's own text (no OCR text), or its pictures when it has none, for the page's lifetime, the oldest dropped first
+  // post's own text (no OCR text) with numbers blanked (counters tick), or its pictures when it has no letters, for the
+  // page's lifetime, the oldest dropped first (Scanner.shownKey on Android)
   const shown = new Set();
   const SHOWN_MAX = 500;
   function showKey(block, dom) {
-    const t = dom.replace(/\s+/g, ' ').trim();
-    return t || 'media:' + [...block.querySelectorAll('img, video, [data-sb-bg]')].map(mediaSrc).join(' ');
+    const t = dom.replace(/\d[\d.,:]*/g, '#').replace(/\s+/g, ' ').trim();
+    return /\p{L}/u.test(t) ? t : 'media:' + [...block.querySelectorAll('img, video, [data-sb-bg]')].map(mediaSrc).join(' ');
   }
-  const blocked = new Map(); // block -> overlay host
+  const blocked = new Map(); // block -> overlay host (a cover, or the pill of a post shown once: data-pill)
   const verdicts = new Map(); // text -> true (spoiler) | false, classifier cache
   const waiting = new Map(); // text -> callbacks for a classification in flight
   const pending = new Set(); // elements whose block needs a scan
@@ -318,9 +319,11 @@
 
   function apply(block) {
     const st = scanned.get(block);
-    if (!active || !st || shown.has(st.show)) return unblock(block);
+    if (!active || !st) return unblock(block);
     const d = decide(st, () => { if (block.isConnected && scanned.get(block)?.text === st.text) apply(block); });
-    if (d) showOverlay(block, d); else unblock(block);
+    // shown once: the pill (Not this, Cover again) while the decision is still a cover that names works (contract)
+    const once = shown.has(st.show);
+    if (d && (!once || d.marks.length)) showOverlay(block, d, once); else unblock(block);
   }
 
   function classify(text, cb) {
@@ -392,6 +395,16 @@
       button{flex:0 .25 auto;min-width:3em;overflow:hidden;text-overflow:ellipsis}[data-a=menu]{flex-shrink:0;min-width:28px}}
     @container (max-height:34px){button{min-height:22px;padding:0 8px}.b{gap:4px}}
     @container (max-width:150px){p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}button{min-height:22px;padding:0 6px}.b{gap:2px 4px;padding:2px}}
+    .pill{display:none}
+    :host([data-pill]){background:transparent!important;pointer-events:none!important}
+    :host([data-pill]) .b{display:none}
+    :host([data-pill]) .pill{box-sizing:border-box;position:absolute;top:4px;inset-inline-end:4px;max-width:calc(100% - 8px);display:flex;
+      flex-wrap:wrap;justify-content:flex-end;gap:2px;padding:1px;border:1px solid var(--line);border-radius:12px;background:var(--bg);
+      pointer-events:auto;opacity:.75;font-size:12px;line-height:1.2}
+    :host([data-pill]) .pill:hover,:host([data-pill]) .pill:has(:focus-visible){opacity:1}
+    .pill button{flex:none;min-width:0;min-height:20px;padding:0 8px;border-color:transparent}
+    .pill [data-a=more]{display:none;padding:0 6px}
+    @container (max-width:170px){.pill:not([data-open]) button:not([data-a=more]){display:none}.pill [data-a=more]{display:inline-block}}
     .pk{box-sizing:border-box;width:min(360px,calc(100vw - 32px));max-height:min(70vh,520px);padding:16px;border:1px solid var(--line);
       border-radius:12px;background:var(--bg);color:var(--fg);font:inherit;text-align:start;box-shadow:0 8px 32px rgba(0,0,0,.35)}
     .pk[open]{display:flex;flex-direction:column;gap:10px}
@@ -423,7 +436,7 @@
     return cs.includes('dark') && (!cs.includes('light') || matchMedia('(prefers-color-scheme: dark)').matches);
   }
 
-  function showOverlay(block, d) {
+  function showOverlay(block, d, pill = false) {
     let ov = blocked.get(block);
     if (!ov || !ov.isConnected) {
       ov?.remove();
@@ -433,6 +446,9 @@
         `<button type="button" data-a="once">Show once</button><button type="button" data-a="seen">I've seen it</button>` +
         `<button type="button" data-a="not">Not this</button>` +
         `<button type="button" data-a="menu" aria-label="SpolierBlock settings" title="SpolierBlock settings">⋮</button></div>` +
+        `<div class="pill" role="group" aria-labelledby="l"><button type="button" data-a="more" aria-expanded="false" ` +
+        `aria-label="SpolierBlock: Not this, Cover again" title="SpolierBlock">⋯</button>` +
+        `<button type="button" data-a="not">Not this</button><button type="button" data-a="again">Cover again</button></div>` +
         `<dialog class="pk" aria-labelledby="pt"><p id="pt" class="h">Which have you seen?</p><div class="sc"><ul class="first"></ul>` +
         `<p class="note"></p><section class="more" aria-labelledby="mt" hidden><div class="mh"><p id="mt" class="h2">More from this series</p>` +
         `<button type="button" data-a="pk-all2"></button></div><ul class="second"></ul><button type="button" data-a="pk-more"></button></section></div>` +
@@ -448,10 +464,22 @@
       }
       sr.addEventListener('click', (e) => {
         const a = e.target.closest?.('button')?.dataset.a;
+        const st = scanned.get(block);
         if (a === 'once') {
-          const st = scanned.get(block);
           if (st) { shown.delete(st.show); shown.add(st.show); if (shown.size > SHOWN_MAX) shown.delete(shown.values().next().value); }
-          unblock(block);
+          apply(block); // the pill, or nothing
+          if (ov.hasAttribute('data-pill')) sr.querySelector('[data-a="again"]').focus(); // keep the focus for keyboard users
+        }
+        if (a === 'again') {
+          if (st) shown.delete(st.show);
+          apply(block);
+          if (!ov.hasAttribute('data-pill')) sr.querySelector('[data-a="once"]').focus();
+        }
+        if (a === 'more') {
+          const pill = sr.querySelector('.pill'), open = !pill.hasAttribute('data-open');
+          pill.toggleAttribute('data-open', open);
+          e.target.closest('button').setAttribute('aria-expanded', String(open));
+          if (open) sr.querySelector('.pill [data-a="not"]').focus();
         }
         if (a === 'seen') seenClicked(ov);
         if (a === 'not') notThis(block, ov);
@@ -469,13 +497,21 @@
       });
       block.toggleAttribute('data-sb-pos', getComputedStyle(block).position === 'static');
       ov.toggleAttribute('data-dark', isDark(block));
-      block.setAttribute('data-sb-blocked', '');
       (shadowOf(block) ?? block).appendChild(ov); // a shadow host does not render unslotted light children
       blocked.set(block, ov);
+    }
+    // pill: the post stays visible and playing, the overlay takes clicks only on the pill (data-pill in OVERLAY_CSS)
+    if (ov.hasAttribute('data-pill') !== pill || !block.hasAttribute(pill ? 'data-sb-pill' : 'data-sb-blocked')) {
+      block.toggleAttribute('data-sb-blocked', !pill);
+      block.toggleAttribute('data-sb-pill', pill);
+      ov.toggleAttribute('data-pill', pill);
+      const pl = ov.shadowRoot.querySelector('.pill');
+      pl.removeAttribute('data-open');
+      pl.querySelector('[data-a="more"]').setAttribute('aria-expanded', 'false');
       countChanged();
     }
     ov.marks = d.marks;
-    silence(block); // also media added to the post since it was covered
+    if (pill) unsilence(block); else silence(block); // also media added to the post since it was covered
     const p = ov.shadowRoot.querySelector('p');
     if (p.textContent !== d.label) p.textContent = p.title = d.label; // the title: a narrow cover cuts the label short
     // nothing to mark or report for an unidentified image or a video with no caption
@@ -487,6 +523,7 @@
     if (!ov) return;
     ov.remove();
     block.removeAttribute('data-sb-blocked');
+    block.removeAttribute('data-sb-pill');
     block.removeAttribute('data-sb-pos');
     blocked.delete(block);
     unsilence(block);
@@ -535,8 +572,9 @@
 
   // The toolbar badge shows the top frame's cover count (background: tab.count / sb.stats).
   function coverCount() {
-    for (const b of blocked.keys()) if (!b.isConnected) { blocked.delete(b); unsilence(b); } // removed by the page
-    return blocked.size;
+    let n = 0;
+    for (const [b, ov] of blocked) if (!b.isConnected) { blocked.delete(b); unsilence(b); } else if (!ov.hasAttribute('data-pill')) n++; // removed by the page
+    return n;
   }
   let sentCount = 0, countTimer = 0;
   function countChanged() {

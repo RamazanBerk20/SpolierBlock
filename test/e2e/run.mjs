@@ -689,6 +689,100 @@ check('a big box of paragraphs: only the line that names a work is covered', sid
 
 }
 
+if (want('pill')) {
+// M) the pill of a post shown once (contract, "Cover wording"): Not this and Cover again, drawn over the shown post
+const learnedNow = () => storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('learned')).learned ?? {});
+await storage(() => (globalThis.browser ?? chrome).storage.local.remove('learned'));
+await setConfig({});
+await open('/');
+await page.evaluate(() => {
+  const mk = (id, html, style = '') => {
+    const a = document.createElement('article');
+    a.className = 'post'; a.id = id; a.style.cssText = style; a.innerHTML = html;
+    document.getElementById('feed').prepend(a);
+  };
+  mk('pl-a', '<div class="who">@pl</div><p>Walter White ends up like that, honestly. <a id="pl-link" href="#pl-hit">Read the thread</a></p><span id="pl-n">12</span> likes');
+  mk('pl-b', '<div class="who">@pm</div><p>Walter White was the best, what a show.</p>');
+  mk('pl-narrow', '<p>Walter White ends up like that.</p>', 'width:120px');
+});
+await sleep(600);
+const PILL = `(id) => {
+  const el = document.getElementById(id), ov = el?.querySelector(':scope > sb-overlay');
+  if (!ov?.hasAttribute('data-pill')) return ov ? 'cover' : null;
+  const sr = ov.shadowRoot, pl = sr.querySelector('.pill'), r = pl.getBoundingClientRect(), e = el.getBoundingClientRect();
+  sr.activeElement?.blur(); // a scripted click leaves no pointer modality: Chrome shows the moved focus as focus-visible
+  const vis = (b) => getComputedStyle(b).display !== 'none' && b.getBoundingClientRect().width > 0;
+  return { buttons: [...pl.querySelectorAll('button')].filter(vis).map((b) => b.getAttribute('aria-label') || b.textContent),
+    name: sr.getElementById(pl.getAttribute('aria-labelledby'))?.textContent ?? null, covered: el.hasAttribute('data-sb-blocked'),
+    inside: r.top >= e.top - 0.5 && r.left >= e.left - 0.5 && r.right <= e.right + 0.5, h: Math.round(r.height), w: Math.round(r.width),
+    endSide: Math.abs(e.right - r.right) < Math.abs(r.left - e.left), opacity: +getComputedStyle(pl).opacity,
+    textVisible: getComputedStyle(el.querySelector('p')).visibility === 'visible', bh: Math.round(e.height),
+    expanded: pl.querySelector('[data-a="more"]').getAttribute('aria-expanded') };
+}`;
+const pill = (id) => page.evaluate(`(${PILL})(${JSON.stringify(id)})`);
+const inOv = (id, sel) => page.evaluate((id, sel) => document.querySelector(`#${id} > sb-overlay`).shadowRoot.querySelector(sel).click(), id, sel);
+c = await covered(['pl-a', 'pl-b', 'pl-narrow']);
+const h0 = c['pl-a']?.bh;
+await page.evaluate(() => document.getElementById('pl-a').scrollIntoView({ block: 'center' }));
+await inOv('pl-a', '[data-a="once"]');
+await sleep(300);
+const p1 = await pill('pl-a');
+// the link and the pill, hit by real clicks: the link gets its click through the overlay, the pill takes its own
+const hit = await page.evaluate(() => {
+  const l = document.getElementById('pl-link').getBoundingClientRect(), ov = document.querySelector('#pl-a > sb-overlay');
+  const pr = ov.shadowRoot.querySelector('.pill').getBoundingClientRect();
+  window.__plClicks = [];
+  document.getElementById('pl-a').addEventListener('click', (e) => window.__plClicks.push(e.target.id || e.target.localName));
+  return { x: l.left + l.width / 2, y: l.top + l.height / 2, at: document.elementFromPoint(l.left + l.width / 2, l.top + l.height / 2)?.id,
+    pillAt: document.elementFromPoint(pr.left + pr.width / 2, pr.top + pr.height / 2)?.localName };
+});
+await page.mouse.click(hit.x, hit.y);
+await sleep(200);
+const linked = await page.evaluate(() => ({ clicks: window.__plClicks, hash: location.hash }));
+check('"Show once" on a cover that names works: the pill with "Not this" and "Cover again", at the top end corner, quiet, named by the label; the text is visible; the height is unchanged',
+  p1?.covered === false && JSON.stringify(p1.buttons) === '["Not this","Cover again"]' && p1.inside && p1.endSide && p1.h <= 30 && p1.opacity < 1 &&
+  p1.name === 'Mentions Breaking Bad' && p1.textVisible && p1.bh === h0, { p1, h0 });
+check('a click on a link in the shown post reaches the link; the pill takes the clicks on itself',
+  hit.at === 'pl-link' && hit.pillAt === 'sb-overlay' && linked.clicks.includes('pl-link') && linked.hash === '#pl-hit', { hit, linked });
+await page.evaluate(() => { document.getElementById('pl-n').textContent = '13'; });
+await sleep(400);
+const p2 = await pill('pl-a');
+check('the pill survives a re-scan of the post (a counter in it changed)', p2?.covered === false && p2.buttons.length === 2, p2);
+await inOv('pl-a', '.pill [data-a="again"]');
+await sleep(300);
+c = await covered(['pl-a']);
+check('"Cover again": the cover returns with the same label', lab(c['pl-a']) === 'Mentions Breaking Bad' && (await pill('pl-a')) === 'cover', c['pl-a']);
+// "Not this": the cover's button on pl-b, then (after forgetting it) the pill's on pl-a write the same learned.not
+const bbIds = Object.keys(worksOf('Breaking Bad', {}));
+await inOv('pl-b', '[data-a="not"]');
+await sleep(1500);
+const fromCover = (await learnedNow()).not ?? {};
+await storage(() => (globalThis.browser ?? chrome).storage.local.remove('learned'));
+await sleep(1000);
+await inOv('pl-a', '[data-a="once"]');
+await sleep(300);
+await inOv('pl-a', '.pill [data-a="not"]');
+await sleep(1500);
+const fromPill = (await learnedNow()).not ?? {};
+await setConfig({}, { unknownImages: true }); // a real change re-decides every post
+const p3 = await pill('pl-a');
+check('"Not this" on the pill writes the same learned.not as the cover\'s button; after a re-scan the post has no cover and no pill',
+  bbIds.length > 0 && bbIds.every((id) => fromPill[id]?.length === 1) && JSON.stringify(fromPill) === JSON.stringify(fromCover) && p3 === null,
+  { fromCover, fromPill, p3 });
+await storage(() => (globalThis.browser ?? chrome).storage.local.remove('learned'));
+await setConfig({});
+// a post narrower than the pill: only the ⋯ button, which opens the two
+await inOv('pl-narrow', '[data-a="once"]');
+await sleep(300);
+const pn1 = await pill('pl-narrow');
+await inOv('pl-narrow', '.pill [data-a="more"]');
+await sleep(200);
+const pn2 = await pill('pl-narrow');
+check('a narrow post: the pill shows only "⋯" (named), inside the post; it opens to both buttons',
+  JSON.stringify(pn1?.buttons) === '["SpolierBlock: Not this, Cover again"]' && pn1.inside && pn1.expanded === 'false' &&
+  pn2?.buttons.includes('Not this') && pn2.buttons.includes('Cover again') && pn2.expanded === 'true', { pn1, pn2 });
+}
+
 // memory of the processes that may host the models (Firefox: the "extension" process; Chrome: the extension renderer)
 async function procMem() {
   try {
@@ -927,7 +1021,11 @@ await page.evaluate(() => document.getElementById('av-post').scrollIntoView({ bl
 await page.evaluate(() => document.querySelector('#av-post > sb-overlay').shadowRoot.querySelector('[data-a="once"]').click());
 await sleep(800);
 const av3 = await av();
-check('"Show once" restores sound and playback', !av3.covered && !av3.muted && !av3.paused, av3);
+av3.pill = await page.evaluate(() => !!document.querySelector('#av-post > sb-overlay[data-pill]'));
+await sleep(1500);
+const av4 = await av();
+check('"Show once" restores sound and playback; the post keeps its pill and keeps playing with sound',
+  !av3.covered && !av3.muted && !av3.paused && av3.pill && !av4.covered && !av4.muted && !av4.paused, { av3, av4 });
 // a covered post never silences a neighbour's video: sibling posts, plain boxes in a plain wrapper, and posts inside a
 // wrapper whose class looks like a post ("post-list"); the cover goes on the post, never on the wrapper
 await setConfig({}); // unknown images off: the clip's own frames must not cover its post here
@@ -1147,6 +1245,8 @@ check('video post with a 6-word caption, one whose caption names a seen work, an
   c['v-cap'] === null && c['v-seen'] === null && c['v-novideo'] === null, c);
 await page.evaluate(() => document.querySelector('#v-bare > sb-overlay').shadowRoot.querySelector('[data-a="once"]').click());
 await sleep(300);
+const noPill = await page.evaluate(() => !document.querySelector('#v-bare > sb-overlay'));
+check('"Show once" on a "Video with no caption" cover leaves no pill', noPill);
 await setConfig(seenBB, { captionlessVideos: ['localhost'], scanImages: false }); // a settings change re-decides every post
 const once = (await covered(['v-bare', 'v-late']));
 const hNow = await page.evaluate(() => Math.round(document.getElementById('v-bare').getBoundingClientRect().height));
