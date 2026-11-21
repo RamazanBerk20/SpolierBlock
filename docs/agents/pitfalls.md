@@ -1,6 +1,6 @@
 # Pitfalls
 
-Traps specific to this repository, each checked against the code or the commit history at version 0.2.5. Read the section for the area you are about to change.
+Traps specific to this repository, each checked against the code or the commit history at version 0.2.6. Read the section for the area you are about to change.
 
 ## Models
 

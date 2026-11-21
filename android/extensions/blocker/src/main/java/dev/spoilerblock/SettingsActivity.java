@@ -50,7 +50,7 @@ import java.util.Map;
  * settings button, the app shortcut and the app's own settings). Built in code with plain framework views.
  */
 public final class SettingsActivity extends Activity {
-    static final String VERSION = "0.2.5";
+    static final String VERSION = "0.2.6";
     private static final int EXPORT = 1, IMPORT = 2;
     private static final String[] TABS = {"Library", "Add by hand", "Blocking", "Data", "About"};
     private static final String[] TYPE_LABELS = {"Film", "TV show", "Game", "Book", "Anime", "Manga", "Comic"};

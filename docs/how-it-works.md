@@ -1,6 +1,6 @@
 # How it works
 
-This page describes the browser extension (version 0.2.5). The Android port is in [android.md](android.md). It follows the same rules. The config, the decision rule and the cover wording are defined in [agents/contract.md](agents/contract.md) and are not repeated here.
+This page describes the browser extension (version 0.2.6). The Android port is in [android.md](android.md). It follows the same rules. The config, the decision rule and the cover wording are defined in [agents/contract.md](agents/contract.md) and are not repeated here.
 
 ## Overview
 
