@@ -186,17 +186,22 @@ export function customWorks(custom, words) {
   return (custom ?? []).map((c) => ({ id: c.id, title: c.title, type: c.type, year: null, aliases: c.aliases ?? [], characters: [], pop: CUSTOM_POP, ambiguous: ambiguous(c.title) }));
 }
 
-// added: works from catalog updates; custom: storage `custom` (hand-entered works)
-export function rebuild(bundle, added, custom = []) {
+// learned.names (contract rule 11): a work's extra names, catalog or custom, appended to its aliases as given, so the
+// index builder treats them as any alias of that work (its own pop and flags)
+export const withNames = (works, names) => works.map((w) => (names?.[w.id]?.length ? { ...w, aliases: [...(w.aliases ?? []), ...names[w.id]] } : w));
+
+// added: works from catalog updates; custom: storage `custom` (hand-entered works); names: storage `learned.names`
+export function rebuild(bundle, added, custom = [], names = {}) {
   setCommonWords(bundle.words);
-  const built = buildIndex(mergeCatalog(bundle.catalog, [...added, ...customWorks(custom, bundle.words)]));
+  const merged = mergeCatalog(bundle.catalog, [...added, ...customWorks(custom, bundle.words)]);
+  const built = buildIndex({ ...merged, works: withNames(merged.works, names) });
   return { bin: built.bin, meta: { ...built.meta, fromBundled: mapBundledGroups(bundle.meta, built.meta) } };
 }
 
 // One update run. deps: { fetch, storage (browser.storage.local-like), loadBundle(), endpoint, now, sleep }
 // loadBundle -> { catalog, words, classes, info: { builtAt }, meta (bundled index.json) }
 export async function runUpdate({ storage, loadBundle, now = Date.now(), ...net }) {
-  const { catalogMeta: old = {}, catalogAdded: prev = [], custom = [] } = await storage.get(['catalogMeta', 'catalogAdded', 'custom']);
+  const { catalogMeta: old = {}, catalogAdded: prev = [], custom = [], learned } = await storage.get(['catalogMeta', 'catalogAdded', 'custom', 'learned']);
   const meta = { lastSuccess: null, added: 0, ...old, lastCheck: now, lastError: null };
   const stats = { queries: 0, bytes: 0 };
   try {
@@ -207,7 +212,7 @@ export async function runUpdate({ storage, loadBundle, now = Date.now(), ...net 
     const fresh = await fetchDelta({ classes: bundle.classes, sinceYear, known, ambiguous: makeAmbiguous(bundle.words), words: bundle.words, series, stats, ...net });
     if (fresh.length) {
       const added = [...prev, ...fresh];
-      const { bin, meta: indexMeta } = rebuild(bundle, added, custom);
+      const { bin, meta: indexMeta } = rebuild(bundle, added, custom, learned?.names);
       // single set call: content scripts see either the old or the complete new index
       await storage.set({ catalogIndex: { builtAt: now, bin: toBase64(bin), meta: indexMeta }, catalogAdded: added });
       meta.added = added.length;

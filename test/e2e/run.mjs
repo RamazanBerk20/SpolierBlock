@@ -42,11 +42,20 @@ const SERIES_EXTRA = ['Inception', 'Interstellar', 'Ratatouille', 'Cars', 'Rocky
 }
 // SB_CONTENT=<dir with content.js/content.css>: run another content script (e.g. 0.1) against the same pages
 if (process.env.SB_CONTENT) for (const f of ['content.js', 'content.css']) fs.copyFileSync(path.join(process.env.SB_CONTENT, f), path.join(EXT, 'src/content', f));
+// The test build reads the image server's host (127.0.0.1) as youtube.com, so test/e2e/yt.html gets the youtube.com
+// selectors and the uploader part, and the page /x as x.com (rule 10's caption element) (no real site is opened).
+{
+  const f = path.join(EXT, 'src/content/content.js'), src = fs.readFileSync(f, 'utf8');
+  const at = "const host = hostname.replace(/^www\\.|^mobile\\.|^m\\./, '');";
+  if (!src.includes(at)) throw new Error('content.js: host line not found for the youtube.com test mapping');
+  fs.writeFileSync(f, src.replace(at, at.replace("= hostname", "= location.pathname === '/x' ? 'x.com' : hostname")
+    .replace(";", ".replace(/^127\\.0\\.0\\.1$/, 'youtube.com');")));
+}
 const only = process.env.ONLY; // ONLY=1: skip the 0.1 flow and run the 0.2 cases only; ONLY=feed,coverage: those cases
 const want = (s) => !only || only === '1' || only.split(',').includes(s);
 
 const types = { '.jpg': 'image/jpeg', '.png': 'image/png', '.webm': 'video/webm', '.html': 'text/html' };
-const PAGES = { '/': 'fixture.html', '/feed': 'feed.html', '/coverage': 'coverage.html' };
+const PAGES = { '/': 'fixture.html', '/feed': 'feed.html', '/coverage': 'coverage.html', '/videos': 'videos.html', '/x': 'videos.html' };
 let PICS = null; // pictures the shipped engine titles / calls generic media, chosen at run time (see the 0.2 cases)
 // a long static feed for the scan-cost measurement: 3,000 posts, one in ten names a work
 const longPage = () => '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>long feed</title></head><body><main id="feed">' +
@@ -62,7 +71,7 @@ function staticServer(port, name, html) {
     log[name].push(`${req.method} ${req.url} ua=${(req.headers['user-agent'] ?? '').slice(0, 20)} sec-fetch-site=${req.headers['sec-fetch-site'] ?? ''}`);
     const u = new URL(req.url, 'http://x');
     if (html && u.pathname === '/long') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(longPage()); }
-    const page = html ? PAGES[u.pathname] : u.pathname === '/frame.html' && 'frame.html';
+    const page = html ? PAGES[u.pathname] : { '/frame.html': 'frame.html', '/yt.html': 'yt.html' }[u.pathname];
     if (page) {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(fs.readFileSync(path.join(ROOT, 'test/e2e', page), 'utf8')
@@ -368,7 +377,7 @@ await extGo('/src/popup/popup.html');
 const META = JSON.parse(fs.readFileSync(path.join(EXT, 'data/index.json'), 'utf8'));
 const worksOf = (label, entry) => Object.fromEntries(META.groups.find((g) => g[0] === label).slice(1)
   .map((w) => [META.ids[w], { title: META.titles[w], type: META.types[w], year: META.years[w] || null, ts: 1, style: null, ...entry }]));
-const DEF = { enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], catalogUpdate: 'off' };
+const DEF = { enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], captionlessVideos: [], catalogUpdate: 'off' };
 const setConfig = async (works, s = {}) => {
   await storage((a) => (globalThis.browser ?? chrome).storage.local.set(a), { works, settings: { ...DEF, ...s } });
   await sleep(1000);
@@ -384,6 +393,7 @@ const INFO = `(el) => {
   const ov = [...el.children, ...(el.shadowRoot?.children ?? [])].find((c) => c.localName === 'sb-overlay');
   const sr = ov?.shadowRoot;
   return { label: sr?.querySelector('p')?.textContent ?? null, seen: sr ? !sr.querySelector('[data-a="seen"]').hidden : null,
+    not: sr ? !sr.querySelector('[data-a="not"]').hidden : null,
     menu: sr?.querySelector('[data-a="menu"]')?.getAttribute('aria-label') ?? null, dark: !!ov?.hasAttribute('data-dark'),
     oh: ov ? Math.round(ov.getBoundingClientRect().height) : null, bh: Math.round(el.getBoundingClientRect().height) };
 }`;
@@ -481,7 +491,7 @@ await settle();
 c = await covered(POSTS);
 report.push(`## 0.2 defaults\n${JSON.stringify(c)}`);
 check('style all: "Mentions {t}"', lab(c['t-breaking']) === 'Mentions Breaking Bad' && lab(c['t-neutral']) === 'Mentions Star Wars', c['t-breaking']);
-check('buttons: Show once, I\'ve seen it, settings', c['t-breaking']?.seen === true && c['t-breaking']?.menu === 'SpolierBlock settings');
+check('buttons: Show once, I\'ve seen it, Not this, settings', c['t-breaking']?.seen === true && c['t-breaking']?.not === true && c['t-breaking']?.menu === 'SpolierBlock settings');
 if (TITLED) check('image identified: "Image from {t}"', lab(c['x-titled']) === TITLED.label, { got: c['x-titled'], want: TITLED.label });
 else skip('image identified: "Image from {t}"', NO_TITLE);
 if (GENERIC) check('unknownImages off: unidentified media image not covered', c['x-generic'] === null, c['x-generic']);
@@ -497,7 +507,7 @@ check('label: own-text group first, then the OCR-only one', lab(c['i-ocr']) === 
 // B) unknownImages on (live)
 await setConfig({}, { unknownImages: true });
 c = await covered(['x-generic']);
-if (GENERIC) check('unknownImages on: "Possible film, show or game image" without "I\'ve seen it"', lab(c['x-generic']) === GENERIC.label && c['x-generic'].seen === false, c['x-generic']);
+if (GENERIC) check('unknownImages on: "Possible film, show or game image" without "I\'ve seen it" and "Not this"', lab(c['x-generic']) === GENERIC.label && c['x-generic'].seen === false && c['x-generic'].not === false, c['x-generic']);
 else skip('unknownImages on', NO_GENERIC);
 
 // C) seen never covers; blockUnlisted off covers only blocked groups
@@ -581,11 +591,14 @@ const pkState = (id = 'x-dune') => page.evaluate((id) => {
 }, id);
 const clickIn = (sel, id = 'x-dune') => page.evaluate((sel, id) => document.querySelector(`#${id} > sb-overlay`).shadowRoot.querySelector(sel).click(), sel, id);
 const worksNow = () => storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('works')).works ?? {});
+const look = await page.evaluate(() => { const cs = getComputedStyle(document.querySelector('#x-dune > sb-overlay')); return { size: cs.fontSize, bg: cs.backgroundColor, ct: cs.containerType }; });
+check('the cover keeps its own look under its reset: 13px text, an opaque background, size containment',
+  look.size === '13px' && !/transparent|, 0\)$/.test(look.bg) && look.ct === 'size', look);
 await clickIn('[data-a="seen"]');
 const pk1 = await pkState();
 check('picker opens for a group with several works: title, a row per work, nothing ticked, focus inside, note',
   pk1.open && pk1.rows.length === 2 && pk1.checked === 0 && pk1.focus === 'input' && pk1.title === 'Which have you seen?' &&
-  pk1.note === 'Posts that only say "Dune" stay covered until every one is marked.', pk1);
+  pk1.note === 'Posts that only say "Dune" are shown once you have seen one of these.', pk1);
 await clickIn('[data-a="pk-all"]');
 const pk2 = await pkState();
 await clickIn('[data-a="pk-cancel"]');
@@ -608,11 +621,11 @@ await clickIn('.pk .first li:first-child input');
 await clickIn('[data-a="pk-all2"]');
 await clickIn('[data-a="pk-ok"]');
 await sleep(1500);
-const w2 = await worksNow(), pk5 = await pkState(), duneIds = Object.keys(worksOf('Dune', {}));
+const w2 = await worksNow(), pk5 = { covered: await page.evaluate(() => !!document.querySelector('#x-dune > sb-overlay')) }, duneIds = Object.keys(worksOf('Dune', {}));
 const written = Object.keys(w2), writtenDune = written.filter((id) => duneIds.includes(id));
-check('picker: "Show 2 more" shows the rest; only the ticked works are written (one of the post\'s, the eight of the series); the cover stays',
+check('picker: "Show 2 more" shows the rest; only the ticked works are written (one of the post\'s, the eight of the series); one seen work of the name uncovers the post',
   pkMore.more?.visible === 8 && pkMore.more.showMore === null && written.length === 9 && writtenDune.length === 1 &&
-  Object.values(w2).every((x) => x.state === 'seen') && pk5.label === 'Mentions Dune' && !pk5.open && pk5.focus === 'seen', { written: Object.values(w2).map((x) => x.title), pk5 });
+  Object.values(w2).every((x) => x.state === 'seen') && !pk5.covered, { written: Object.values(w2).map((x) => x.title), pk5 });
 // a cover naming several groups (Breaking Bad: one work; Dune: two): every unseen work of all of them, and the other note
 await setConfig({});
 await addPost('x-multi', 'Paul Atreides and Walter White both end badly.');
@@ -622,8 +635,185 @@ const pk6 = await pkState('x-multi');
 await clickIn('[data-a="pk-cancel"]', 'x-multi');
 check('picker for a cover naming several groups: the unseen works of all of them, the several-works note',
   pk6.open && pk6.rows.length === 3 && /and 1 more$/.test(pk6.label) &&
-  pk6.note === 'This post names several works. It stays covered until each one is marked.', pk6);
+  pk6.note === 'This post names several works. It is shown once you have seen one for each name.', pk6);
+// one work whose series has more unseen works (Interstellar, in the test series): the picker opens with that work ticked
+await addPost('x-one', 'Cooper docks with the Endurance in Interstellar.');
+await sleep(500);
+await clickIn('[data-a="seen"]', 'x-one');
+const pk7 = await pkState('x-one');
+await clickIn('[data-a="pk-cancel"]', 'x-one');
+const afterCancel = { works: Object.keys(await worksNow()).length, covered: await page.evaluate(() => !!document.querySelector('#x-one > sb-overlay')) };
+check('picker for one work of a series: that work ticked, its note, "More from this series"; Cancel writes nothing',
+  pk7.open && pk7.label === 'Mentions Interstellar' && pk7.rows.length === 1 && pk7.rows[0].startsWith('Interstellar') && pk7.checked === 1 &&
+  pk7.note === 'This post is about "Interstellar". It is shown once you mark that one.' && pk7.more?.rows.length === 9 &&
+  pk7.more.all === 'All 9' && pk7.more.showMore === 'Show 3 more' && pk7.more.checked === 0 && !afterCancel.works && afterCancel.covered, { pk7, afterCancel });
+await clickIn('[data-a="seen"]', 'x-one');
+await clickIn('[data-a="pk-ok"]', 'x-one');
+await sleep(1500);
+const w3 = Object.values(await worksNow());
+check('picker for one work: Mark seen writes only the ticked work and uncovers the post',
+  w3.length === 1 && w3[0].title === 'Interstellar' && w3[0].state === 'seen' && !(await page.evaluate(() => !!document.querySelector('#x-one > sb-overlay'))), w3);
+// a box covered while it was small (a feed wrapper with its heading) must not stay covered once it fills with posts
+const grown = await page.evaluate(async () => {
+  const d = document.createElement('div');
+  d.id = 'x-grow';
+  d.innerHTML = '<span>Breaking Bad finale thread</span>';
+  document.body.append(d);
+  await new Promise((r) => setTimeout(r, 600));
+  const before = !!d.querySelector(':scope > sb-overlay');
+  for (let i = 0; i < 40; i++) { const p = document.createElement('p'); p.textContent = `Post ${i}: ` + 'nothing about any work here. '.repeat(10); d.append(p); }
+  await new Promise((r) => setTimeout(r, 600));
+  return { before, after: !!d.querySelector(':scope > sb-overlay'), inner: !!d.querySelector('span sb-overlay, span[data-sb-blocked]') };
+});
+check('a covered box that grows into a page section is uncovered (its own text is judged on its own)', grown.before && !grown.after, grown);
+// a navigation bar with one link naming a work: that link is covered, not the bar
+const menu = await page.evaluate(async () => {
+  const d = document.createElement('div');
+  d.id = 'x-menu';
+  d.innerHTML = '<a href="#a">Home</a> <a href="#b">Reviews</a> <a href="#c" id="x-menu-bb">Breaking Bad</a> <a href="#d">Join for free</a>';
+  document.body.append(d);
+  await new Promise((r) => setTimeout(r, 600));
+  return { bar: !!d.querySelector(':scope > sb-overlay'), link: !!d.querySelector('#x-menu-bb > sb-overlay') };
+});
+check('a menu of links: only the link that names a work is covered', menu.link && !menu.bar, menu);
+// a sidebar: a short line that names a work beside 4,000 characters of paragraphs -> the line is covered, not the box
+const side = await page.evaluate(async () => {
+  const d = document.createElement('div');
+  d.id = 'x-side';
+  d.innerHTML = '<span id="x-side-line">Breaking Bad finale thread</span>' + '<p>Rule: be kind to each other and stay on topic, thank you all.</p>'.repeat(70);
+  document.body.append(d);
+  await new Promise((r) => setTimeout(r, 600));
+  return { box: !!d.querySelector(':scope > sb-overlay'), line: !!d.querySelector('#x-side-line > sb-overlay'), paras: d.querySelectorAll('p > sb-overlay').length };
+});
+check('a big box of paragraphs: only the line that names a work is covered', side.line && !side.box && side.paras === 0, side);
 
+}
+
+// memory of the processes that may host the models (Firefox: the "extension" process; Chrome: the extension renderer)
+async function procMem() {
+  try {
+    if (target === 'firefox') {
+      const info = await chromeEval(`ChromeUtils.requestProcInfo().then((p) => JSON.stringify(p.children.map((c) => [c.type, Math.round(c.memory / 1048576)])))`);
+      return `## Zen child processes [type, resident MB]\n${info}`;
+    }
+    const ps = execSync("ps -eo rss,args | grep -E 'chrome.*--extension-process' | grep -v grep").toString();
+    return `## Chrome extension process RSS\n${ps.split('\n').filter(Boolean).map((l) => (parseInt(l) / 1024).toFixed(0) + ' MB').join('\n')}`;
+  } catch (e) { return 'memory: ' + e.message; }
+}
+
+if (want('context')) {
+// I) unsure names and the title-in-context model (contract, "Names the matcher is unsure about"). Which posts the model
+// accepts depends on the shipped model, so the cases use posts the Node runner (tools/context-train/classify.mjs) judges
+// that way on the same input, and the engine must give the same probability.
+await import(path.join(ROOT, 'src/shared/context-input.js'));
+const { contextClassifier } = await import(path.join(ROOT, 'tools/context-train/classify.mjs'));
+const ctxNode = await contextClassifier(path.join(EXT, 'models/context'));
+const { windowText, workText } = globalThis.SBContext;
+const thr = (o) => (o ? ctxNode.meta.thresholdOther ?? ctxNode.meta.threshold : ctxNode.meta.threshold);
+// a post (as addPost draws it: "@pic" line, then the text) with no accepted group and exactly one unsure name
+const judge = async (text, own = `@pic\n${text}\n`) => {
+  const us = nodeMatcher.evaluate(own).length ? [] : nodeMatcher.unsure(own);
+  if (us.length !== 1) return null;
+  const [u] = us, a = windowText(own, u.s, u.e), b = workText(META, u.g), p = await ctxNode.prob(a, b);
+  return { text, a, b, o: u.o, label: META.groups[u.g][0], p, yes: p >= thr(u.o) };
+};
+let Y = null, N = null, YT = null;
+for (const t of ['rewatched severance last night, mark s is the best', 'my favorite show is still severance, nothing comes close', 'the matrix changed everything for me']) {
+  const j = await judge(t), jt = await judge(t, t); // the post, and the same words as the page title
+  if (j?.yes && jt?.yes) { Y = j; YT = jt; break; }
+}
+for (const t of ['I lost my keys again today, and then it started to rain.', 'severance pay was finally in my account', 'We drove to Chernobyl last summer']) {
+  const j = await judge(t);
+  if (j && !j.yes) { N = j; break; }
+}
+report.push(`## title in context (Node runner, threshold ${ctxNode.meta.threshold}): yes ${JSON.stringify(Y)}; no ${JSON.stringify(N)}`);
+const ctxAsk = (msg) => extEval(async (m) => {
+  for (let i = 0; ; i++) {
+    try { return await (globalThis.browser ?? chrome).runtime.sendMessage(m); } catch (e) {
+      if (i > 20) return { error: String(e) };
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+}, msg);
+if (Y && N) {
+  const ms = [];
+  await ctxAsk({ type: 'text.classify', text: 'The runtime and the spoiler classifier are loaded first.' }); // so the memory delta is this model's
+  await sleep(2000);
+  report.push(`## before the first text.context message (with ONLY=context, the first one of this browser): ${await procMem()}`);
+  for (const x of [Y, N, YT]) { const t = Date.now(); x.engine = (await ctxAsk({ type: 'text.context', a: x.a, b: x.b, o: x.o }))?.p; ms.push(Date.now() - t); }
+  for (let k = 0; k < 20; k++) { const t = Date.now(); await ctxAsk({ type: 'text.context', a: `${k} ${Y.a}`, b: Y.b, o: 0 }); ms.push(Date.now() - t); }
+  const warm = ms.slice(1).sort((a, b) => a - b);
+  report.push(`## text.context round trip from an extension page: first (loads the model) ${ms[0]} ms, then median ${warm[warm.length >> 1]} ms, max ${warm.at(-1)} ms (${warm.length} calls)\n` +
+    `after: ${(await sleep(2000), await procMem())}`);
+  check('engine: text.context gives the Node runner\'s probability on the same pair', [Y, N, YT].every((x) => Math.abs(x.engine - x.p) < 0.005),
+    [Y, N, YT].map((x) => [x.p.toFixed(4), x.engine]));
+  await setConfig({});
+  await open('/');
+  await settle();
+  const tap = (sel, id) => page.evaluate((sel, id) => document.querySelector(`#${id} > sb-overlay`).shadowRoot.querySelector(sel).click(), sel, id);
+  const asked = () => page.evaluate(() => JSON.parse(document.documentElement.getAttribute('data-sb-stats') || '{}').ctx ?? 0);
+  const idle = () => page.waitForFunction(() => document.documentElement.getAttribute('data-sb-busy') === '0', { timeout: 60000 });
+  // added and sampled in one go: the question is in flight (busy) and the post is not covered yet
+  const addAsking = (id, text) => page.evaluate(async ([id, text]) => {
+    const a = document.createElement('article');
+    a.className = 'post'; a.id = id;
+    a.innerHTML = '<div class="who">@pic</div><p></p>';
+    a.querySelector('p').textContent = text;
+    document.getElementById('feed').append(a);
+    await new Promise((r) => setTimeout(r, 0));
+    return { covered: a.hasAttribute('data-sb-blocked'), busy: +document.documentElement.getAttribute('data-sb-busy') };
+  }, [id, text]);
+  const n0 = await asked();
+  const during = await addAsking('x-ctx-yes', Y.text);
+  await idle();
+  c = await covered(['x-ctx-yes']);
+  const n1 = await asked();
+  check('unsure name: not covered while the model is asked', !during.covered && during.busy > 0, during);
+  check(`unsure name the model accepts: covered with "Mentions ${Y.label}" after the answer (one question)`,
+    lab(c['x-ctx-yes']) === `Mentions ${Y.label}` && n1 - n0 === 1, { cover: c['x-ctx-yes'], asked: n1 - n0 });
+  await addAsking('x-ctx-no', N.text);
+  await idle();
+  c = await covered(['x-ctx-no']);
+  check('unsure name the model rejects: not covered', c['x-ctx-no'] === null && (await asked()) - n1 === 1, { cover: c['x-ctx-no'], asked: (await asked()) - n1 });
+  // the page title takes the same path
+  const n2 = await asked();
+  await page.evaluate((t) => { document.title = t; }, YT.text);
+  await idle();
+  await sleep(300);
+  const title = await page.evaluate(() => document.title);
+  check('page title with an unsure name the model accepts: replaced by the cover text', title === `Mentions ${YT.label}` && (await asked()) - n2 === 1, title);
+  // the same post again: the remembered answer covers it at once, no new question
+  const n3 = await asked();
+  await addAsking('x-ctx-again', Y.text);
+  await sleep(300);
+  c = await covered(['x-ctx-again']);
+  check('the same text again: covered from the remembered answer, no question', lab(c['x-ctx-again']) === `Mentions ${Y.label}` && (await asked()) === n3, c['x-ctx-again']);
+  await tap('[data-a="seen"]', 'x-ctx-again');
+  // a work of the test series opens the picker with that work ticked (contract, "Cover wording"): Mark seen
+  if (await page.evaluate(() => document.querySelector('#x-ctx-again > sb-overlay')?.shadowRoot.querySelector('dialog').open)) await tap('[data-a="pk-ok"]', 'x-ctx-again');
+  await sleep(1500);
+  const wSeen = await storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('works')).works ?? {});
+  c = await covered(['x-ctx-again', 'x-ctx-yes']);
+  check('"I\'ve seen it" on a model cover: writes the work as seen and uncovers', c['x-ctx-again'] === null && c['x-ctx-yes'] === null &&
+    Object.values(wSeen).some((x) => x.title === Y.label && x.state === 'seen'), Object.values(wSeen).map((x) => `${x.title} ${x.state}`));
+  // a seen group is never asked: a new window around the same name asks nothing
+  const n4 = await asked();
+  await addAsking('x-ctx-seen', `${Y.text} Really, I mean it.`);
+  await idle();
+  await sleep(300);
+  c = await covered(['x-ctx-seen']);
+  check('a seen group is not asked', c['x-ctx-seen'] === null && (await asked()) === n4, { cover: c['x-ctx-seen'], asked: (await asked()) - n4 });
+  // unseen again: the rescan covers both posts from the remembered answer; "Show once" (per text) then shows both, also
+  // after another rescan
+  await setConfig({});
+  c = await covered(['x-ctx-yes', 'x-ctx-again']);
+  const n5 = await asked();
+  await tap('[data-a="once"]', 'x-ctx-yes');
+  await setConfig({}, { unknownImages: true }); // a real change: Chrome reports no change for an identical write
+  const c2 = await covered(['x-ctx-yes', 'x-ctx-again']);
+  check('"Show once" on a model cover: uncovered, and stays so after a rescan', lab(c['x-ctx-yes']) === `Mentions ${Y.label}` &&
+    c2['x-ctx-yes'] === null && c2['x-ctx-again'] === null && (await asked()) === n5, { before: c, after: c2 });
+} else skip('title in context', 'no candidate post the shipped model accepts (or rejects) with one unsure name');
 }
 
 if (want('feed')) {
@@ -738,7 +928,242 @@ await page.evaluate(() => document.querySelector('#av-post > sb-overlay').shadow
 await sleep(800);
 const av3 = await av();
 check('"Show once" restores sound and playback', !av3.covered && !av3.muted && !av3.paused, av3);
+// a covered post never silences a neighbour's video: sibling posts, plain boxes in a plain wrapper, and posts inside a
+// wrapper whose class looks like a post ("post-list"); the cover goes on the post, never on the wrapper
+await setConfig({}); // unknown images off: the clip's own frames must not cover its post here
+const nb = await page.evaluate(async (src) => {
+  const d = document.createElement('section');
+  d.id = 'nb';
+  const vid = (id) => `<video id="${id}" src="${src}" loop playsinline style="width:200px;height:120px"></video>`;
+  d.innerHTML = `<article id="nb-a"><p>Walter White dies at the end of the show.</p></article>
+    <article id="nb-b"><p>Sunset at the lake, sound on.</p>${vid('nb-v1')}</article>
+    <div id="nb-plain"><div id="nb-c">Walter White's last scene broke me.</div><div id="nb-d"><p>Our dog at the beach.</p>${vid('nb-v2')}</div></div>
+    <div class="post-list" id="nb-list"><article id="nb-e"><p>Walter White was the best character.</p></article>
+      <article id="nb-f"><p>Waves at night.</p>${vid('nb-v3')}</article></div>`;
+  document.querySelector('main').append(d);
+  for (const v of d.querySelectorAll('video')) { v.muted = false; v.play().catch(() => {}); }
+  await new Promise((r) => setTimeout(r, 1500));
+  const vs = Object.fromEntries([...d.querySelectorAll('video')].map((v) => [v.id, { muted: v.muted, paused: v.paused }]));
+  const cov = (id) => document.getElementById(id).hasAttribute('data-sb-blocked');
+  return { vs, a: cov('nb-a'), c: cov('nb-c'), e: cov('nb-e'), b: cov('nb-b'), d: cov('nb-d'), f: cov('nb-f'), plain: cov('nb-plain'), list: cov('nb-list') };
+}, `http://localhost:${PAGE}/img/video_lake.webm`);
+check('a covered post leaves a neighbouring post\'s playing video alone (siblings, plain boxes, a "post-list" wrapper)',
+  nb.a && nb.c && nb.e && !nb.b && !nb.d && !nb.f && !nb.plain && !nb.list && Object.values(nb.vs).every((v) => !v.muted && !v.paused), nb);
+// a site's fixed bottom bar and sticky header drawn over a covered post stay on top and take the clicks
+const bar = await page.evaluate(async () => {
+  const head = document.createElement('header');
+  head.id = 'sticky';
+  head.style.cssText = 'position:sticky;top:0;z-index:5;height:40px;background:#eee;display:flex';
+  head.innerHTML = '<button id="sticky-btn" style="flex:1">Menu</button>';
+  document.body.prepend(head);
+  const nav = document.createElement('nav');
+  nav.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:56px;z-index:10;background:#fff;display:flex';
+  nav.innerHTML = '<button id="bar-btn" style="flex:1">Home</button>';
+  document.body.append(nav);
+  const post = document.createElement('article');
+  post.id = 'bar-post';
+  post.innerHTML = '<p>Walter White dies at the end of the show.</p>';
+  post.style.height = '2000px';
+  document.querySelector('main').append(post);
+  await new Promise((r) => setTimeout(r, 600));
+  post.scrollIntoView({ block: 'start' });
+  scrollBy(0, -10); // the post's top under the sticky header, its body under the bar
+  await new Promise((r) => setTimeout(r, 300));
+  const hit = (id) => { const r = document.getElementById(id).getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const p = post.getBoundingClientRect(); return { el: document.elementFromPoint(x, y)?.id || document.elementFromPoint(x, y)?.localName, x, y, overPost: y > p.top && y < p.bottom }; };
+  window.__barClicks = [];
+  for (const id of ['bar-btn', 'sticky-btn']) document.getElementById(id).addEventListener('click', () => window.__barClicks.push(id));
+  return { covered: post.hasAttribute('data-sb-blocked'), bar: hit('bar-btn'), head: hit('sticky-btn') };
+});
+for (const k of ['bar', 'head']) await page.mouse.click(bar[k].x, bar[k].y);
+await sleep(200);
+const clicks = await page.evaluate(() => window.__barClicks);
+check('a fixed bar and a sticky header over a covered post: on top of the cover (elementFromPoint) and clicked',
+  bar.covered && bar.bar.overPost && bar.head.overPost && bar.bar.el === 'bar-btn' && bar.head.el === 'sticky-btn' &&
+  clicks.includes('bar-btn') && clicks.includes('sticky-btn'), { ...bar, clicks });
 
+}
+
+if (want('youtube')) {
+// J) youtube.com (the image server's host, read as youtube.com by the test build): the player's end screen and the uploader
+await setConfig({});
+await page.goto(`http://127.0.0.1:${IMG}/yt.html`, { waitUntil: 'domcontentloaded' });
+await page.waitForFunction(() => document.documentElement.hasAttribute('data-sb-ready'));
+await sleep(1500); // es-3 and es-4's new label arrive after 0.4 s
+c = await covered(['es-1', 'es-2', 'es-3', 'es-4', 'es-up', 'movie_player', 'up-clean', 'up-trailer', 'up-other']);
+report.push(`## youtube.com page\n${JSON.stringify(c)}`);
+check('end screen: each card is one block (a card with text, an aria-label only, a changed aria-label, "up next"), the player is not',
+  lab(c['es-1']) === 'Mentions Breaking Bad' && c['es-2'] === null && lab(c['es-3']) === 'Mentions Breaking Bad' &&
+  lab(c['es-4']) === 'Mentions Interstellar' && lab(c['es-up']) === 'Mentions Game of Thrones' && c['movie_player'] === null, c);
+check('uploader: a clean title from a channel named like the work is not covered; a trailer from it and the same title from another channel are',
+  c['up-clean'] === null && lab(c['up-trailer']) === 'Mentions Minecraft' && lab(c['up-other']) === 'Mentions Minecraft', c);
+}
+
+if (want('learned')) {
+// L) rule 11, reports. "Not this" on youtube.com (the image server's host): the key is youtube.com/{channel}
+const learnedNow = () => storage(async () => (await (globalThis.browser ?? chrome).storage.local.get('learned')).learned ?? {});
+await storage(() => (globalThis.browser ?? chrome).storage.local.remove(['learned', 'catalogIndex']));
+await setConfig({});
+await page.goto(`http://127.0.0.1:${IMG}/yt.html`, { waitUntil: 'domcontentloaded' });
+await page.waitForFunction(() => document.documentElement.hasAttribute('data-sb-ready'));
+await sleep(800);
+const NT = ['nt-a', 'nt-b', 'nt-c'];
+c = await covered(NT);
+// every button inside the cover's box, none cut to nothing (the compact one-row layout: rows are short, nt-c also narrow)
+const fit = await page.evaluate((ids) => ids.map((id) => {
+  const ov = document.querySelector(`#${id} > sb-overlay`), o = ov.getBoundingClientRect();
+  return [...ov.shadowRoot.querySelectorAll('.b > button:not([hidden])')].every((b) => { const r = b.getBoundingClientRect(); return r.width >= 20 && r.left >= o.left - 0.5 && r.right <= o.right + 0.5; }) && o.height <= 76;
+}), NT);
+check('"Not this" on every cover that names works; compact one-row covers (wide and 260 px) keep all four buttons inside',
+  NT.every((id) => lab(c[id]) === 'Mentions Breaking Bad' && c[id].not === true) && fit.every(Boolean), { c, fit });
+await page.evaluate(() => document.querySelector('#nt-a > sb-overlay').shadowRoot.querySelector('[data-a="not"]').click());
+await sleep(150);
+const at150 = (await covered(['nt-a']))['nt-a'];
+await sleep(1500);
+c = await covered(NT);
+const nl = await learnedNow(), bbIds = Object.keys(worksOf('Breaking Bad', {}));
+check('"Not this": the cover goes at once; learned.not gets youtube.com/recap lab for the group\'s works; the same channel\'s other post uncovers, another channel\'s stays',
+  at150 === null && c['nt-a'] === null && c['nt-b'] === null && lab(c['nt-c']) === 'Mentions Breaking Bad' &&
+  bbIds.every((id) => JSON.stringify(nl.not?.[id]) === '["youtube.com/recap lab"]'), { at150, c, not: nl.not });
+await extGo(OPTIONS);
+const nui = await extEval(async () => {
+  // the title comes from the index (catalog.titles) a moment after the row
+  for (let k = 0; k < 40 && !document.querySelector('#not-list li')?.textContent.includes('Breaking Bad'); k++) await new Promise((r) => setTimeout(r, 250));
+  const rows = [...document.querySelectorAll('#not-list li')].map((li) => li.textContent.replace(/\s+/g, ' ').trim());
+  document.querySelector('#not-list li button').click();
+  await new Promise((r) => setTimeout(r, 800));
+  return { rows, after: document.querySelectorAll('#not-list li').length };
+});
+await sleep(1000);
+c = await covered(NT);
+check('settings: "Not this" listed (work title, where) with a remove control; removing it covers the post again',
+  nui.rows.length === bbIds.length && nui.rows.every((r) => r.includes('Breaking Bad') && r.includes('youtube.com/recap lab')) &&
+  nui.after === bbIds.length - 1 && lab(c['nt-a']) === 'Mentions Breaking Bad', { nui, c: c['nt-a'] });
+await storage(() => (globalThis.browser ?? chrome).storage.local.remove('learned'));
+
+// B) a missing name: the popup offers the page's selection as a name for a work picked by search
+const NAME = 'Albuquerque Chemistry Tales';
+await open('/');
+await page.evaluate((name) => {
+  const a = document.createElement('article');
+  a.className = 'post'; a.id = 'nm-post';
+  a.innerHTML = `<div class="who">@nm</div><p>Finally watched ${name} tonight, what a ride.</p><p id="nm-src">${name}</p>`;
+  document.getElementById('feed').prepend(a);
+}, NAME);
+await sleep(500);
+const before = (await covered(['nm-post']))['nm-post'];
+const select = () => page.evaluate(() => { const r = document.createRange(); r.selectNodeContents(document.getElementById('nm-src')); getSelection().removeAllRanges(); getSelection().addRange(r); });
+await select();
+await extGo('/src/popup/popup.html');
+await sleep(1200);
+const pop = await extEval(async () => {
+  const $ = (id) => document.getElementById(id), btn = $('name-btn');
+  const row = { hidden: $('teach').hidden, text: btn.textContent };
+  btn.click();
+  const i = $('pick-search');
+  i.value = 'breaking bad'; i.dispatchEvent(new Event('input'));
+  for (let k = 0; k < 40 && !document.querySelector('#pick-results li'); k++) await new Promise((r) => setTimeout(r, 250));
+  const first = document.querySelector('#pick-results li')?.textContent;
+  document.querySelector('#pick-results li button').click();
+  const ask = $('pick-what').textContent;
+  $('pick-ok').click();
+  await new Promise((r) => setTimeout(r, 500));
+  return { row, first, ask, done: $('pick-done').textContent };
+});
+let nmAfter = null;
+for (let k = 0; k < 40 && !nmAfter; k++) { await sleep(500); nmAfter = (await covered(['nm-post']))['nm-post']; }
+const names = (await learnedNow()).names ?? {};
+check('popup with a selection: "Add "{selection}" as a name for…", search, Choose, Add name; a post using the name becomes covered',
+  before === null && !pop.row.hidden && pop.row.text === `Add "${NAME}" as a name for…` && /Breaking Bad/.test(pop.first) &&
+  Object.values(names).some((n) => n.includes(NAME)) && lab(nmAfter) === 'Mentions Breaking Bad', { before, pop, names, nmAfter });
+await page.evaluate(() => getSelection().removeAllRanges());
+await extReload();
+await sleep(1200);
+const noSel = await extEval(() => ({ name: document.getElementById('name-btn').hidden, teach: document.getElementById('teach').hidden }));
+check('popup with no selection: no "Add … as a name" row', noSel.teach === true, noSel);
+await extGo(OPTIONS);
+const ed = await extEval(async () => {
+  for (let k = 0; k < 20 && !document.querySelector('#names-list li'); k++) await new Promise((r) => setTimeout(r, 250));
+  const row = document.querySelector('#names-list li')?.textContent.replace(/\s+/g, ' ').trim();
+  document.querySelector('#names-list .names-btn').click();
+  const chips = [...document.querySelectorAll('#names-list .names .chips li span')].map((e) => e.textContent);
+  document.querySelector('#names-list .names .chips button').click();
+  await new Promise((r) => setTimeout(r, 800));
+  return { row, chips, left: document.querySelectorAll('#names-list li.row').length };
+});
+let nmGone = 'covered';
+for (let k = 0; k < 40 && nmGone !== null; k++) { await sleep(500); nmGone = (await covered(['nm-post']))['nm-post']; }
+check('settings: "Other names" editor lists the name; removing it uncovers the post', ed.chips.includes(NAME) && ed.left === 0 && nmGone === null, { ed, nmGone });
+// the editor in a library row adds a name the same way (and it is stored trimmed)
+await setConfig(worksOf('Breaking Bad', { state: 'blocked' }));
+const ed2 = await extEval(async () => {
+  for (let k = 0; k < 20 && !document.querySelector('#lib .names-btn'); k++) await new Promise((r) => setTimeout(r, 250));
+  const b = document.querySelector('#lib .names-btn');
+  if (b.getAttribute('aria-expanded') !== 'true') b.click();
+  const f = document.querySelector('#lib .names form');
+  f.querySelector('input').value = '  BrBa Show  ';
+  f.requestSubmit();
+  await new Promise((r) => setTimeout(r, 800));
+  return [...document.querySelectorAll('#lib .names .chips li span')].map((e) => e.textContent);
+});
+const n2 = (await learnedNow()).names ?? {};
+check('settings: the "Other names" editor of a library row adds a name, trimmed', JSON.stringify(ed2) === '["BrBa Show"]' && Object.values(n2).some((n) => n.includes('BrBa Show')), { ed2, n2 });
+await storage(() => (globalThis.browser ?? chrome).storage.local.remove(['learned']));
+await sleep(3000); // the background drops the rebuilt index again
+await extGo('/src/popup/popup.html');
+}
+
+if (want('videos')) {
+// K) rule 10, videos with no caption: on a listed site a video post with no caption and no work named is covered
+const VIDS = ['v-bare', 'v-cap', 'v-seen', 'v-late', 'v-shadow', 'v-novideo'];
+// the settings page's list: a typed URL is stored as its host name and shown as a chip
+await setConfig({});
+await extGo(OPTIONS);
+const ui = await extEval(async () => {
+  const f = document.getElementById('vsite-form');
+  document.getElementById('vsite').value = 'https://www.X.com/home';
+  f.requestSubmit();
+  await new Promise((r) => setTimeout(r, 800));
+  return { stored: (await (globalThis.browser ?? chrome).storage.local.get('settings')).settings.captionlessVideos,
+    chips: [...document.querySelectorAll('#vsites li span')].map((e) => e.textContent), paused: document.querySelectorAll('#sites li.none').length };
+});
+check('settings page: "Cover videos with no caption on these sites" stores and shows the host name; paused sites untouched',
+  JSON.stringify(ui.stored) === '["x.com"]' && JSON.stringify(ui.chips) === '["x.com"]' && ui.paused === 1, ui);
+await extGo('/src/popup/popup.html');
+const seenBB = worksOf('Breaking Bad', { state: 'seen' });
+await setConfig(seenBB, { captionlessVideos: ['localhost'] });
+await open('/videos');
+await sleep(1500); // the lazy player arrives after 0.5 s
+c = await covered(VIDS);
+report.push(`## videos with no caption, site listed\n${JSON.stringify(c)}`);
+const bareV = () => page.evaluate(() => { const v = document.getElementById('v-bare-v'); return { muted: v.muted, paused: v.paused }; });
+const bv1 = await bareV();
+check('captionless video post covered: exact label, no "I\'ve seen it" or "Not this", settings button, video muted and paused',
+  lab(c['v-bare']) === 'Video with no caption' && c['v-bare'].seen === false && c['v-bare'].not === false && c['v-bare'].menu === 'SpolierBlock settings' &&
+  bv1.muted && bv1.paused, { ...c['v-bare'], ...bv1 });
+check('a video added to a post later (lazy player) and a video in an open shadow root: covered',
+  lab(c['v-late']) === 'Video with no caption' && lab(c['v-shadow']) === 'Video with no caption', c);
+check('video post with a 6-word caption, one whose caption names a seen work, and a post with no video: not covered',
+  c['v-cap'] === null && c['v-seen'] === null && c['v-novideo'] === null, c);
+await page.evaluate(() => document.querySelector('#v-bare > sb-overlay').shadowRoot.querySelector('[data-a="once"]').click());
+await sleep(300);
+await setConfig(seenBB, { captionlessVideos: ['localhost'], scanImages: false }); // a settings change re-decides every post
+const once = (await covered(['v-bare', 'v-late']));
+const hNow = await page.evaluate(() => Math.round(document.getElementById('v-bare').getBoundingClientRect().height));
+check('the cover did not change the post\'s measured height (covered vs shown)', hNow === c['v-bare']?.bh, { covered: c['v-bare']?.bh, shown: hNow });
+check('"Show once" reveals the captionless video post and it stays revealed after a re-decision', once['v-bare'] === null && lab(once['v-late']) === 'Video with no caption', once);
+await setConfig(seenBB);
+c = await covered(VIDS);
+check('list empty: no video post covered', VIDS.every((id) => c[id] === null), c);
+// the page at /x is read as x.com by the test build: the caption is [data-testid="tweetText"], not a 4-word run
+await setConfig({}, { captionlessVideos: ['x.com'] });
+await open('/x');
+await sleep(1000);
+c = await covered(['x-bare', 'x-cap', 'v-cap']);
+report.push(`## videos with no caption, x.com\n${JSON.stringify(c)}`);
+check('x.com: a video article with a 5-word name line and no tweet text is covered; with 2 words of tweet text it is not',
+  lab(c['x-bare']) === 'Video with no caption' && c['x-cap'] === null && lab(c['v-cap']) === 'Video with no caption', c);
+await setConfig({});
 }
 
 if (want('perf')) {
@@ -765,15 +1190,7 @@ if (target === 'chrome') {
 }
 
 // memory of the process hosting the models (Firefox: the "extension" process; Chrome: the extension renderer)
-try {
-  if (target === 'firefox') {
-    const info = await chromeEval(`ChromeUtils.requestProcInfo().then((p) => JSON.stringify(p.children.map((c) => [c.type, Math.round(c.memory / 1048576)])))`);
-    report.push(`## Zen child processes [type, resident MB]\n${info}`);
-  } else {
-    const ps = execSync("ps -eo rss,args | grep -E 'chrome.*--extension-process' | grep -v grep").toString();
-    report.push(`## Chrome extension process RSS\n${ps.split('\n').filter(Boolean).map((l) => (parseInt(l) / 1024).toFixed(0) + ' MB').join('\n')}`);
-  }
-} catch (e) { report.push('memory: ' + e.message); }
+report.push(await procMem());
 
 report.push(`## requests to the cross-origin image server (refetches by the background)\n${log.img.join('\n')}`);
 const hosts = {};

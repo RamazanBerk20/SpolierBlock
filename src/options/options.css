@@ -59,13 +59,20 @@ b { font-weight: 600; }
 
 /* Library rows: one panel, rows split by a 2px step of the ground tone */
 .lib { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.lib .row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto 40px; align-items: center; gap: 12px; padding: 8px 8px 8px 18px; background: var(--panel); }
+.lib .row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto auto 40px; align-items: center; gap: 12px; padding: 8px 8px 8px 18px; background: var(--panel); }
 .lib .row:first-child { border-radius: 18px 18px 0 0; }
 .lib .row:last-child { border-radius: 0 0 18px 18px; }
 .lib .row:only-child { border-radius: 18px; }
 .pick { display: flex; }
 select.style { background: var(--ground); font-size: 14px; max-width: 220px; }
-#custom-list .row { grid-template-columns: minmax(0, 1fr) auto 40px; }
+#custom-list .row { grid-template-columns: minmax(0, 1fr) auto auto 40px; }
+/* Corrections: rows of a title and one control; "Other names" opens an editor across the row */
+#not-list .row, #names-list .row { grid-template-columns: minmax(0, 1fr) auto; }
+#learned .lib { margin-top: 2px; }
+#learned .sites + .sites { margin-top: 40px; }
+.names { grid-column: 1 / -1; flex-basis: 100%; display: flex; flex-direction: column; gap: 8px; padding: 4px 0 6px; }
+.names input { flex: 0 1 280px; background: var(--ground); }
+.results li { flex-wrap: wrap; }
 .mark.none { background: var(--raise); color: var(--soft); }
 .more { margin-top: 10px; }
 
@@ -151,8 +158,9 @@ kbd { font: inherit; font-weight: 600; padding: 2px 8px; border-radius: 6px; bac
   .style-pick, .blocks, .facts, .form { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
-  #lib .row { grid-template-columns: 28px minmax(0, 1fr) 40px; grid-template-areas: "pick what rm" ". seg seg" ". style style"; row-gap: 8px; }
-  #lib .row .pick { grid-area: pick; } #lib .row .what { grid-area: what; } #lib .row > button { grid-area: rm; }
+  #lib .row { grid-template-columns: 28px minmax(0, 1fr) 40px; grid-template-areas: "pick what rm" ". seg seg" ". style style" ". nm nm"; row-gap: 8px; }
+  #lib .row .names-btn { grid-area: nm; justify-self: start; }
+  #lib .row .pick { grid-area: pick; } #lib .row .what { grid-area: what; } #lib .row > button:not(.names-btn) { grid-area: rm; }
   #lib .row .seg { grid-area: seg; justify-self: start; } #lib .row select.style { grid-area: style; justify-self: start; }
   .results li { flex-wrap: wrap; padding-left: 18px; }
   .acts { width: 100%; }

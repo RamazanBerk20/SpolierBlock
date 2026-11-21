@@ -1,6 +1,7 @@
 // Evaluates a spoiler model the way the extension runs it (per sentence, max probability) on
 // test/fixtures/spoiler-eval.jsonl or test/fixtures/spoiler-eval2.jsonl (a second set, written separately from the
-// training patterns). Neither is ever used for training or threshold choice.
+// training patterns). Neither is ever used for training or threshold choice. test/fixtures/spoiler-val.jsonl is the
+// validation set (tuned-on: it chooses the threshold and compares training runs), so its figures are optimistic.
 // usage: node tools/eval-spoiler.mjs [modelDir=models/spoiler] [eval.jsonl]
 import fs from 'node:fs';
 import { spoilerClassifier } from './spoiler-classify.mjs';

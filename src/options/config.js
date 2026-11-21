@@ -1,16 +1,18 @@
-// The user's config (docs/agents/contract.md): works, custom, settings. Pure functions, shared by the background,
+// The user's config (docs/agents/contract.md): works, custom, settings, learned. Pure functions, shared by the background,
 // the settings page, the popup and the Node tests.
 
 export const TYPES = ['movie', 'tv', 'game', 'book', 'anime', 'manga', 'comic'];
 export const DEFAULTS = Object.freeze({
-  enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], catalogUpdate: 'off',
+  enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], captionlessVideos: [],
+  catalogUpdate: 'off',
 });
 const UPDATES = ['off', 'daily', 'weekly', 'monthly'];
+const SITE_LISTS = ['pausedSites', 'captionlessVideos']; // host names: normHost, deduplicated
 export const FORMAT = 'spolierblock', VERSION = 1;
 
 export const withDefaults = (s) => {
   const out = { ...DEFAULTS, ...(s && typeof s === 'object' ? s : {}) };
-  if (!Array.isArray(out.pausedSites)) out.pausedSites = [];
+  for (const k of SITE_LISTS) if (!Array.isArray(out[k])) out[k] = [];
   return out;
 };
 
@@ -71,7 +73,7 @@ function cleanSettings(s) {
   for (const k of ['enabled', 'scanImages', 'blockUnlisted', 'unknownImages']) if (typeof s[k] === 'boolean') out[k] = s[k];
   if (s.style === 'all' || s.style === 'spoilers') out.style = s.style;
   if (UPDATES.includes(s.catalogUpdate)) out.catalogUpdate = s.catalogUpdate;
-  if (Array.isArray(s.pausedSites)) out.pausedSites = [...new Set(s.pausedSites.map(normHost).filter(Boolean))];
+  for (const k of SITE_LISTS) if (Array.isArray(s[k])) out[k] = [...new Set(s[k].map(normHost).filter(Boolean))];
   return out;
 }
 
@@ -86,7 +88,7 @@ export function normHost(v) {
 
 export const MAX_IMPORT_BYTES = 5e6;
 
-// text of a file -> { ok: true, data: { works, custom, settings }, skipped } or { ok: false, error }
+// text of a file -> { ok: true, data: { works, custom, settings, learned }, skipped } or { ok: false, error }
 export function parseImport(text) {
   if (typeof text !== 'string' || text.length > MAX_IMPORT_BYTES) return { ok: false, error: 'This file is too large to be a SpolierBlock export.' };
   let o;
@@ -105,22 +107,62 @@ export function parseImport(text) {
     const x = cleanCustom(c);
     if (x && !ids.has(x.id)) { ids.add(x.id); custom.push(x); } else skipped++;
   }
-  return { ok: true, data: { works, custom, settings: cleanSettings(o.settings) }, skipped };
+  return { ok: true, data: { works, custom, settings: cleanSettings(o.settings), learned: cleanLearned(o.learned) }, skipped };
 }
 
-// current, imported: { works, custom, settings } -> the new { works, custom, settings } to write in one set call.
+// current, imported: { works, custom, settings, learned } -> the new { works, custom, settings, learned } to write in one set call.
 export function applyImport(current, imported, { mode, withSettings }) {
-  if (mode === 'replace') return { works: imported.works, custom: imported.custom, settings: withDefaults(imported.settings) };
+  if (mode === 'replace') return { works: imported.works, custom: imported.custom, settings: withDefaults(imported.settings), learned: cleanLearned(imported.learned) };
   const custom = new Map((current.custom ?? []).map((c) => [c.id, c]));
   for (const c of imported.custom) custom.set(c.id, c);
   return {
     works: { ...(current.works ?? {}), ...imported.works },
     custom: [...custom.values()],
     settings: withSettings ? withDefaults({ ...current.settings, ...imported.settings }) : withDefaults(current.settings),
+    learned: mergeLearned(current.learned, imported.learned),
   };
 }
 
-export const exportFile = ({ works, custom, settings }, now = new Date()) =>
-  ({ format: FORMAT, version: VERSION, exportedAt: now.toISOString().replace(/\.\d+Z$/, 'Z'), works: works ?? {}, custom: custom ?? [], settings: withDefaults(settings) });
+export const exportFile = ({ works, custom, settings, learned }, now = new Date()) =>
+  ({ format: FORMAT, version: VERSION, exportedAt: now.toISOString().replace(/\.\d+Z$/, 'Z'), works: works ?? {}, custom: custom ?? [], settings: withDefaults(settings), learned: cleanLearned(learned) });
+
+// ---------- learned (rule 11): extra names, where a name is not a work ----------
+export const NAME_MIN = 2, NAME_MAX = 60, NAMES_PER_WORK = 20;
+const okId = (id) => ID.test(id) && id !== '__proto__';
+// a not-key: "{site}" or "{site}/{source}", lower-case; the site is a host name as in pausedSites
+const okKey = (k) => typeof k === 'string' && k.length <= 300 && k === k.trim().toLowerCase() && !!k && normHost(k.split('/')[0]) === k.split('/')[0] &&
+  (!k.includes('/') || k.split('/').slice(1).join('/').trim().length > 0);
+export const cleanName = (v) => (typeof v === 'string' && v.trim().length >= NAME_MIN && v.trim().length <= NAME_MAX ? v.trim() : null);
+// names of one work: trimmed, 2-60 characters, deduplicated case-insensitively (first spelling kept), at most 20
+export function cleanNames(list) {
+  const seen = new Set();
+  return (Array.isArray(list) ? list : []).map(cleanName).filter((n) => n && !seen.has(n.toLowerCase()) && seen.add(n.toLowerCase())).slice(0, NAMES_PER_WORK);
+}
+// storage or file value -> { names, not }, malformed entries dropped
+export function cleanLearned(l) {
+  const o = isObj(l) ? l : {}, names = {}, not = {};
+  for (const [id, list] of Object.entries(isObj(o.names) ? o.names : {})) { const n = okId(id) ? cleanNames(list) : []; if (n.length) names[id] = n; }
+  for (const [id, list] of Object.entries(isObj(o.not) ? o.not : {})) {
+    const k = okId(id) && Array.isArray(list) ? [...new Set(list.filter(okKey))] : [];
+    if (k.length) not[id] = k;
+  }
+  return { names, not };
+}
+// Merge unions: names and keys per work (current first); then the limits again
+export function mergeLearned(a, b) {
+  const x = cleanLearned(a), y = cleanLearned(b);
+  const names = { ...x.names }, not = { ...x.not };
+  for (const [id, n] of Object.entries(y.names)) names[id] = cleanNames([...(names[id] ?? []), ...n]);
+  for (const [id, k] of Object.entries(y.not)) not[id] = [...new Set([...(not[id] ?? []), ...k])];
+  return { names, not };
+}
+// learned with one more name for work id -> { learned } or { error } (the message to show)
+export function addName(learned, id, name) {
+  const l = cleanLearned(learned), n = cleanName(name), cur = l.names[id] ?? [];
+  if (!n) return { error: `A name is ${NAME_MIN} to ${NAME_MAX} characters.` };
+  if (cur.some((x) => x.toLowerCase() === n.toLowerCase())) return { error: `"${n}" is already one of its names.` };
+  if (cur.length >= NAMES_PER_WORK) return { error: `A work has at most ${NAMES_PER_WORK} other names.` };
+  return { learned: { ...l, names: { ...l.names, [id]: [...cur, n] } } };
+}
 
 export const nextCustomId = (custom) => 'custom:' + (Math.max(0, ...custom.map((c) => +c.id.slice(7) || 0)) + 1);

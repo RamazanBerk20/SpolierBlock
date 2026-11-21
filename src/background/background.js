@@ -2,7 +2,7 @@
 // Answers popup queries itself and routes inference to engine.js — loaded in-place on Firefox, in an
 // offscreen document on Chrome (service workers cannot host the WASM runtime's dynamic imports/workers).
 import { runUpdate, rebuild, alarmPlan, toBase64, ALARM, ENDPOINT } from './catalog-update.js';
-import { migrate } from '../options/config.js';
+import { migrate, cleanLearned } from '../options/config.js';
 const api = globalThis.browser ?? globalThis.chrome;
 const isWorker = typeof document === 'undefined';
 
@@ -47,9 +47,16 @@ async function currentMeta() {
 let index = null;
 api.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.catalogIndex) index = null; });
 const fold = (s) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+const loadIndex = () => (index ??= currentMeta().then((m) => ({ m, folded: m.titles.map(fold), pos: new Map(m.ids.map((id, i) => [id, i])) }))
+  .catch((e) => { index = null; throw e; }));
+const describeWork = (m, i) => ({ id: m.ids[i], title: m.titles[i], type: m.types[i], year: m.years[i] || null });
+// ids -> { id: { id, title, type, year } } for the works the index knows (the settings page's lists of learned entries)
+async function titles(ids) {
+  const { m, pos } = await loadIndex();
+  return Object.fromEntries((Array.isArray(ids) ? ids : []).filter((id) => pos.has(id)).map((id) => [id, describeWork(m, pos.get(id))]));
+}
 async function search(q, limit = 20) {
-  index ??= currentMeta().then((m) => ({ m, folded: m.titles.map(fold) })).catch((e) => { index = null; throw e; });
-  const { m, folded } = await index;
+  const { m, folded } = await loadIndex();
   q = fold(String(q ?? '').trim());
   if (!q) return [];
   const prefix = [], sub = [];
@@ -59,7 +66,7 @@ async function search(q, limit = 20) {
     if (at === 0 || (at > 0 && folded[i][at - 1] === ' ')) prefix.push(i);
     else if (at > 0 && sub.length < limit) sub.push(i);
   }
-  return [...prefix, ...sub].slice(0, limit).map((i) => ({ id: m.ids[i], title: m.titles[i], type: m.types[i], year: m.years[i] || null }));
+  return [...prefix, ...sub].slice(0, limit).map((i) => describeWork(m, i));
 }
 
 // ---------- opt-in catalog update (the only network use) ----------
@@ -103,28 +110,34 @@ api.runtime.onInstalled.addListener(async () => {
   schedule();
   await migrateStore();
   // extension updated with a newer bundle: rebuild the local index from the stored added and custom works, offline
-  const { catalogIndex, catalogAdded, custom } = await api.storage.local.get(['catalogIndex', 'catalogAdded', 'custom']);
-  if (!catalogAdded?.length && !custom?.length) return;
+  const { catalogIndex, catalogAdded, custom, learned } = await api.storage.local.get(['catalogIndex', 'catalogAdded', 'custom', 'learned']);
+  if (!catalogAdded?.length && !custom?.length && !hasNames(learned)) return;
   if (catalogIndex?.bundle === (await loadBundle()).info.builtAt) return;
   rebuildLocal();
 });
 
-// ---------- the user's hand-entered works (storage `custom`) are indexed like catalog works ----------
+// ---------- the user's hand-entered works (storage `custom`) and extra names (`learned.names`) are indexed ----------
 // One rebuild at a time; each reads storage when it starts, so the last change always wins. It waits for a running
 // catalog update, which itself indexes the custom works it read when it started.
 let rebuilding = Promise.resolve();
 function rebuildLocal() {
   rebuilding = rebuilding.then(async () => {
     await updating?.catch(() => {});
-    const [{ catalogAdded = [], custom = [] }, bundle] = await Promise.all([api.storage.local.get(['catalogAdded', 'custom']), loadBundle()]);
-    if (!catalogAdded.length && !custom.length) return api.storage.local.remove('catalogIndex'); // back to the bundled index
-    const { bin, meta } = rebuild(bundle, catalogAdded, custom);
+    const [{ catalogAdded = [], custom = [], learned }, bundle] = await Promise.all([api.storage.local.get(['catalogAdded', 'custom', 'learned']), loadBundle()]);
+    const names = cleanLearned(learned).names;
+    if (!catalogAdded.length && !custom.length && !hasNames(learned)) return api.storage.local.remove('catalogIndex'); // back to the bundled index
+    const { bin, meta } = rebuild(bundle, catalogAdded, custom, names);
     await api.storage.local.set({ catalogIndex: { builtAt: Date.now(), bin: toBase64(bin), meta, bundle: bundle.info.builtAt } });
   }).catch((e) => console.error('[SpolierBlock] index rebuild', e));
   return rebuilding;
 }
-const sameCustom = (a, b) => JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
-api.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.custom && !sameCustom(c.custom.oldValue, c.custom.newValue)) rebuildLocal(); });
+const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const hasNames = (l) => Object.keys(cleanLearned(l).names).length > 0;
+api.storage.onChanged.addListener((c, area) => {
+  if (area !== 'local') return;
+  if ((c.custom && !same(c.custom.oldValue ?? [], c.custom.newValue ?? [])) ||
+      (c.learned && !same(cleanLearned(c.learned.oldValue).names, cleanLearned(c.learned.newValue).names))) rebuildLocal();
+});
 
 // ---------- 0.1 -> 0.2 config migration (docs/agents/contract.md), once; also catches a late 0.1-style `seen` write ----------
 async function migrateStore() {
@@ -161,15 +174,20 @@ function countBadge(tab, blocked) {
   api.action.setBadgeText({ tabId: tab.id, text: blocked > 0 ? String(Math.min(blocked, 999)) : null }).catch(() => {});
 }
 
-async function tabStats() {
-  // The active tab is the page, except when the popup itself is open as a tab (Firefox for Android, options page):
-  // then use the most recently used web page.
+// The active tab is the page, except when the popup itself is open as a tab (Firefox for Android, options page):
+// then the most recently used web page.
+async function pageTab() {
   let [tab] = await api.tabs.query({ active: true, lastFocusedWindow: true });
   if (!/^https?:/.test(tab?.url ?? '')) {
     tab = (await api.tabs.query({})).filter((t) => /^https?:/.test(t.url ?? '')).sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))[0];
   }
+  return tab;
+}
+// the page's cover count and its text selection (offered as a new name, rule 11)
+async function tabStats() {
+  const tab = await pageTab();
   if (!tab) return { blocked: 0 };
-  try { return { blocked: (await api.tabs.sendMessage(tab.id, { type: 'sb.stats' }, { frameId: 0 }))?.blocked ?? 0 }; } catch { return { blocked: 0 }; }
+  try { const r = await api.tabs.sendMessage(tab.id, { type: 'sb.stats' }, { frameId: 0 }); return { blocked: r?.blocked ?? 0, selection: r?.selection ?? '' }; } catch { return { blocked: 0 }; }
 }
 
 function route(msg, sender) {
@@ -178,9 +196,10 @@ function route(msg, sender) {
     case 'tab.count': if (sender?.frameId === 0) countBadge(sender.tab, +msg.blocked || 0); return Promise.resolve({ ok: true });
     case 'catalog.search': return search(msg.q, msg.limit).then((results) => ({ results }));
     case 'tab.stats': return tabStats();
+    case 'catalog.titles': return titles(msg.ids).then((works) => ({ works }));
     case 'catalog.update': return updateNow().then(() => catalogStatus());
     case 'catalog.status': return catalogStatus();
-    case 'img.check': case 'img.ocr': case 'text.classify': return infer(msg);
+    case 'img.check': case 'img.ocr': case 'text.classify': case 'text.context': return infer(msg);
   }
   return null;
 }

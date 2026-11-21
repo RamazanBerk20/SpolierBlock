@@ -4,7 +4,7 @@ The browser extension and the Android code must agree on everything on this page
 
 ## Config
 
-One config, three parts. The extension keeps each part as a `storage.local` key of the same name. Android keeps the
+One config, four parts. The extension keeps each part as a `storage.local` key of the same name. Android keeps the
 same JSON (local preferences, or the companion app's provider when it is installed).
 
 ```jsonc
@@ -22,7 +22,12 @@ same JSON (local preferences, or the companion app's provider when it is install
     "style": "all",                // default style: "all" | "spoilers"
     "unknownImages": false,        // cover film/show/game-looking images that no title could be put on
     "pausedSites": [],             // extension only
+    "captionlessVideos": [],       // sites where a video post with no caption is covered (rule 10): "x.com", ...
     "catalogUpdate": "off"         // "off" | "daily" | "weekly" | "monthly"
+  },
+  "learned": {                     // what the user's reports taught it (rule 11); everything stays on the device
+    "names": { "Q1079": ["BrBa"] },                     // extra names for a work, indexed like its aliases
+    "not": { "Q42759035": ["youtube.com/dokuzsekiz müzik", "x.com/@somebody", "reddit.com"] }   // where a name is not this work
   }
 }
 ```
@@ -63,7 +68,11 @@ takes the works of its series when the closest works are themselves entries of t
 is at least 1.5 times as popular as the closest one ("Halo", "Star Wars"). A type word next to the name narrows the
 group to works of that type ("the Minecraft movie", "Assassin's Creed film").
 
-1. Group state: `seen` if every work is seen; `blocked` if any work is blocked; otherwise `unlisted`.
+1. Group state: `blocked` if any work is blocked; else `seen` if any work is seen; otherwise `unlisted`. A bare name
+   cannot say which of its works a post is about, so one seen work is enough to show it: nobody has to finish a whole
+   franchise to read about the entry they know. A post that names an unseen entry by its own title or with a type word
+   ("Resident Evil Requiem", "the Resident Evil film") is still covered, and blocking one work keeps the bare name
+   covered.
 2. `seen` never covers. `blocked` covers. `unlisted` covers only when `settings.blockUnlisted`.
 3. Group style: `all` if any non-seen work in it has effective style `all` (`work.style ?? settings.style`), else `spoilers`.
 4. Style `all`: cover at once. Style `spoilers`: cover while the classifier runs (fail closed), keep the cover only if
@@ -82,6 +91,76 @@ group to works of that type ("the Minecraft movie", "Assassin's Creed film").
    prove nothing in it, and it is full of stray words. The caller passes it to the matcher after the post's own text,
    separated by one U+0001 character (`own text` + `\u0001` + `OCR text`). The matcher's rules for the part after the
    marker are in docs/how-it-works.md.
+9. The uploader's name is not a work (0.2.4). The caller may pass the name of whoever posted the item (a YouTube
+   channel) right after the post's own text, behind one U+0002 character and before any OCR part:
+   `own text` + `\u0002` + `uploader` [+ `\u0001` + `OCR text`]. Offsets into the own text are unchanged. The uploader
+   part names no work and is no evidence for any name. Its key is its tokens (the matcher's tokenizer and
+   normalisation) with trailing `official`, `vevo`, `music`, `muzik` (Müzik) and `topic` removed, also when glued to the
+   last word ("JokerVEVO"), but never the only word. A name of the own text whose tokens equal that key counts only
+   with media evidence in its sentence: a media word of its works' types within 3 words, the "is a ... game" pattern or a
+   consumption verb right before it, a type word of its works within the next 3 words, or a release year of one of its
+   works. Quotes, a hashtag, another name of the same work, a longer name holding it and Title Case do not count, and it
+   is never an unsure name. "Joker - Mikrofon Şov" from the channel "Joker" names nothing; "Joker (2019) ending
+   explained" and "Minecraft - Official Trailer" from the channel "Minecraft" still do. What is lost: a clean title with
+   no media word from a channel named like the work ("Minecraft" from the channel "Minecraft"). Both platforms strip
+   U+0002 from page and app text. No uploader known means no U+0002 part and the rules as before.
+
+10. Videos with no caption (0.2.4). The picture model cannot tell which game or film bare footage is from, so the user
+    may list sites in `settings.captionlessVideos` where a post that holds a video and says nothing is covered. Sites
+    are host names as in `pausedSites` (`x.com`, `instagram.com`, `youtube.com`, `reddit.com`, any other host in the
+    extension); on Android the patched apps answer to `x.com`, `instagram.com` and `youtube.com`. On a listed site a
+    post covers when all of these hold: it holds a video (extension: a `video` element in the block; Android: a video
+    surface in the item); no rule above covers it; its own text names no work, seen or not; and it has no caption. No
+    caption means: no single run of the post's own text has 4 or more words (a run is one text element; names,
+    handles, times, counters and button labels are short), or, where the site marks the caption, that element is
+    missing or empty (x.com: `[data-testid="tweetText"]`). The label is `Video with no caption`, with `Show once` and
+    the settings button and no `I've seen it`. `Show once` works as for every cover. Default: the list is empty.
+
+11. Reports (0.2.4). Two things the user can teach it. All of them are stored in `learned`, exported and imported
+    with the config (`Merge` unions them), listed in the settings with a way to remove each, and never leave the device.
+    - **Wrong cover.** Every cover that names works (not the unidentified image, not the video with no caption) has a
+      fourth button, `Not this`. It records, for every work of the cover's groups, where the name does not mean that
+      work: the post's source when the platform knows it, otherwise the whole site. The key is `{site}/{source}` or
+      `{site}`, lower-case; the site is the host name as in `pausedSites` (on Android the app's site: `x.com`,
+      `instagram.com`, `youtube.com`); the source is the YouTube channel name (the uploader of rule 9) or, on x.com,
+      the author's handle with its `@`. A matched group, from text or from a picture, is dropped before rule 1 when
+      every work in it has the post's `{site}/{source}` key or its `{site}` key in `learned.not`. The cover goes at
+      once, and every other post of that source is re-judged.
+    - **A missing name.** `learned.names[id]` holds extra names for a work, of the catalog or custom. They are indexed
+      exactly like the aliases of a custom work (as given) on both platforms, so the matcher's rules apply to them
+      unchanged. A name is 2 to 60 characters after trimming; at most 20 per work. The extension's popup offers the
+      text selected on the page as a new name for a work the user picks; the settings of both platforms let the user
+      edit a work's extra names.
+    - Not built: remembering a clip from its picture embeddings. Measured on 60 videos (2026-11-21): at a threshold
+      with no match between different videos, a re-sampled frame of the same video matched 0.4 % of the time.
+
+## Names the matcher is unsure about (0.2.4)
+
+The matcher's rules accept a name or drop it. A third answer exists for a name that could be a title but that no
+rule confirms: an everyday-word title with no media word near it ("Heat still has the best shootout"), or a title
+typed in lowercase ("lost was peak tv"). Those are *unsure* names, and a second on-device model decides them, the
+title-in-context model (`models/context`; same family, tokenizer and size class as the spoiler classifier).
+
+- The matcher returns the unsure names next to the accepted groups: for each, its group, the character offsets of
+  the name in the post's own text, and whether the name mostly means something else. Never unsure: a name in text read from pictures, a name inside a handle, a
+  determiner, quantifier or pronoun typed in lowercase ("it", "her", "up", "no", "us"), one of the most frequent
+  everyday words, a bare number, a quoted name in music talk, a lowercase single word in a post that has letters
+  outside ASCII (the model is English-only), a name typed all in lowercase in a post whose own text has no English
+  function word outside the name (a fixed list of 66 words such as "the", "is", "was", "you", "with", identical on both
+  platforms; "Gezinmeyi atla" is Turkish written in ASCII), the uploader's name (rule 9), and a name whose group the rules already accepted or whose group is seen.
+  The exact tests are the matcher's ("Unsure names" in docs/how-it-works.md).
+- At most 4 unsure names per post are asked, the most popular group first. One question per name: segment A is the
+  post's own text cut to the window around the name that `models/context/meta.json` defines, segment B is
+  `{group label} [{types}]` with the group's work types in the order movie, tv, game, book, anime, manga, comic
+  (`Lost [tv]`, `Dune [movie, book]`). The model's probability at or above `threshold` in `meta.json` is a yes; a name
+  the index flags as mostly meaning something else (a person, a place, a brand) needs `thresholdOther`.
+- A yes makes the group a matched group of the post's own text, after the groups the rules accepted, and the decision
+  rule above applies to it unchanged (seen, blocked, style, wording `Mentions {t}`).
+- While the model is asked the post is **not** covered, and a model error is a no: these posts were never covered
+  before, and a cover that appears and vanishes on ordinary posts is worse than one that arrives a moment late. (The
+  spoiler classifier stays fail-closed: there the post is known to be about the work.)
+- Answers are remembered per (text window, group) for the page or app process. Both platforms must give the same
+  unsure names for the same text (vector tests), and the same model input for the same name (window and segment B).
 
 ## Cover wording
 
@@ -94,25 +173,30 @@ Identical strings on both platforms. `{t}` is the group label; with several grou
 | style `spoilers`, classifier said spoiler | `Spoiler about {t}` |
 | image identified as the work | `Image from {t}` |
 | unidentified media image | `Possible film, show or game image` |
+| video with no caption on a listed site (rule 10) | `Video with no caption` |
 
 Pictures still being judged: both platforms shade the picture itself (the extension dims it, Android paints an opaque
 shade over it, with no text and no buttons) and leave the post's text readable; only a verdict covers the post. A picture
 whose check fails stays shaded on Android; the extension reveals it after its retries.
 
-Buttons: `Show once`, `I've seen it` (absent for the unidentified image) and a settings button (`⋮`, accessible name
+Buttons: `Show once`, `I've seen it` and `Not this` (both absent for the unidentified image and the video with no caption; rule 11) and a settings button (`⋮`, accessible name
 `SpolierBlock settings`).
 
-`I've seen it` on a group with one work marks it seen at once. On a group with several works (a franchise name such as
+`I've seen it` on a group with one work marks it seen at once when its series has no other work that is not yet seen. When
+the series has more unseen works (a post about "Resident Evil Village"), the picker opens instead, so the user can tick
+the rest of the franchise in the same place: its first section is that one work, already ticked, the note is
+`This post is about "{title}". It is shown once you mark that one.` (`{title}` is the work's title), and the second
+section is `More from this series` as below. `Mark seen` writes the ticked works; `Cancel` writes nothing. The cover's
+label stays the work's own (`Mentions Resident Evil Village`). On a group with several works (a franchise name such as
 "Resident Evil", or an original and its remake) it opens a picker instead: title `Which have you seen?`, one row per work
 not yet seen (`{title}` and `{type} · {year}`) with a checkbox, nothing ticked, the buttons `All`, `Cancel` and `Mark seen`, and the
-note `Posts that only say "{t}" stay covered until every one is marked.` When the cover names several groups, the picker
-lists the unseen works of all of them and the note is `This post names several works. It stays covered until each one is
-marked.` Only the ticked works are written.
+note `Posts that only say "{t}" are shown once you have seen one of these.` When the cover names several groups, the picker
+lists the unseen works of all of them and the note is `This post names several works. It is shown once you have seen one for each name.` Only the ticked works are written.
 
 Below those rows the picker offers the rest of the franchise, so the user can mark everything they have seen in one
 place: a second section titled `More from this series`, listing the other works of the same series that are not yet seen
 (same row format, oldest first, nothing ticked), collapsed behind a `Show N more` row when there are more than six.
-Ticking them is optional: only the first section decides whether the post stays covered. `All` ticks the first section
+Ticking them is optional: only the first section decides whether the post stays covered (rule 1). `All` ticks the first section
 only; the second section has its own `All N`. Series membership comes from the catalog's `series` field, not from the
 matched name.
 

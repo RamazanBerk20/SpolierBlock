@@ -104,10 +104,11 @@ private fun spoilerBlockPatch(
             resourceFile("assets/spoilerblock/$name", false).apply { parentFile.mkdirs(); writeBytes(bundled(name)) }
         }
 
-        // The spoiler classifier and "Scan images": the models (each loaded only when used) and ONNX Runtime. The libraries go only
+        // The spoiler classifier, the title-in-context model and "Scan images": the models (each loaded only when used) and ONNX Runtime. The libraries go only
         // into ABIs the app already ships (a new ABI directory would make a device of that ABI pick it and lose the app's own
         // libraries); an app without native code gets both. Unique names (libonnxruntime*.so), statically linked C++ runtime.
         for (name in listOf("spoiler/model_int8.onnx", "spoiler/tokenizer.json", "spoiler/meta.json",
+            "context/model_int8.onnx", "context/tokenizer.json", "context/meta.json",
             "vision/model.onnx", "vision/clip-text.bin", "vision/clip-meta.json", "ocr/det.onnx", "ocr/rec.onnx", "ocr/dict.txt")) {
             resourceFile("assets/spoilerblock/$name", false).apply { parentFile.mkdirs(); writeBytes(bundled(name)) }
         }

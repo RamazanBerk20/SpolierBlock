@@ -28,6 +28,29 @@ export function toast(text, undo) {
   toastTimer = setTimeout(() => t.remove(), undo ? 8000 : 4000);
 }
 
+// The catalog search box of the settings page and the popup (both of its pickers): debounced, the newest answer wins.
+// onResults(results) draws the list; msgEl shows `none` when nothing matches. -> { clear }
+export function catalogSearch(input, msgEl, { limit, none, onResults }) {
+  let timer, seq = 0;
+  const show = (results, msg) => { msgEl.textContent = msg; msgEl.hidden = !msg; onResults(results); };
+  const clear = () => { clearTimeout(timer); input.value = ''; seq++; show([], ''); };
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (!q) return clear();
+    timer = setTimeout(async () => {
+      const n = ++seq;
+      let results = [], msg = '';
+      try {
+        results = (await api.runtime.sendMessage({ type: 'catalog.search', q, limit }))?.results ?? [];
+        if (!results.length) msg = none;
+      } catch { msg = 'Search is not available right now.'; }
+      if (n === seq) show(results, msg);
+    }, 120);
+  });
+  return { clear };
+}
+
 // "https://www.example.com/x" -> "example.com", for pausing: a paused entry covers its subdomains.
 export const siteOf = (url) => {
   try { const u = new URL(url); return /^https?:$/.test(u.protocol) ? u.hostname.replace(/^www\./, '') : null; } catch { return null; }

@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { buildIndex } from '../tools/build-index.mjs';
-import { rebuild, runUpdate, customWorks, CUSTOM_POP } from '../src/background/catalog-update.js';
-import { migrate, parseImport, applyImport, exportFile, withDefaults, normHost, nextCustomId, DEFAULTS } from '../src/options/config.js';
+import { rebuild, runUpdate, customWorks, withNames, CUSTOM_POP } from '../src/background/catalog-update.js';
+import { migrate, parseImport, applyImport, exportFile, withDefaults, normHost, nextCustomId, DEFAULTS, cleanLearned, mergeLearned, cleanNames } from '../src/options/config.js';
 const { Matcher } = globalThis.SBMatcher;
 
 test('migration 0.1 -> 0.2: seen becomes works, mode becomes style, old keys go', () => {
@@ -52,6 +52,18 @@ test('import keeps only well-formed entries and ignores unknown keys', () => {
   assert.deepEqual(r.data.custom, [{ id: 'custom:1', title: 'Hollow Pines', aliases: ['HP'], type: 'game' }]);
   assert.deepEqual(r.data.settings, { enabled: false, style: 'spoilers', pausedSites: ['example.com'] });
   assert.equal(r.skipped, 4 + 3);
+});
+
+test('captionlessVideos: host names, lower-case, deduplicated; defaults, export and merge carry it', () => {
+  assert.deepEqual(withDefaults({}).captionlessVideos, []);
+  assert.deepEqual(withDefaults({ captionlessVideos: 'x.com' }).captionlessVideos, []);
+  const r = parseImport(file({ settings: { captionlessVideos: ['X.com', 'https://www.x.com/home', 'twitter.com', 'bad host!', 3, null] } }));
+  assert.deepEqual(r.data.settings, { captionlessVideos: ['x.com', 'twitter.com'] });
+  const out = exportFile({ settings: { captionlessVideos: ['x.com'] } });
+  assert.deepEqual(parseImport(JSON.stringify(out)).data.settings.captionlessVideos, ['x.com']);
+  const cur = { settings: { captionlessVideos: ['reddit.com'] } };
+  assert.deepEqual(applyImport(cur, r.data, { mode: 'merge', withSettings: true }).settings.captionlessVideos, ['x.com', 'twitter.com']);
+  assert.deepEqual(applyImport(cur, r.data, { mode: 'merge', withSettings: false }).settings.captionlessVideos, ['reddit.com']);
 });
 
 test('merge: imported wins per id, settings only when asked; replace: everything from the file', () => {
@@ -131,4 +143,45 @@ test('a catalog update keeps the custom works in the index it writes', async () 
   const ids = data.catalogIndex.meta.ids;
   assert.ok(ids.includes(NEW.id) && ids.includes('custom:1') && ids.includes('custom:2'));
   assert.deepEqual(data.catalogAdded.map((w) => w.id), [NEW.id]); // custom works are not stored as catalog additions
+});
+
+// ---------- learned (contract rule 11) ----------
+test('learned: malformed entries are dropped, names trimmed and limited, keys lower-case host[/source]', () => {
+  const l = cleanLearned({
+    names: { Q1: [' BrBa ', 'brba', 'x', 'y'.repeat(61), 3, 'Heisenberg show'], Q2: [], __proto__: ['a'], 'bad id': ['Name'], Q3: 'BrBa' },
+    not: { Q4: ['youtube.com/dokuzsekiz müzik', 'x.com/@somebody', 'reddit.com', 'Reddit.com', 'reddit.com', 'nohost', 'x.com/', 'x.com/ ', 7], Q5: ['bad'] },
+    clips: [{ id: 'c1', work: 'Q6', ts: 5, emb: ['x'] }], // a dropped feature: ignored
+  });
+  assert.deepEqual(l.names, { Q1: ['BrBa', 'Heisenberg show'] });
+  assert.deepEqual(l.not, { Q4: ['youtube.com/dokuzsekiz müzik', 'x.com/@somebody', 'reddit.com'] });
+  assert.deepEqual(Object.keys(l), ['names', 'not']);
+  assert.deepEqual(cleanLearned(undefined), { names: {}, not: {} });
+  assert.equal(cleanNames(Array.from({ length: 30 }, (_, i) => 'Name ' + i)).length, 20);
+});
+
+test('learned: export, import, merge unions and replace', () => {
+  const cur = { learned: { names: { Q1: ['BrBa'] }, not: { Q2: ['reddit.com'] } } };
+  const out = exportFile(cur);
+  assert.deepEqual(out.learned, cur.learned);
+  const imp = parseImport(file({ learned: { names: { Q1: ['brba', 'Walter show'], Q9: ['Nine'] }, not: { Q2: ['x.com/@a'] }, clips: [{ id: 'c1', work: 'Q3', ts: 2, emb: ['x'] }] } })).data;
+  const m = applyImport(cur, imp, { mode: 'merge' }).learned;
+  assert.deepEqual(m.names, { Q1: ['BrBa', 'Walter show'], Q9: ['Nine'] });
+  assert.deepEqual(m.not, { Q2: ['reddit.com', 'x.com/@a'] });
+  assert.equal(m.clips, undefined);
+  assert.deepEqual(applyImport(cur, imp, { mode: 'replace' }).learned, imp.learned);
+  assert.deepEqual(parseImport(file({})).data.learned, { names: {}, not: {} }); // an older file has none
+  assert.deepEqual(mergeLearned(undefined, undefined), { names: {}, not: {} });
+});
+
+test('learned names are indexed as aliases of their work, catalog or custom', () => {
+  const id = catalog.works.find((w) => w.title === 'Breaking Bad').id;
+  const names = { [id]: ['Albuquerque Chemistry Tales', 'BBX'], 'custom:2': ['Rainfall Saga'] };
+  assert.deepEqual(withNames([{ id, aliases: ['A'] }, { id: 'Q0' }], names), [{ id, aliases: ['A', 'Albuquerque Chemistry Tales', 'BBX'] }, { id: 'Q0' }]);
+  const built = rebuild(bundle, [], CUSTOM, names);
+  const m = matcher(built);
+  const hit = (t) => m.evaluate(t, () => false).map((g) => built.meta.groups[g].slice(1).map((i) => built.meta.ids[i])).flat();
+  assert.deepEqual(hit('Finally finished Albuquerque Chemistry Tales, what an ending'), [id]);
+  assert.deepEqual(hit('BBX ending explained'), [id]);
+  assert.deepEqual(hit('The Rainfall Saga ending made me cry'), ['custom:2']);
+  assert.deepEqual(matcher(rebuild(bundle, [], CUSTOM)).evaluate('Finally finished Albuquerque Chemistry Tales, what an ending', () => false), []); // not without the name
 });

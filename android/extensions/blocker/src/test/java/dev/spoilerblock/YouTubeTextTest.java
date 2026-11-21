@@ -45,6 +45,17 @@ public class YouTubeTextTest {
         assertEquals("Lost - Lost season 6 was a mess", YouTubeText.strip("Lost - Lost season 6 was a mess"));
     }
 
+    /** A video row's channel is the uploader (contract rule 9); a Short or an unknown shape gives none. */
+    @Test public void channel() {
+        assertEquals("RRaenee", YouTubeText.channel(
+            "DİNİ BÜTÜN KÖY HALKI | RESIDENT EVIL 4 REMAKE | - 1 hour, 45 minutes, 23 seconds - Go to channel RRaenee - RRaenee - 934 thousand views - 3 years ago - play video"));
+        assertEquals("Minecraft", YouTubeText.channel(
+            "The POW Show: Challenges & Trivia - 2 saat 5 dakika 25 saniye -  - Minecraft - 462 bin görüntüleme - 3 gün önce yayınlandı - videoyu oynat"));
+        assertEquals("Joker", YouTubeText.channel("Joker - Mikrofon Şov - Go to channel Joker • 1.2M - Joker • 1.2M"));
+        assertEquals(null, YouTubeText.channel("Minecraft'ın gizli zırhı, 3,3 Mn görüntüleme, camman18, 1 gün önce - Short'u oynat"));
+        assertEquals(null, YouTubeText.channel("Lost - Lost season 6 was a mess"));
+    }
+
     /** Every logged row's description: no duration, view count, age or button phrase is left when a shape was found. */
     @Test public void loggedRows() throws Exception {
         Pattern tail = Pattern.compile("\\d+ (seconds?|minutes?|hours?)\\b|\\bviews\\b|\\bago\\b|play video|play Short|Go to channel");

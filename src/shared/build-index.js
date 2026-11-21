@@ -75,15 +75,28 @@ export function numberedStem(title) {
 // function words that do not make a name strong in text read from pictures ("THE MASTER" has one real word)
 const LIGHT = new Set('the and for you are was his her its our not but all any who how why what with from this that new one two'.split(' '));
 
-const TIER = { [KIND.TITLE]: 0, [KIND.ALIAS]: 1, [KIND.SERIES]: 2, [KIND.CHAR]: 3, [KIND.CHAR1]: 4, [KIND.PART]: 4, [KIND.TAG]: 1 };
+const TIER = { [KIND.TITLE]: 0, [KIND.ALIAS]: 1, [KIND.ACRONYM]: 1, [KIND.SERIES]: 2, [KIND.CHAR]: 3, [KIND.CHAR1]: 4, [KIND.PART]: 4, [KIND.TAG]: 1 };
 const TYPES = ['movie', 'tv', 'game', 'book', 'anime', 'manga', 'comic'];
 
 // Kind precedence when one name plays several roles: the most title-like wins.
-const RANK = { [KIND.TITLE]: 0, [KIND.SERIES]: 1, [KIND.ALIAS]: 2, [KIND.CHAR]: 3, [KIND.CHAR1]: 4, [KIND.PART]: 5, [KIND.TAG]: 6 };
+const RANK = { [KIND.TITLE]: 0, [KIND.SERIES]: 1, [KIND.ALIAS]: 2, [KIND.ACRONYM]: 2, [KIND.CHAR]: 3, [KIND.CHAR1]: 4, [KIND.PART]: 5, [KIND.TAG]: 6 };
+// an alias written in capitals, 2+ letters ("GTA", "GOT")
+const ACRO = /^\p{Lu}{2,}$/u;
+
+// An acronym people plausibly write for work w: the initials of its title, of the title without a leading "The", of
+// its last part after a colon ("TOS", "CSI") or the title spelled with stops ("W.I.T.C.H."), not "BIOS" for "Finch" or
+// "PRO" for "Star Trek: Prodigy"; and for a work popular enough to be abbreviated: DISTINCT_POP, or COMMON_POP when the
+// capitals spell an everyday word or abbreviation of the 10k most frequent ("GOT" yes, "BMW" for Black Myth: Wukong no).
+function usedAcronym(a, w) {
+  const x = a.toLowerCase(), forms = [w.title, w.title.split(SERIES_SPLIT).pop()].map((s) => tokenize(s).toks);
+  const ok = forms.some((t) => [t, t[0] === 'the' ? t.slice(1) : t].some((u) => u.map((y) => y[0]).join('') === x)) || forms[0].join('') === x;
+  return ok && (w.pop ?? 0) >= (isEveryday(x) ? COMMON_POP : DISTINCT_POP);
+}
 
 export function buildIndex(catalog) {
   const works = sortWorks(catalog);
   const keys = new Map(); // key -> { works: Set, kind, amb, label, labelRank }
+  const acronyms = []; // [alias, work, label, other]: everyday-word aliases in capitals, added last
   // oth: this name of work w mostly means something else in the world (work.other, see tools/catalog/build.mjs). A key
   // is "other" only when that holds for every work carrying it: a more popular work of the same name outweighs it.
   // orig: the name as written (not a sequel-number swap or a joined form, which never count in OCR text)
@@ -136,7 +149,11 @@ export function buildIndex(catalog) {
     if (p && qualified.has(tokenize(p).toks.join(' '))) {
       add(p, i, KIND.SERIES, p, false, false, other.has(p)); add(p, i, KIND.TAG, p, false, false, other.has(p), true, 2); seriesOf.set(i, p);
     }
-    for (const a of w.aliases ?? []) for (const v of possessive(a).flatMap((f) => nameVariants(f, low))) add(v.text, i, KIND.ALIAS, w.title, v.free, v.numbered, other.has(a), !!v.orig);
+    for (const a of w.aliases ?? []) {
+      // "GTA", "GOT": as an alias an everyday word, kept as an acronym that matches only in capitals (added below)
+      if (RULES && ACRO.test(a) && isCommon(tokenize(a).toks[0]) && usedAcronym(a, w)) acronyms.push([a, i, w.title, other.has(a)]);
+      for (const v of possessive(a).flatMap((f) => nameVariants(f, low))) add(v.text, i, KIND.ALIAS, w.title, v.free, v.numbered, other.has(a), !!v.orig);
+    }
     for (const c of w.characters ?? []) {
       add(c, i, KIND.CHAR, w.title, false, false, other.has(c));
       // "Snape", "Dumbledore": parts of full names are weak signals (need corroboration, see matcher)
@@ -145,6 +162,26 @@ export function buildIndex(catalog) {
       if (parts.length > 1) for (const t of parts) if (t.length >= 4 && !(RULES && isCommon(t))) add(t, i, KIND.PART, w.title);
     }
   });
+  // A subtitle names its work ("Tears of the Kingdom" of "The Legend of Zelda: Tears of the Kingdom", "No Way Home"):
+  // the last part after a colon or dash, of 3+ words or of 2 that are not both everyday words, carried by no other
+  // title and no other name ("The Movie", "Part Two", "Origins" name nothing). Its other senses were never looked up
+  // ("True Crime: New York City"), so it counts as a name that mostly means something else: a media word must be near.
+  if (RULES) {
+    const subs = new Map(); // key -> [subtitle, workIdx, label] or null when several titles carry it
+    works.forEach((w, i) => {
+      const parts = w.title.split(SERIES_SPLIT);
+      if (parts.length < 2) return;
+      const sub = parts[parts.length - 1].trim(), t = tokenize(sub).toks, k = t.join(' ');
+      if (t.length < 2 || t.length > MAX_N || (t.length === 2 && t.every(isCommon))) return;
+      subs.set(k, subs.has(k) ? null : [sub, i, w.title]);
+    });
+    for (const [k, s] of subs) if (s && !keys.has(k)) add(s[0], s[1], KIND.ALIAS, s[2], false, false, true);
+  }
+  // an acronym only where no other name has the same key ("FRIENDS" stays the show Friends)
+  for (const [a, i, label, oth] of acronyms) {
+    const k = keys.get(tokenize(a).toks[0]);
+    if (!k || k.kind === KIND.ACRONYM) add(a, i, KIND.ACRONYM, label, false, false, oth);
+  }
 
   // The works a bare name refers to: its closest tier. The name of a franchise also takes its series when the closest
   // works are entries of that series ("Star Wars" is an alternative name of Episode IV) or the series' best work is
@@ -182,7 +219,10 @@ export function buildIndex(catalog) {
         typed.push([key + ' \u0002' + type, tw.length === 1 ? works[tw[0]].title : e.label, tw]);
       }
     }
-    e.g = groupOf(e.label, ws, e.kind === KIND.TITLE || e.kind === KIND.SERIES);
+    // an acronym names what its works' title names ("GTA" -> the "Grand Theft Auto" group, franchise rule included)
+    // when those titles name one group; acronyms come after every other key, so the title keys have their group
+    const tg = e.kind === KIND.ACRONYM ? new Set([...e.works].map((w) => keys.get(tokenize(works[w].title).toks.join(' '))?.g)) : null;
+    e.g = tg?.size === 1 && !tg.has(undefined) ? [...tg][0] : groupOf(e.label, ws, e.kind === KIND.TITLE || e.kind === KIND.SERIES);
   }
   for (const x of typed) x[1] = groupOf(x[1], x[2], false);
   const order = groups.map((_, i) => i).sort((a, b) => groups[a].ws[0] - groups[b].ws[0] || groups[b].ws.length - groups[a].ws.length);
@@ -213,7 +253,7 @@ export function buildIndex(catalog) {
     const t = key.split(' ');
     // popularity of a name: its most popular work at any tier (a name's flags do not depend on which works it names)
     const top = works[Math.min(...e.works)].pop ?? 0;
-    const low = top < COMMON_POP, titleLike = e.kind === KIND.TITLE || e.kind === KIND.ALIAS || e.kind === KIND.SERIES;
+    const low = top < COMMON_POP, titleLike = e.kind === KIND.TITLE || e.kind === KIND.ALIAS || e.kind === KIND.SERIES || e.kind === KIND.ACRONYM;
     const one = t.length === 1;
     // a known franchise of two words or more is no everyday phrase; but "The" and one word stays everyday English ("THE
     // FALL OF CONSTANTINOPLE"), and so does a name with no later word of 3+ letters, whose capital the sentence's own
@@ -243,7 +283,11 @@ export function buildIndex(catalog) {
     const ocr = RULES && e.orig && !other && t.length >= 2 && (titleLike || e.kind === KIND.CHAR) &&
       ((real.length >= 2 && !(e.amb && low)) || (real.length === 1 && !low && !isCommon(real[0])) ||
        (num && real.some((x) => x.length >= 4 && !isTop3k(x)))) ? 1 : 0;
-    entries.set(key, (newIdx[e.g] << 9) | (ocr << 8) | (rare << 7) | (cap << 6) | (common << 5) | ((e.amb && !(RULES && famous())) << 4) | (other << 3) | e.kind);
+    // on a one-word name (never "ocr") the same bit says "quiet": one of the 1000 most frequent words, or an everyday
+    // word whose works are below DISTINCT_POP; never an unsure name ("it", "home", "species"; not "lost", "heat",
+    // "split", "Bloodborne"; chosen with the volume and recall figures in "Unsure names", docs/how-it-works.md)
+    const quiet = RULES && titleLike && one && (isTop1k(t[0]) || (top < DISTINCT_POP && isCommon(t[0]))) ? 1 : 0;
+    entries.set(key, (newIdx[e.g] << 9) | ((ocr | quiet) << 8) | (rare << 7) | (cap << 6) | (common << 5) | ((e.amb && !(RULES && famous())) << 4) | (other << 3) | e.kind);
   }
   for (const [key, g] of typed) entries.set(key, (newIdx[g] << 9) | KIND.TITLE); // looked up only next to a type word
   const sorted = order.map((i) => groups[i]);

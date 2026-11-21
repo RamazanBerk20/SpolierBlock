@@ -39,6 +39,28 @@ public class ConfigTest {
         assertEquals("garbage gives defaults", new Config().json(), cfg("not json").json());
     }
 
+    @Test public void captionlessVideos() throws Exception {
+        assertEquals("empty by default", "[]", new Config().settings.getJSONArray("captionlessVideos").toString());
+        Config c = cfg("{\"settings\":{\"captionlessVideos\":[\" X.com \",\"x.com\",\"https://www.Instagram.com/reels\",\"youtube.com.\",3,\"no host\",\"nodot\",\"localhost\"]}}");
+        assertEquals("[\"x.com\",\"instagram.com\",\"youtube.com\",\"localhost\"]", c.settings.getJSONArray("captionlessVideos").toString());
+        assertTrue(c.captionless("x.com"));
+        assertFalse(c.captionless("demo.test"));
+        assertFalse(c.captionless(null));
+        assertEquals("a non-array keeps the list", c.json(), c.copy().apply(Config.settingPatch("captionlessVideos", "x.com")).json());
+        assertEquals("[]", c.copy().apply(Config.settingPatch("captionlessVideos", new JSONArray())).settings.getJSONArray("captionlessVideos").toString());
+        assertEquals("exported and read back", c.json(), Config.fromExport(c.export("2026-11-21T00:00:00Z")).json());
+        Config mine = new Config();
+        mine.mergeImport(c, false);
+        assertFalse("merge keeps settings unless ticked", mine.captionless("x.com"));
+        mine.mergeImport(c, true);
+        assertTrue(mine.captionless("x.com"));
+        assertEquals("x.com", Config.site("com.twitter.android"));
+        assertEquals("instagram.com", Config.site("com.instagram.android"));
+        assertEquals("youtube.com", Config.site("app.morphe.android.youtube"));
+        assertEquals("demo.test", Config.site("dev.spoilerblock.demo2"));
+        assertNull(Config.site("dev.spoilerblock"));
+    }
+
     @Test public void migratesFrom01() {
         Config c = Config.migrate(new HashSet<>(Arrays.asList("Q1079", "Q42")), "spoiler", false, true, "weekly", 5);
         assertEquals("seen", c.state("Q1079"));
@@ -132,7 +154,7 @@ public class ConfigTest {
         assertEquals("all seen never covers", Config.NOT_COVERED, Config.group(new int[]{2}, v, true));
         assertEquals("unlisted covers with blockUnlisted", Config.STYLE_ALL, Config.group(new int[]{3}, v, true));
         assertEquals("unlisted alone does not without it", Config.NOT_COVERED, Config.group(new int[]{3}, v, false));
-        assertEquals("seen + unlisted = unlisted", Config.STYLE_ALL, Config.group(new int[]{2, 3}, v, true));
+        assertEquals("one seen work shows an ambiguous name", Config.NOT_COVERED, Config.group(new int[]{2, 3}, v, true));
         assertEquals("any all-style work makes the group all", Config.STYLE_ALL, Config.group(new int[]{1, 3}, v, true));
         assertFalse(Config.coverUnknownImage(false, false, false));
         assertTrue(Config.coverUnknownImage(true, false, false));
@@ -144,5 +166,94 @@ public class ConfigTest {
         for (String ok : new String[]{"com.google.android.youtube", "app.morphe.android.youtube", "com.twitter.android", "com.instagram.android",
             "dev.spoilerblock.demo", "dev.spoilerblock.demo2", "dev.spoilerblock"}) assertTrue(ok, Store.allowed(ok));
         for (String no : new String[]{null, "", "com.evil", "com.twitter.android.evil", "dev.spoilerblock.demo3"}) assertFalse(String.valueOf(no), Store.allowed(no));
+    }
+
+    // ---------- learned (rule 11), as test/config.test.js ----------
+
+    /** Key order differs between org.json builds: compare objects of arrays per key. */
+    private static void assertJson(String expected, JSONObject actual) throws Exception {
+        JSONObject e = new JSONObject(expected);
+        assertEquals(e.length(), actual.length());
+        for (java.util.Iterator<String> i = e.keys(); i.hasNext(); ) { String k = i.next(); assertEquals(k, e.get(k).toString(), actual.get(k).toString()); }
+    }
+
+    private static void assertEmpty(JSONObject l) throws Exception {
+        assertEquals(2, l.length());
+        assertEquals(0, l.getJSONObject("names").length());
+        assertEquals(0, l.getJSONObject("not").length());
+    }
+
+    @Test public void learnedNormalisation() throws Exception {
+        JSONObject l = Config.cleanLearned(new JSONObject("{\"names\":{\"Q1\":[\" BrBa \",\"brba\",\"x\",\"" + new String(new char[61]).replace('\0', 'y') + "\",3,\"Heisenberg show\"],"
+            + "\"Q2\":[],\"__proto__\":[\"a\"],\"bad id\":[\"Name\"],\"Q3\":\"BrBa\"},"
+            + "\"not\":{\"Q4\":[\"youtube.com/dokuzsekiz müzik\",\"x.com/@somebody\",\"reddit.com\",\"Reddit.com\",\"reddit.com\",\"nohost\",\"x.com/\",\"x.com/ \",7],\"Q5\":[\"bad\"]},"
+            + "\"clips\":[{\"id\":\"c1\",\"work\":\"Q6\",\"ts\":5,\"emb\":[\"x\"]}]}"));
+        assertJson("{\"Q1\":[\"BrBa\",\"Heisenberg show\"]}", l.getJSONObject("names"));
+        assertEquals(new JSONArray(Arrays.asList("youtube.com/dokuzsekiz müzik", "x.com/@somebody", "reddit.com")).toString(), l.getJSONObject("not").getJSONArray("Q4").toString());
+        assertEquals(1, l.getJSONObject("not").length());
+        assertEquals(2, l.length());
+        assertEmpty(Config.cleanLearned(null));
+        JSONArray many = new JSONArray();
+        for (int i = 0; i < 30; i++) many.put("Name " + i);
+        assertEquals(20, Config.cleanNames(many).length());
+        assertEquals("a stored config keeps it", l.toString(), cfg("{\"learned\":" + l + "}").learned.toString());
+    }
+
+    @Test public void learnedExportImportMergeReplace() throws Exception {
+        Config cur = cfg("{\"learned\":{\"names\":{\"Q1\":[\"BrBa\"]},\"not\":{\"Q2\":[\"reddit.com\"]}}}");
+        assertEquals(cur.learned.toString(), new JSONObject(cur.export("2026-11-21T00:00:00Z")).getJSONObject("learned").toString());
+        Config in = Config.fromExport("{\"format\":\"spolierblock\",\"version\":1,\"learned\":{\"names\":{\"Q1\":[\"brba\",\"Walter show\"],\"Q9\":[\"Nine\"]},"
+            + "\"not\":{\"Q2\":[\"x.com/@a\"]},\"clips\":[{\"id\":\"c1\",\"work\":\"Q3\",\"ts\":2,\"emb\":[\"x\"]}]}}");
+        Config m = cur.copy();
+        m.mergeImport(in, false);
+        assertJson("{\"Q1\":[\"BrBa\",\"Walter show\"],\"Q9\":[\"Nine\"]}", m.learned.getJSONObject("names"));
+        assertJson("{\"Q2\":[\"reddit.com\",\"x.com/@a\"]}", m.learned.getJSONObject("not"));
+        assertFalse(m.learned.has("clips"));
+        assertEmpty(Config.fromExport("{\"format\":\"spolierblock\",\"version\":1}").learned); // an older file has none
+        assertEmpty(Config.mergeLearned(null, null));
+        // Replace (Store.replace): the merge patch nulls what the file lacks, so the result is the file's
+        Config r = cur.copy();
+        JSONObject p = new JSONObject().put("learned", new JSONObject(in.learned.toString()));
+        p.getJSONObject("learned").getJSONObject("names").put("Q1", new JSONArray().put("brba").put("Walter show"));
+        r.apply(p);
+        r.apply(new JSONObject("{\"learned\":{\"not\":{\"Q2\":null}}}"));
+        assertJson("{\"Q1\":[\"brba\",\"Walter show\"],\"Q9\":[\"Nine\"]}", r.learned.getJSONObject("names"));
+        assertEquals("{}", r.learned.getJSONObject("not").toString());
+        // absorb: an app's own corrections join the companion's
+        JSONObject ab = cur.absorb(in);
+        assertJson("{\"Q2\":[\"reddit.com\",\"x.com/@a\"]}", cur.copy().apply(ab).learned.getJSONObject("not"));
+    }
+
+    @Test public void addNameMessages() throws Exception {
+        Config c = cfg("{\"learned\":{\"names\":{\"Q1\":[\"BrBa\"]}}}");
+        String[][] bad = {{"x", "A name is 2 to 60 characters."}, {" brba ", "\"brba\" is already one of its names."}};
+        for (String[] b : bad) try { c.addName("Q1", b[0]); fail(b[0]); } catch (IllegalArgumentException e) { assertEquals(b[1], e.getMessage()); }
+        c.apply(c.addName("Q1", "  Walter show "));
+        assertEquals("[\"BrBa\",\"Walter show\"]", c.names("Q1").toString());
+        for (int i = 0; i < 18; i++) c.apply(c.addName("Q1", "Name " + i));
+        try { c.addName("Q1", "One more"); fail(); } catch (IllegalArgumentException e) { assertEquals("A work has at most 20 other names.", e.getMessage()); }
+        c.apply(Config.learnedPatch("names", "Q1", new JSONArray()));
+        assertEquals("an empty list removes the work", 0, c.learned.getJSONObject("names").length());
+    }
+
+    @Test public void notThisKeysAndDrop() throws Exception {
+        assertEquals(Arrays.asList("x.com/@handle_1", "x.com"), Arrays.asList(Config.where("x.com", "@Handle_1")));
+        assertEquals(Arrays.asList("youtube.com/dokuzsekiz müzik", "youtube.com"), Arrays.asList(Config.where("youtube.com", "DokuzSekiz Müzik")));
+        assertEquals(Arrays.asList("instagram.com"), Arrays.asList(Config.where("instagram.com", null)));
+        for (String k : Config.where("youtube.com", "DokuzSekiz Müzik")) assertTrue(k, Config.okKey(k));
+        // the X author: the first piece that is exactly one @handle of 1-15 letters, digits or underscores
+        TextCapture.Texts t = new TextCapture.Texts();
+        for (String s : new String[]{"Some Name", "@toolong_handle_16", "@ two", "@Real_1", "@second"}) t.add(s);
+        assertEquals("@Real_1", t.handle);
+        // works 0..2; group A = {0,1}, B = {2}
+        Config c = cfg("{\"learned\":{\"not\":{\"w0\":[\"x.com/@a\"],\"w1\":[\"x.com\"],\"w2\":[\"x.com/@b\"]}}}");
+        Config.Works v = new Config.Works(c, new String[]{"w0", "w1", "w2"});
+        assertTrue("every work has a key of the item", Config.notHere(new int[]{0, 1}, v, Config.where("x.com", "@A")));
+        assertFalse("w0 is not dropped for another author", Config.notHere(new int[]{0, 1}, v, Config.where("x.com", "@b")));
+        assertFalse(Config.notHere(new int[]{0}, v, Config.where("x.com", null)));
+        assertTrue("a site key drops it for every source", Config.notHere(new int[]{1}, v, Config.where("x.com", "@zz")));
+        assertFalse("another site", Config.notHere(new int[]{1}, v, Config.where("youtube.com", null)));
+        assertTrue(Config.notHere(new int[]{2}, v, Config.where("x.com", "@B")));
+        assertFalse("no learned.not: nothing dropped", Config.notHere(new int[]{0}, new Config.Works(cfg("{}"), new String[]{"w0"}), Config.where("x.com", "@a")));
     }
 }

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>video page</title>
+<!-- A YouTube-like page, served from the image server (127.0.0.1): the e2e test build reads that host as youtube.com, so
+     the youtube.com selectors and the uploader part apply. test/e2e/run.mjs checks each id. -->
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #fff; color: #111; }
+  #movie_player { position: relative; width: 640px; height: 360px; background: #000; color: #fff; overflow: hidden; }
+  .html5-video-container video { width: 640px; height: 360px; }
+  .ytp-endscreen-content { position: absolute; inset: 0; }
+  .ytp-videowall-still, .ytp-modern-videowall-still { position: absolute; width: 200px; height: 112px; color: #fff; }
+  .ytp-ce-element { position: absolute; right: 8px; bottom: 8px; width: 150px; height: 84px; }
+  .ytp-ce-covering-overlay { position: absolute; inset: 0; }
+  .ytp-autonav-endscreen-upnext-container { position: absolute; left: 8px; bottom: 8px; width: 260px; }
+  ytd-video-renderer { display: block; padding: 8px; border-bottom: 1px solid #ddd; }
+</style>
+</head>
+<body>
+<div id="movie_player" class="html5-video-player">
+  <div class="html5-video-container"><video id="yt-video" src="{{IMG}}/video_lake.webm" loop muted playsinline></video></div>
+  <div class="html5-endscreen ytp-player-content videowall-endscreen">
+    <div class="ytp-endscreen-content">
+      <a class="ytp-videowall-still" id="es-1" href="#w1" style="left:0;top:0" aria-label="Breaking Bad finale explained AMC 2 years ago">
+        <span class="ytp-videowall-still-info-content"><span class="ytp-videowall-still-info-title">Breaking Bad finale explained</span>
+        <span class="ytp-videowall-still-info-author">AMC • 1M views</span></span></a>
+      <a class="ytp-videowall-still" id="es-2" href="#w2" style="left:210px;top:0" aria-label="Relaxing rain sounds for sleep">
+        <span class="ytp-videowall-still-info-content"><span class="ytp-videowall-still-info-title">Relaxing rain sounds for sleep</span>
+        <span class="ytp-videowall-still-info-author">Calm • 3M views</span></span></a>
+      <a class="ytp-modern-videowall-still" id="es-4" href="#w4" style="left:420px;top:0" aria-label="Cooking pasta at home"></a>
+    </div>
+  </div>
+  <div class="ytp-autonav-endscreen-upnext-container" id="es-up">
+    <div class="ytp-autonav-endscreen-upnext-header">Up next</div>
+    <div class="ytp-autonav-endscreen-upnext-title">Game of Thrones: the Red Wedding where Robb Stark gets murdered</div>
+    <div class="ytp-autonav-endscreen-upnext-author">HBO</div>
+  </div>
+</div>
+
+<!-- video rows: the channel is the uploader -->
+<ytd-video-renderer id="up-clean"><a id="video-title" href="#v1">Minecraft</a>
+  <ytd-channel-name><div id="text">Minecraft</div></ytd-channel-name></ytd-video-renderer>
+<ytd-video-renderer id="up-trailer"><a id="video-title" href="#v2">Minecraft - Official Trailer</a>
+  <ytd-channel-name><div id="text">Minecraft</div></ytd-channel-name></ytd-video-renderer>
+<ytd-video-renderer id="up-other"><a id="video-title" href="#v3">Minecraft</a>
+  <ytd-channel-name><div id="text">Some Channel</div></ytd-channel-name></ytd-video-renderer>
+<!-- rule 11, "Not this": two rows from one channel, one from another (narrow: the compact one-row cover) -->
+<ytd-video-renderer id="nt-a"><a id="video-title" href="#n1">Breaking Bad finale explained</a>
+  <ytd-channel-name><div id="text">Recap Lab</div></ytd-channel-name></ytd-video-renderer>
+<ytd-video-renderer id="nt-b"><a id="video-title" href="#n2">Breaking Bad ending, my reaction</a>
+  <ytd-channel-name><div id="text">Recap Lab</div></ytd-channel-name></ytd-video-renderer>
+<ytd-video-renderer id="nt-c" style="width:260px"><a id="video-title" href="#n3">Breaking Bad finale explained</a>
+  <ytd-channel-name><div id="text">Other Recaps</div></ytd-channel-name></ytd-video-renderer>
+<script>
+  // an end card whose only text is its aria-label, added after load; a card whose label changes in place
+  setTimeout(() => {
+    const ce = document.createElement('div');
+    ce.className = 'ytp-ce-element'; ce.id = 'es-3';
+    ce.innerHTML = '<div class="ytp-ce-covering-overlay" aria-label="Walter White\'s last scene"></div>';
+    document.querySelector('#movie_player').append(ce);
+    document.getElementById('es-4').setAttribute('aria-label', 'Interstellar docking scene, the best in cinema');
+  }, 400);
+</script>
+</body>
+</html>

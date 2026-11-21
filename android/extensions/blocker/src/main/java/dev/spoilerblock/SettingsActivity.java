@@ -297,6 +297,27 @@ public final class SettingsActivity extends Activity {
 
     /** A switch with its label, the explanation under it; bound to a boolean setting. */
     private void toggle(LinearLayout l, String key, String label, String explain) {
+        Switch s = makeSwitch(l, label);
+        s.setOnCheckedChangeListener((v, on) -> { if (!binding) store.patch(Config.settingPatch(key, on)); });
+        binders.add(() -> s.setChecked(store.get().bool(key)));
+        TextView t = body(l, explain);
+        t.setPadding(0, 0, dp(64), dp(12));
+    }
+
+    /** A switch bound to one site's presence in settings.captionlessVideos (rule 10); other sites in the list are kept. */
+    private void siteToggle(LinearLayout l, String site, String label) {
+        Switch s = makeSwitch(l, label);
+        s.setOnCheckedChangeListener((v, on) -> {
+            if (binding) return;
+            org.json.JSONArray now = store.get().settings.optJSONArray("captionlessVideos"), out = new org.json.JSONArray();
+            for (int i = 0; now != null && i < now.length(); i++) if (!site.equals(now.optString(i))) out.put(now.optString(i));
+            if (on) out.put(site);
+            store.patch(Config.settingPatch("captionlessVideos", out));
+        });
+        binders.add(() -> s.setChecked(store.get().captionless(site)));
+    }
+
+    private Switch makeSwitch(LinearLayout l, String label) {
         Switch s = new Switch(this);
         s.setText(label);
         s.setTextColor(p.text);
@@ -308,11 +329,8 @@ public final class SettingsActivity extends Activity {
             new int[][]{{android.R.attr.state_checked}, {}}, new int[]{p.accentContainer, p.surfaceHigh});
         s.setThumbTintList(thumb);
         s.setTrackTintList(track);
-        s.setOnCheckedChangeListener((v, on) -> { if (!binding) store.patch(Config.settingPatch(key, on)); });
-        binders.add(() -> s.setChecked(store.get().bool(key)));
         l.addView(s, Ui.matchWidth());
-        TextView t = body(l, explain);
-        t.setPadding(0, 0, dp(64), dp(12));
+        return s;
     }
 
     static String typeLabel(String type) {
@@ -661,10 +679,13 @@ public final class SettingsActivity extends Activity {
                 addLabeled(row, "What to cover", sy);
                 TextView remove = Ui.button(SettingsActivity.this, p, id.startsWith("custom:") ? "Delete this work" : "Remove from library", Ui.TEXT);
                 remove.setOnClickListener(v -> remove(id));
-                LinearLayout.LayoutParams rl = Ui.wrap();
+                LinearLayout acts = new LinearLayout(SettingsActivity.this);
+                acts.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+                acts.addView(namesButton(id, title(id)), Ui.wrap());
+                acts.addView(remove, Ui.wrap());
+                LinearLayout.LayoutParams rl = Ui.matchWidth();
                 rl.topMargin = dp(8);
-                rl.gravity = Gravity.END;
-                row.addView(remove, rl);
+                row.addView(acts, rl);
             }
             return row;
         }
@@ -719,6 +740,9 @@ public final class SettingsActivity extends Activity {
             TextView mt = Ui.text(SettingsActivity.this, Ui.BODY_MEDIUM, p.muted, false);
             mt.setText(typeLabel(m.types[i]) + (m.years[i] > 0 ? " · " + m.years[i] : ""));
             texts.addView(mt);
+            TextView names = namesButton(m.ids[i], m.titles[i]);
+            names.setPadding(0, 0, dp(12), 0);
+            texts.addView(names, Ui.wrap());
             row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
             TextView seen = Ui.button(SettingsActivity.this, p, "Seen", Ui.TONAL);
             seen.setPadding(dp(16), 0, dp(16), 0);
@@ -870,7 +894,177 @@ public final class SettingsActivity extends Activity {
         toggle(l, "scanImages", "Scan images", "Recognises posters, stills and screenshots, and reads the text in them, on this device.");
         toggle(l, "unknownImages", "Cover unrecognised film, show or game images",
             "Covers an image that looks like a film, show or game but could not be named. Off by default: it also covers many harmless images.");
+        heading(l, "Cover videos with no caption");
+        body(l, "For footage the picture check cannot identify, such as raw gameplay clips. Covers every video post that has no text.");
+        siteToggle(l, "x.com", "X");
+        siteToggle(l, "instagram.com", "Instagram");
+        siteToggle(l, "youtube.com", "YouTube");
+        corrections(l);
         return scroll(l);
+    }
+
+    // ---------- Corrections (contract rule 11: learned) ----------
+
+    private void corrections(LinearLayout l) {
+        heading(l, "Corrections");
+        body(l, "What your reports taught SpolierBlock: “Not this” on a cover and names you added. It stays on this device.");
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        l.addView(list);
+        binders.add(() -> {
+            list.removeAllViews();
+            Config c = store.get();
+            subheading(list, "Not this");
+            body(list, "Where a name does not mean the work. Posts from that channel, account or site are not covered for it.");
+            JSONObject not = c.learned.optJSONObject("not");
+            for (Iterator<String> i = not.keys(); i.hasNext(); ) {
+                String id = i.next(), t = titleOf(id);
+                JSONArray keys = not.optJSONArray(id);
+                for (int k = 0; k < keys.length(); k++) {
+                    String key = keys.optString(k);
+                    View rm = Ui.iconButton(this, p, Ui.Icon.CLOSE, p.muted, "Remove “Not this” for " + t + " on " + key);
+                    rm.setOnClickListener(v -> {
+                        store.patch(Config.learnedPatch("not", id, Config.without(store.get().notKeys(id), key)));
+                        notice("Removed: " + t + " on " + key);
+                    });
+                    list.addView(twoLine(t, "Not this on " + key, rm));
+                }
+            }
+            if (not.length() == 0) body(list, "Nothing yet. Use “Not this” on a wrong cover.");
+            subheading(list, "Other names");
+            body(list, "Extra names a work is matched by. Add them from a work's row in the library or the search.");
+            JSONObject names = c.learned.optJSONObject("names");
+            for (Iterator<String> i = names.keys(); i.hasNext(); ) {
+                String id = i.next(), t = titleOf(id);
+                List<String> ns = new ArrayList<>();
+                for (int k = 0; k < names.optJSONArray(id).length(); k++) ns.add(names.optJSONArray(id).optString(k));
+                list.addView(twoLine(t, TextUtils.join(", ", ns), namesButton(id, t)));
+            }
+            if (names.length() == 0) body(list, "No names added yet.");
+        });
+    }
+
+    private void subheading(LinearLayout l, String s) {
+        TextView t = Ui.text(this, Ui.LABEL_LARGE, p.accent, true);
+        t.setText(s);
+        t.setAccessibilityHeading(true);
+        t.setPadding(0, dp(16), 0, dp(4));
+        l.addView(t);
+    }
+
+    /** A list row: title, a muted line under it, and a control at the end. */
+    private View twoLine(String title, String meta, View end) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(56));
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        TextView t = Ui.text(this, Ui.BODY_LARGE, p.text, false);
+        t.setText(title);
+        texts.addView(t);
+        TextView mt = Ui.text(this, Ui.BODY_MEDIUM, p.muted, false);
+        mt.setText(meta);
+        texts.addView(mt);
+        row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        row.addView(end);
+        return row;
+    }
+
+    private Map<String, Integer> titleIndex;
+    private Matcher titleIndexOf;
+
+    /** A work's title: the library's entry, the hand-added work, else the index; the id when none knows it. */
+    private String titleOf(String id) {
+        Config c = store.get();
+        JSONObject e = c.work(id);
+        if (e != null && !e.isNull("title")) return e.optString("title");
+        for (int i = 0; i < c.custom.length(); i++) if (id.equals(c.custom.optJSONObject(i).optString("id"))) return c.custom.optJSONObject(i).optString("title");
+        Matcher m = matcher();
+        if (m == null) return id;
+        if (m != titleIndexOf) {
+            titleIndexOf = m;
+            titleIndex = new HashMap<>();
+            for (int i = 0; i < m.ids.length; i++) titleIndex.put(m.ids[i], i);
+        }
+        Integer i = titleIndex.get(id);
+        return i != null ? m.titles[i] : id;
+    }
+
+    /** "Other names" / "Other names ({n})": opens the work's editor of learned.names. */
+    private TextView namesButton(String id, String title) {
+        int n = store.get().names(id).length();
+        String label = n > 0 ? "Other names (" + n + ")" : "Other names";
+        TextView b = Ui.button(this, p, label, Ui.TEXT);
+        b.setContentDescription(label + " of " + title);
+        b.setOnClickListener(v -> namesDialog(id, title));
+        return b;
+    }
+
+    /** The editor of one work's other names: each with a remove button, and a field to add one (Config.addName's rules). */
+    private void namesDialog(String id, String title) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(8), dp(24), 0);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setContentDescription("Other names of " + title);
+        box.addView(list);
+        EditText in = field("Another name");
+        in.setContentDescription("Another name for " + title);
+        in.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(Config.NAME_MAX)});
+        in.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+        LinearLayout.LayoutParams il = Ui.matchWidth();
+        il.topMargin = dp(8);
+        box.addView(in, il);
+        TextView err = Ui.text(this, Ui.BODY_MEDIUM, p.error, false);
+        err.setVisibility(View.GONE);
+        err.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        err.setPadding(0, dp(8), 0, 0);
+        box.addView(err);
+        TextView add = Ui.button(this, p, "Add name", Ui.TONAL);
+        LinearLayout.LayoutParams al = Ui.wrap();
+        al.topMargin = dp(8);
+        al.gravity = Gravity.END;
+        box.addView(add, al);
+        Runnable[] fill = new Runnable[1];
+        fill[0] = () -> {
+            list.removeAllViews();
+            JSONArray ns = store.get().names(id);
+            if (ns.length() == 0) { body(list, "No other names yet."); return; }
+            for (int k = 0; k < ns.length(); k++) {
+                String n = ns.optString(k);
+                LinearLayout row = new LinearLayout(this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                TextView t = Ui.text(this, Ui.BODY_LARGE, p.text, false);
+                t.setText(n);
+                row.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+                View rm = Ui.iconButton(this, p, Ui.Icon.CLOSE, p.muted, "Remove " + n);
+                rm.setOnClickListener(v -> {
+                    store.patch(Config.learnedPatch("names", id, Config.without(store.get().names(id), n)));
+                    notice("Removed " + n);
+                    fill[0].run();
+                });
+                row.addView(rm);
+                list.addView(row);
+            }
+        };
+        fill[0].run();
+        Runnable submit = () -> {
+            try {
+                store.patch(store.get().addName(id, in.getText().toString()));
+                in.setText("");
+                err.setVisibility(View.GONE);
+                fill[0].run();
+            } catch (IllegalArgumentException e) {
+                err.setText(e.getMessage());
+                err.setVisibility(View.VISIBLE);
+            }
+        };
+        add.setOnClickListener(v -> submit.run());
+        in.setOnEditorActionListener((v, action, ev) -> { submit.run(); return true; });
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        new AlertDialog.Builder(this).setTitle(title).setView(sv).setPositiveButton("Done", null).show();
     }
 
     // ---------- Data ----------
@@ -988,7 +1182,7 @@ public final class SettingsActivity extends Activity {
         body(l, SpoilerBlock.I != null ? SpoilerBlock.I.images.accel.status()
             : "Each app with SpolierBlock checks images itself, on its own device processor; its settings show how.");
         heading(l, "On a cover");
-        body(l, "Show once: shows the post until the app restarts.\nI've seen it: adds the work to your library as seen, so nothing about it is covered again.\n⋮: opens these settings.");
+        body(l, "Show once: shows the post until the app restarts.\nI've seen it: adds the work to your library as seen, so nothing about it is covered again.\nNot this: the name in that post is not the work; posts from the same channel or account (or this app, when it shows none) are not covered for it again. Undo it under Blocking, Corrections.\n⋮: opens these settings.");
         heading(l, "Licence");
         body(l, "Free software under the GNU General Public License, version 3.");
         return scroll(l);

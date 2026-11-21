@@ -13,13 +13,19 @@ W.forEach((w, i) => {
   assert.match(w.id, /^Q\d+$/); assert.ok(w.title && typeof w.title === 'string');
   assert.ok(types.has(w.type), 'type ' + w.id);
   assert.ok(w.year === null || Number.isInteger(w.year));
-  assert.ok(Array.isArray(w.aliases) && w.aliases.length <= 8 && w.aliases.every((a) => typeof a === 'string' && a.length >= 3 && a.toLowerCase() !== w.title.toLowerCase()));
+  assert.ok(Array.isArray(w.aliases) && w.aliases.length <= 10 && w.aliases.every((a) => typeof a === 'string' && a.length >= 3 && a.toLowerCase() !== w.title.toLowerCase()));
   assert.ok(Array.isArray(w.characters) && w.characters.length <= 8 && (w.pop >= 40 || !w.characters.length));
   assert.ok(Number.isInteger(w.pop) && typeof w.ambiguous === 'boolean');
   if (i) assert.ok(W[i - 1].pop >= w.pop, 'sorted');
 });
 assert.ok(W.length >= 15000, 'count ' + W.length);
 const find = (t, f = () => true) => W.find((w) => w.title === t && f(w));
+// coverage (0.2.4): books, comics, manga and anime below 15 sitelinks, graphic memoirs, franchise stand-ins, names in
+// other languages, main titles
+assert.ok(find('Saga', (w) => w.type === 'comic'), 'Saga');
+assert.ok(find('Maus'), 'Maus');
+assert.ok(find('One-Punch Man', (w) => w.type === 'anime'), 'One-Punch Man');
+assert.ok(find('The Godfather', (w) => w.aliases.includes('Der Pate')), 'Der Pate');
 const bb = find('Breaking Bad');
 assert.ok(bb && bb.type === 'tv' && !bb.ambiguous && bb.characters.includes('Walter White'), 'Breaking Bad');
 assert.ok(find('The Witcher 3: Wild Hunt', (w) => w.type === 'game'), 'Witcher 3');

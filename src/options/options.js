@@ -1,12 +1,12 @@
 // The settings page (options_ui, opens in a tab). Reads and writes storage.local directly; every other page and tab
 // follows through storage.onChanged. Config shapes: docs/agents/contract.md.
-import { api, el, describe, toast, catalogLine } from './ui.js';
-import { withDefaults, parseImport, applyImport, exportFile, cleanCustom, nextCustomId, normHost, MAX_IMPORT_BYTES } from './config.js';
+import { api, el, describe, toast, catalogLine, catalogSearch } from './ui.js';
+import { withDefaults, parseImport, applyImport, exportFile, cleanCustom, nextCustomId, normHost, MAX_IMPORT_BYTES, cleanLearned, addName } from './config.js';
 
 const $ = (id) => document.getElementById(id);
-const KEYS = ['works', 'custom', 'settings'];
-let works = {}, custom = [], settings = withDefaults();
-let results = [], searchSeq = 0, showAll = false, pendingImport = null;
+const KEYS = ['works', 'custom', 'settings', 'learned'];
+let works = {}, custom = [], settings = withDefaults(), learned = cleanLearned();
+let results = [], showAll = false, pendingImport = null;
 const selected = new Set();
 const PAGE = 200;
 
@@ -30,8 +30,10 @@ async function load() {
   works = d.works ?? {};
   custom = Array.isArray(d.custom) ? d.custom : [];
   settings = withDefaults(d.settings);
+  learned = cleanLearned(d.learned);
   for (const id of selected) if (!works[id]) selected.delete(id);
   keepFocus(render);
+  lookupTitles();
 }
 // Re-rendering replaces rows; put focus back on the same control so keyboard users keep their place.
 function keepFocus(fn) {
@@ -52,6 +54,7 @@ function render() {
   renderResults();
   renderCustom();
   renderSites();
+  renderLearned();
 }
 
 // ---------- library ----------
@@ -74,8 +77,10 @@ function libRow(id, w, i) {
     el('select', { class: 'style', 'aria-label': `How to cover ${w.title}`, 'data-k': id + '|style',
       onchange: (e) => setWorks({ ...works, [id]: { ...works[id], style: e.target.value || null } }) },
       STYLE_OPTS().map(([v, t]) => el('option', { value: v, selected: (w.style ?? '') === v }, t))),
+    namesToggle(id),
     el('button', { type: 'button', class: 'icon quiet', 'aria-label': `Remove ${w.title}`, 'data-k': id + '|rm', title: 'Remove from library',
-      onclick: () => { const { [id]: _, ...rest } = works; setWorks(rest, `Removed ${w.title}`); } }, '×'));
+      onclick: () => { const { [id]: _, ...rest } = works; setWorks(rest, `Removed ${w.title}`); } }, '×'),
+    namesEditor(id, w.title));
 }
 function shownWorks() {
   const q = $('filter').value.trim().toLowerCase(), type = $('f-type').value;
@@ -143,36 +148,11 @@ function resultRow(w) {
       else setWorks({ ...works, [w.id]: entry(w.id, w, state) }, `${state === 'seen' ? 'Marked as seen' : 'Blocked'}: ${w.title}`);
     } }, label);
   return el('li', {}, el('div', { class: 'what' }, el('span', { class: 'title' }, w.title), el('span', { class: 'meta' }, describe(w))),
-    el('span', { class: 'acts' }, act('seen', "I've seen it"), act('blocked', 'Block')));
+    el('span', { class: 'acts' }, act('seen', "I've seen it"), act('blocked', 'Block'), namesToggle(w.id)), namesEditor(w.id, w.title));
 }
 function renderResults() { $('results').replaceChildren(...results.map(resultRow)); }
-function clearSearch() {
-  $('search').value = ''; results = []; searchSeq++;
-  $('search-msg').hidden = true;
-  renderResults();
-}
-let timer;
-$('search').addEventListener('input', () => {
-  clearTimeout(timer);
-  const q = $('search').value.trim();
-  if (!q) return clearSearch();
-  timer = setTimeout(async () => {
-    const n = ++searchSeq;
-    let msg = '';
-    try {
-      const r = await api.runtime.sendMessage({ type: 'catalog.search', q, limit: 12 });
-      if (n !== searchSeq) return;
-      results = r?.results ?? [];
-      if (!results.length) msg = 'No matches. You can add it by hand below.';
-    } catch {
-      if (n !== searchSeq) return;
-      results = []; msg = 'Search is not available right now.';
-    }
-    $('search-msg').textContent = msg;
-    $('search-msg').hidden = !msg;
-    renderResults();
-  }, 120);
-});
+const search = catalogSearch($('search'), $('search-msg'), { limit: 12, none: 'No matches. You can add it by hand below.', onResults: (r) => { results = r; renderResults(); } });
+const clearSearch = search.clear;
 $('search').addEventListener('keydown', (e) => {
   const first = $('results').querySelector('button');
   if (e.key === 'Escape') clearSearch();
@@ -207,14 +187,74 @@ function renderCustom() {
       el('div', { class: 'what' }, el('span', { class: 'title' }, c.title),
         el('span', { class: 'meta' }, [describe(c), c.aliases.length && 'also ' + c.aliases.join(', ')].filter(Boolean).join(' · '))),
       el('span', { class: 'mark ' + (w?.state ?? 'none') }, w?.state === 'seen' ? 'Seen' : w?.state === 'blocked' ? 'Blocked' : 'Default'),
+      namesToggle(c.id),
       el('button', { type: 'button', class: 'icon quiet', 'aria-label': `Delete ${c.title}`, title: 'Delete', 'data-k': c.id + '|crm',
         onclick: async () => {
           const snap = await snapshot();
           const { [c.id]: _, ...rest } = works;
           await put({ custom: custom.filter((x) => x.id !== c.id), works: rest });
           toast(`Deleted ${c.title}`, () => restore(snap));
-        } }, '×'));
+        } }, '×'),
+      namesEditor(c.id, c.title));
   }));
+}
+
+// ---------- learned from reports (contract rule 11) ----------
+const openNames = new Set(); // work ids whose "Other names" editor is open
+let known = {}; // work id -> { title, type, year } from the index, for ids that are neither in the library nor added by hand
+const workOf = (id) => works[id] ?? custom.find((c) => c.id === id) ?? known[id] ?? { title: id };
+const learnedIds = () => [...new Set([...Object.keys(learned.names), ...Object.keys(learned.not)])];
+async function lookupTitles() {
+  const ids = learnedIds().filter((id) => !works[id] && !id.startsWith('custom:') && !known[id]);
+  if (!ids.length) return;
+  try { Object.assign(known, (await api.runtime.sendMessage({ type: 'catalog.titles', ids }))?.works); keepFocus(renderLearned); } catch {}
+}
+function saveLearned(next, msg) {
+  const prev = learned;
+  put({ learned: next });
+  if (msg) toast(msg, () => put({ learned: prev }));
+}
+function namesToggle(id) {
+  const n = learned.names[id]?.length ?? 0;
+  return el('button', { type: 'button', class: 'quiet names-btn', 'aria-expanded': String(openNames.has(id)), 'data-k': id + '|names',
+    onclick: () => { openNames.has(id) ? openNames.delete(id) : openNames.add(id); keepFocus(render); } }, n ? `Other names (${n})` : 'Other names');
+}
+// the "Other names" editor of one work: its learned.names as chips, and a field to add one
+function namesEditor(id, title) {
+  if (!openNames.has(id)) return null;
+  const list = learned.names[id] ?? [];
+  const input = el('input', { type: 'text', maxlength: 60, placeholder: 'Another name', 'aria-label': `Another name for ${title}`, 'data-k': id + '|nin' });
+  const msg = el('span', { class: 'soft', 'aria-live': 'polite' });
+  const without = (n) => { const rest = list.filter((x) => x !== n), names = { ...learned.names, [id]: rest }; if (!rest.length) delete names[id]; return { ...learned, names }; };
+  return el('div', { class: 'names' },
+    el('ul', { class: 'chips', 'aria-label': `Other names of ${title}` }, list.length ? list.map((n) => el('li', {}, el('span', {}, n),
+      el('button', { type: 'button', class: 'icon quiet', 'aria-label': `Remove ${n}`, title: 'Remove', 'data-k': id + '|n|' + n,
+        onclick: () => saveLearned(without(n), `Removed ${n}`) }, '×'))) : el('li', { class: 'none soft' }, 'No other names yet.')),
+    el('form', { class: 'inline', onsubmit: (e) => {
+      e.preventDefault();
+      const r = addName(learned, id, input.value);
+      if (r.error) msg.textContent = r.error; else saveLearned(r.learned);
+    } }, input, el('button', { type: 'submit' }, 'Add name'), msg));
+}
+function renderLearned() {
+  const rm = (label, next, msg, k) => el('button', { type: 'button', class: 'icon quiet', 'aria-label': label, title: 'Remove', 'data-k': k, onclick: () => saveLearned(next(), msg) }, '×');
+  const nots = Object.entries(learned.not).flatMap(([id, keys]) => keys.map((k) => [id, k]));
+  $('not-list').replaceChildren(...nots.map(([id, k]) => {
+    const t = workOf(id).title;
+    return el('li', { class: 'row' }, el('div', { class: 'what' }, el('span', { class: 'title' }, t), el('span', { class: 'meta' }, `Not this on ${k}`)),
+      rm(`Remove "Not this" for ${t} on ${k}`, () => {
+        const rest = learned.not[id].filter((x) => x !== k), not = { ...learned.not, [id]: rest };
+        if (!rest.length) delete not[id];
+        return { ...learned, not };
+      }, `Removed: ${t} on ${k}`, id + '|not|' + k));
+  }));
+  $('not-empty').hidden = nots.length > 0;
+  $('names-list').replaceChildren(...Object.entries(learned.names).map(([id, ns]) => {
+    const t = workOf(id).title;
+    return el('li', { class: 'row' }, el('div', { class: 'what' }, el('span', { class: 'title' }, t), el('span', { class: 'meta' }, ns.join(', '))),
+      namesToggle(id), namesEditor(id, t));
+  }));
+  $('names-empty').hidden = Object.keys(learned.names).length > 0;
 }
 $('custom-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -239,23 +279,32 @@ $('enabled').addEventListener('change', (e) => saveSettings({ enabled: e.target.
 for (const id of ['blockUnlisted', 'scanImages', 'unknownImages']) $(id).addEventListener('change', (e) => saveSettings({ [id]: e.target.checked }));
 for (const r of document.querySelectorAll('input[name="style"]')) r.addEventListener('change', () => saveSettings({ style: r.value }));
 
-function renderSites() {
-  $('sites').replaceChildren(...settings.pausedSites.map((s) => el('li', {}, el('span', {}, s),
-    el('button', { type: 'button', class: 'icon quiet', 'aria-label': `Resume ${s}`, title: 'Resume', 'data-k': s + '|site', onclick: () => {
-      const prev = settings.pausedSites;
-      saveSettings({ pausedSites: prev.filter((x) => x !== s) });
-      toast(`Resumed ${s}`, () => saveSettings({ pausedSites: prev }));
+// A list of host names in settings: paused sites, sites where videos with no caption are covered.
+function siteList(key, listId, verb, none) {
+  const list = settings[key];
+  $(listId).replaceChildren(...list.map((s) => el('li', {}, el('span', {}, s),
+    el('button', { type: 'button', class: 'icon quiet', 'aria-label': `${verb} ${s}`, title: verb, 'data-k': s + '|' + key, onclick: () => {
+      saveSettings({ [key]: list.filter((x) => x !== s) });
+      toast(`${verb === 'Resume' ? 'Resumed' : 'Removed'} ${s}`, () => saveSettings({ [key]: list }));
     } }, '×'))));
-  if (!settings.pausedSites.length) $('sites').append(el('li', { class: 'none soft' }, 'No paused sites.'));
+  if (!list.length) $(listId).append(el('li', { class: 'none soft' }, none));
 }
-$('site-form').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const h = normHost($('site').value);
-  if (!h) { $('site-msg').textContent = 'Enter a site like example.com.'; return; }
-  $('site-msg').textContent = '';
-  $('site').value = '';
-  if (!settings.pausedSites.includes(h)) saveSettings({ pausedSites: [...settings.pausedSites, h] });
-});
+function renderSites() {
+  siteList('pausedSites', 'sites', 'Resume', 'No paused sites.');
+  siteList('captionlessVideos', 'vsites', 'Remove', 'No sites.');
+}
+function siteForm(form, input, msg, key) {
+  $(form).addEventListener('submit', (e) => {
+    e.preventDefault();
+    const h = normHost($(input).value);
+    if (!h) { $(msg).textContent = 'Enter a site like example.com.'; return; }
+    $(msg).textContent = '';
+    $(input).value = '';
+    if (!settings[key].includes(h)) saveSettings({ [key]: [...settings[key], h] });
+  });
+}
+siteForm('site-form', 'site', 'site-msg', 'pausedSites');
+siteForm('vsite-form', 'vsite', 'vsite-msg', 'captionlessVideos');
 
 // ---------- data ----------
 $('export').addEventListener('click', async () => {
@@ -270,7 +319,7 @@ const imode = () => document.querySelector('input[name="imode"]:checked').value;
 function renderImportMode() {
   const replace = imode() === 'replace';
   $('imode-help').textContent = replace
-    ? 'Your library, works added by hand and settings are replaced by the file.'
+    ? 'Your library, works added by hand, settings and what it learned from your reports are replaced by the file.'
     : 'Works from the file are added; where both have the same work, the file wins.';
   $('isettings-row').hidden = replace;
 }
@@ -294,9 +343,9 @@ $('import-cancel').addEventListener('click', () => { pendingImport = null; $('im
 $('import-go').addEventListener('click', async () => {
   if (!pendingImport) return;
   const mode = imode();
-  if (mode === 'replace' && !confirm('Replace your library, works added by hand and settings with this file?')) return;
+  if (mode === 'replace' && !confirm('Replace your library, works added by hand, settings and what it learned with this file?')) return;
   const snap = await snapshot();
-  const next = applyImport({ works: snap.works, custom: snap.custom, settings: snap.settings }, pendingImport, { mode, withSettings: $('import-settings').checked });
+  const next = applyImport({ works: snap.works, custom: snap.custom, settings: snap.settings, learned: snap.learned }, pendingImport, { mode, withSettings: $('import-settings').checked });
   await put(next); // one write: the list is either the old one or the complete new one
   pendingImport = null;
   $('import-panel').hidden = true;
@@ -317,7 +366,7 @@ $('updateNow').addEventListener('click', async () => {
 });
 
 $('reset').addEventListener('click', async () => {
-  if (!confirm('Reset SpolierBlock? This clears your library, works added by hand and settings.')) return;
+  if (!confirm('Reset SpolierBlock? This clears your library, works added by hand, settings and what it learned from your reports.')) return;
   const snap = await snapshot();
   await api.storage.local.remove(KEYS);
   toast('Everything was reset', () => restore(snap));

@@ -47,6 +47,10 @@ public class MainActivity extends Activity {
         {"The Witcher 3 is still the best game", true},
         {"GTA 6 leak shows the ending", true},                            // sequel number + short form -> Grand Theft Auto VI
         {"Zorblax Chronicles finale was wild", null},                     // invented work: covered only after a catalog update
+        // lowercase everyday-word title: the rules are unsure, the title-in-context model decides ("model": its yes comes late)
+        // (chosen far above the threshold with every author handle in front: the handle is part of the model's window)
+        {"still think dark souls is the hardest thing I have ever beaten", true, "model"},
+        {"my pipes are frozen again this morning", false},                 // "frozen" in lowercase: the model says no
     };
     static final String[] AUTHORS = {"@anna_k", "@deniz", "@moviebuff", "@gamer42", "@reader"};
     static final int N = 240, TEXT = 0, CANVAS_DESC = 1, CANVAS_A11Y = 2, CANVAS_HOOK = 3, SHELF = 4, IMAGE = 5, VIDEO = 6, QUOTE = 7;
@@ -101,6 +105,23 @@ public class MainActivity extends Activity {
     static String body(int post) { return (String) POSTS[post][0]; }
     static Boolean expected(int post) { return POSTS[post][1] == null ? null : (Boolean) POSTS[post][1] && !revealed.contains(post); }
 
+    // A post the title-in-context model covers is not covered while the model is asked: it may show uncovered until its
+    // first cover, never after. The answer is remembered per text window, and the window holds the row's other text (the
+    // author), so each kind of row (row: its author and layout) waits for its own first cover.
+    static final java.util.Set<String> modelCovered = new java.util.TreeSet<>();
+    static Boolean expectedNow(int post, String row, boolean covered) {
+        Boolean e = expected(post);
+        if (POSTS[post].length > 2 && Boolean.TRUE.equals(e)) {
+            if (covered) modelCovered.add(post + " " + row); else if (!modelCovered.contains(post + " " + row)) return null;
+        }
+        return e;
+    }
+
+    static String row(View v) {
+        if (!(v instanceof ViewGroup) || ((ViewGroup) v).getChildCount() < 2 || !(((ViewGroup) v).getChildAt(0) instanceof TextView)) return v.getClass().getSimpleName();
+        return ((TextView) ((ViewGroup) v).getChildAt(0)).getText() + "/" + ((ViewGroup) v).getChildAt(1).getClass().getSimpleName();
+    }
+
     RecyclerView list;
 
     @Override protected void onCreate(Bundle b) {
@@ -113,12 +134,14 @@ public class MainActivity extends Activity {
             return;
         }
         if ("reels".equals(getIntent().getStringExtra("screen"))) { setContentView(Reels.build(this)); return; }
+        if ("captionless".equals(getIntent().getStringExtra("screen"))) { setContentView(Captionless.build(this, getIntent().getBooleanExtra("listed", true))); return; } // rule 10
+        if ("notthis".equals(getIntent().getStringExtra("screen"))) { setContentView(NotThis.build(this)); return; } // rule 11
         if ("watch".equals(getIntent().getStringExtra("screen"))) { setContentView(Watch.build(this)); return; } // a pinned player over a list
         if ("settings".equals(getIntent().getStringExtra("screen"))) { startActivity(new android.content.Intent(this, DemoSettings.class)); finish(); return; }
         list = new FeedList(this);
         list.setLayoutManager(new LinearLayoutManager(this));
         list.setAdapter(new Feed());
-        setContentView(list);
+        setContentView(getIntent().getBooleanExtra("bottomBar", false) ? BottomBar.build(this, list) : list); // X's floating bar: BottomBar.java
         list.getViewTreeObserver().addOnDrawListener(this::check);
         int at = getIntent().getIntExtra("pos", -1); // the test starts at a given row (players: 12 covered, 37 clean)
         if (at >= 0) ((LinearLayoutManager) list.getLayoutManager()).scrollToPositionWithOffset(at, 300);
@@ -130,7 +153,8 @@ public class MainActivity extends Activity {
         super.onPause();
         if (Watch.playerTaps > 0 || Watch.playerShades > 0) Log.i(TAG, "watch: " + Watch.playerTaps + " taps reached the player, " + Watch.playerShades + " shades on it");
         Log.i(TAG, "frame check summary: " + frames + " frames, " + checks + " item checks, " + mismatches + " mismatches, " +
-            blockerLayouts + " blocker layouts, " + blockerDraws + " blocker draws; audio: " + Sound.checks + " checks, " + Sound.mismatches + " mismatches");
+            blockerLayouts + " blocker layouts, " + blockerDraws + " blocker draws; audio: " + Sound.checks + " checks, " + Sound.mismatches + " mismatches; " +
+            "model rows covered: " + modelCovered + "; captionless rows covered: " + Captionless.coveredBinds + " of " + Captionless.binds + " bound");
     }
 
     /** Every drawn frame: each visible post is covered iff expected (the blocker hides covered items from a11y). */
@@ -162,8 +186,9 @@ public class MainActivity extends Activity {
                 else if (covered && watchedOpen) { mismatches++; Log.e(TAG, "MISMATCH frame " + frames + " post " + post + " covered again after Show once"); }
                 continue;
             }
-            if (expected(post) == null) continue; // depends on the catalog update, checked by screenshots instead
-            if (covered != expected(post)) {
+            Boolean want = expectedNow(post, row(v), covered);
+            if (want == null) continue; // depends on the catalog update (checked by screenshots instead) or on a model answer not in yet
+            if (covered != want) {
                 mismatches++;
                 Log.e(TAG, "MISMATCH frame " + frames + " post " + post + " covered=" + covered + " \"" + body(post) + "\"");
             }
@@ -186,7 +211,8 @@ public class MainActivity extends Activity {
         for (View x = v; x != null; x = x.getParent() instanceof View ? (View) x.getParent() : null)
             covered |= covered(x);
         checks++;
-        if (expected(post) != null && covered != expected(post)) {
+        Boolean want = expectedNow(post, where, covered);
+        if (want != null && covered != want) {
             mismatches++;
             Log.e(TAG, "MISMATCH " + where + " frame " + frames + " post " + post + " covered=" + covered + " \"" + body(post) + "\"");
         }

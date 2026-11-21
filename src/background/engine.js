@@ -1,10 +1,11 @@
 // Local inference engine: image titles (SigLIP 2 vision tower vs precomputed title rows), OCR (PP-OCR) and the
-// plot-spoiler text classifier. Runs in a document context: the Firefox event page, or the Chrome offscreen document.
+// plot-spoiler text classifier and the title-in-context model. Runs in a document context: the Firefox event page, or the Chrome offscreen document.
 // Everything is loaded from the extension package; no network access besides refetching page images.
 import { env, AutoTokenizer } from '../../vendor/transformers.js';
 import * as ort from '../../vendor/ort.wasm.bundle.min.mjs'; // the same module instance transformers.js uses
 import { recognize } from './ocr.js';
 import { squashCHW } from './pixels.js';
+import '../shared/context-input.js'; // globalThis.SBContext
 
 const api = globalThis.browser ?? globalThis.chrome;
 const url = (p) => api.runtime.getURL(p);
@@ -189,12 +190,34 @@ async function classify(text) {
   return { spoiler: p >= meta.threshold, p: +p.toFixed(3) };
 }
 
+// ---------- title in context ----------
+// The same family, tokenizer and runtime as the spoiler classifier (tools/train-context.mjs): one logit per (A, B) pair,
+// one pair per run, no padding. The ids are assembled by SBContext.pairIds, as tools/context-train/classify.mjs does.
+const contextModel = once(async () => {
+  const [meta, tok, sess] = await Promise.all([getJSON('models/context/meta.json'), AutoTokenizer.from_pretrained('context'),
+    ort.InferenceSession.create(url('models/context/model_int8.onnx'), { executionProviders: ['wasm'] })]);
+  const [cls, sep] = tok.encode('');
+  return { meta, tok, sess, cls, sep };
+});
+// a: segment A, b: segment B, o: 1 when the name mostly means something else -> { p, yes }
+async function context(a, b, o) {
+  const { meta, tok, sess, cls, sep } = await contextModel();
+  const enc = (t) => tok.encode(String(t ?? ''), { add_special_tokens: false });
+  const { ids, types } = globalThis.SBContext.pairIds(enc(a), enc(b), cls, sep, meta.maxLength);
+  const t = (v) => new ort.Tensor('int64', BigInt64Array.from(v, BigInt), [1, v.length]);
+  const z = (await sess.run({ input_ids: t(ids), attention_mask: t(ids.map(() => 1)), token_type_ids: t(types) })).logit.data[0];
+  const p = 1 / (1 + Math.exp(-z));
+  // shortcut: meta.json may not carry thresholdOther yet; then the one threshold serves both kinds of name
+  return { p: +p.toFixed(4), yes: p >= (o ? meta.thresholdOther ?? meta.threshold : meta.threshold) };
+}
+
 export function handle(msg) {
   const p = msg.prio === 0 ? 0 : 2;
   switch (msg.type) {
     case 'img.check': return enqueue(p, null, { key: msg.key, src: msg.url }).then((hits) => ({ hits }));
     case 'img.ocr': return enqueue(p + 1, () => ocr(msg.key, msg.url)).then((text) => ({ text }));
     case 'text.classify': return enqueue(-1, () => classify(msg.text));
+    case 'text.context': return enqueue(-1, () => context(msg.a, msg.b, msg.o));
   }
   return null;
 }

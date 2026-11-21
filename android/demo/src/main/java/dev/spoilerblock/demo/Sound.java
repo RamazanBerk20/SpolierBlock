@@ -54,28 +54,40 @@ final class Sound {
         return f;
     }
 
-    /** Every drawn frame: muted iff an attached item with a video surface is covered. */
-    static void check(RecyclerView rv, String where) {
-        boolean want = false;
-        for (int i = 0; i < rv.getChildCount() && !want; i++) {
-            View v = rv.getChildAt(i);
-            want = hasVideo(v) && MainActivity.covered(v);
+    /**
+     * Every drawn frame: muted iff an attached item with a video surface is covered and no uncovered player is at least
+     * half on screen (a list item's or the given pinned one: the video the user chose plays aloud next to a covered post).
+     */
+    static void check(RecyclerView rv, String where) { check(rv, where, null); }
+
+    static void check(RecyclerView rv, String where, View pinned) {
+        boolean covered = false, open = pinned != null && halfShown(video(pinned));
+        for (int i = 0; i < rv.getChildCount(); i++) {
+            View v = rv.getChildAt(i), t = video(v);
+            if (t == null) continue;
+            if (MainActivity.covered(v)) covered = true; else open |= halfShown(t);
         }
+        boolean want = covered && !open;
         Boolean got = muted();
         if (got == null) return; // not patched
         checks++;
         if (got != want) {
             mismatches++;
-            Log.e(MainActivity.TAG, "AUDIO MISMATCH " + where + " frame " + MainActivity.frames + " muted=" + got + " covered video=" + want);
+            Log.e(MainActivity.TAG, "AUDIO MISMATCH " + where + " frame " + MainActivity.frames + " muted=" + got + " covered video=" + covered + " uncovered video=" + open);
         }
         if (got != last) Log.i(MainActivity.TAG, "AUDIO " + where + (got ? " muted" : " audible"));
         last = got;
     }
 
-    private static boolean hasVideo(View v) {
-        if (v instanceof android.view.TextureView) return true;
-        if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) if (hasVideo(((ViewGroup) v).getChildAt(i))) return true;
-        return false;
+    private static boolean halfShown(View t) {
+        android.graphics.Rect r = new android.graphics.Rect();
+        return t != null && t.isShown() && t.getGlobalVisibleRect(r) && (long) r.width() * r.height() * 2 >= (long) t.getWidth() * t.getHeight();
+    }
+
+    private static View video(View v) {
+        if (v instanceof android.view.TextureView) return v;
+        if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) { View t = video(((ViewGroup) v).getChildAt(i)); if (t != null) return t; }
+        return null;
     }
 
     static Boolean muted() {

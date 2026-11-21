@@ -48,6 +48,8 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     volatile Matcher matcher;
     volatile Config.Works works; // the config seen through the matcher's work list
     boolean enabled, scanImages, blockUnlisted, unknownImages;
+    boolean captionless; // rule 10 is on for this app's site
+    final String site; // the site this app answers to in settings.captionlessVideos, or null
     int generation; // bumped when the config, the index or a verdict changes: every item is re-evaluated
     // "Show once": posts shown this session (Scanner.shownKey), the last 500
     final Set<String> revealed = Collections.newSetFromMap(new java.util.LinkedHashMap<String, Boolean>() {
@@ -68,6 +70,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     private SpoilerBlock(Application app) {
         this.app = app;
         prefs = app.getSharedPreferences("spoilerblock", 0);
+        site = Config.site(app.getPackageName());
         store = Store.get(app);
         images = new Images(this);
         readSettings(store.get());
@@ -113,6 +116,7 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         scanImages = c.bool("scanImages");
         blockUnlisted = c.bool("blockUnlisted");
         unknownImages = c.bool("unknownImages");
+        captionless = c.captionless(site);
         Matcher m = matcher;
         if (m != null) works = new Config.Works(c, m.ids);
     }
@@ -151,6 +155,31 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
             throw new IllegalStateException(e);
         }
         Log.i(TAG, "marked seen: " + names);
+    }
+
+    /**
+     * Rule 11, "Not this": for every work of the cover's groups, the item's most specific key goes to learned.not,
+     * in one write. The config change re-judges every item (and every app through the companion).
+     */
+    void notThis(int[] groups, String key) {
+        Matcher m = matcher;
+        if (m == null || key == null) return;
+        Config c = store.get();
+        JSONObject not = new JSONObject();
+        try {
+            for (int g : groups) for (int w : m.groupWorks(g)) {
+                String id = m.ids[w];
+                JSONArray cur = not.has(id) ? not.getJSONArray(id) : new JSONArray(c.notKeys(id).toString());
+                if (!Config.without(cur, key).toString().equals(cur.toString())) continue; // already there
+                not.put(id, cur.put(key));
+            }
+            if (not.length() > 0) store.patch(new JSONObject().put("learned", new JSONObject().put("not", not)));
+        } catch (org.json.JSONException e) {
+            throw new IllegalStateException(e);
+        }
+        works = new Config.Works(store.get(), m.ids); // before the next frame judges again
+        generation++;
+        Log.i(TAG, "not this: " + not.length() + " works on " + key);
     }
 
     /** Fills the titles of entries that have none (migrated from 0.1, which stored only ids), once the index is known. */
@@ -229,7 +258,11 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         return matcher;
     }
 
-    static String customSig(Config c) { return c.custom.length() == 0 ? "" : c.custom.toString(); }
+    /** What the index is built from besides the catalog: the custom works and learned.names ("" = neither). */
+    static String customSig(Config c) {
+        JSONObject n = c.learned.optJSONObject("names");
+        return c.custom.length() == 0 && n.length() == 0 ? "" : c.custom + (n.length() == 0 ? "" : "\u0000" + n);
+    }
 
     private Thread rebuilder;
 
@@ -257,28 +290,49 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
             String sig = customSig(c);
             long t0 = SystemClock.uptimeMillis();
             CatalogUpdate.Bundle b = bundle();
-            List<Catalog.Work> extra = new ArrayList<>(added);
-            extra.addAll(customWorks(c, new Catalog.Ambiguity(b.words)));
             Matcher m;
-            if (extra.isEmpty()) {
+            boolean rebuilt = !added.isEmpty() || !sig.isEmpty();
+            if (!rebuilt) {
                 indexFile().delete();
                 m = new Matcher(asset("spoilerblock/index.bin"), new String(asset("spoilerblock/index.json"), StandardCharsets.UTF_8));
             } else {
-                Catalog.Built built = Catalog.buildIndex(Catalog.merge(b.catalog, extra), new Catalog.Words(b.words));
+                Catalog.Built built = Catalog.buildIndex(indexWorks(b.catalog, added, c, b.words), new Catalog.Words(b.words));
                 CatalogUpdate.write(indexFile(), new CatalogUpdate.Stored(b.builtAt, built.bin, built.json, added));
                 m = new Matcher(built.bin, built.json);
             }
             prefs.edit().putString("indexCustom", sig).apply();
             indexCustom = sig;
-            boolean rebuilt = !extra.isEmpty();
             install(m, rebuilt);
-            Log.i(TAG, "index rebuilt with " + c.custom.length() + " hand-added works in " + (SystemClock.uptimeMillis() - t0) + " ms");
+            Log.i(TAG, "index rebuilt with " + c.custom.length() + " hand-added works and " + c.learned.optJSONObject("names").length() + " works' other names in " + (SystemClock.uptimeMillis() - t0) + " ms");
             if (customSig(store.get()).equals(sig)) return;
         }
     }
 
     /** src/background/catalog-update.js CUSTOM_POP: the user's own titles are not treated as obscure (forced into Title Case). */
     static final int CUSTOM_POP = 1000;
+
+    /**
+     * The works the index is built from (src/background/catalog-update.js rebuild): the bundled catalog, the catalog
+     * update's works and the hand-added ones, merged; then learned.names appended, as given, to the end of each work's
+     * aliases (withNames), catalog or custom. The bundled list is not changed.
+     */
+    static List<Catalog.Work> indexWorks(List<Catalog.Work> bundled, List<Catalog.Work> added, Config c, String words) {
+        List<Catalog.Work> extra = new ArrayList<>(added);
+        extra.addAll(customWorks(c, new Catalog.Ambiguity(words)));
+        List<Catalog.Work> all = Catalog.merge(bundled, extra);
+        JSONObject names = c.learned.optJSONObject("names");
+        if (names.length() > 0) for (int i = 0; i < all.size(); i++) {
+            JSONArray n = names.optJSONArray(all.get(i).id);
+            if (n == null) continue;
+            Catalog.Work w = all.get(i), x = new Catalog.Work(); // a copy: the stored catalog-update works are reused
+            x.id = w.id; x.title = w.title; x.type = w.type; x.year = w.year; x.characters = w.characters; x.other = w.other;
+            x.series = w.series; x.pop = w.pop; x.ambiguous = w.ambiguous;
+            x.aliases = java.util.Arrays.copyOf(w.aliases, w.aliases.length + n.length());
+            for (int k = 0; k < n.length(); k++) x.aliases[w.aliases.length + k] = n.optString(k);
+            all.set(i, x);
+        }
+        return all;
+    }
 
     /** Hand-added works in the catalog's schema, as the extension's customWorks() makes them. */
     static List<Catalog.Work> customWorks(Config c, Catalog.Ambiguity amb) {
@@ -503,8 +557,16 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
     String textCover(Matcher m, String text) throws Exception {
         Config.Works v = new Config.Works(store.get(), m.ids);
         boolean unlisted = store.get().bool("blockUnlisted");
-        java.util.List<Integer> all = new ArrayList<>(), spoilers = new ArrayList<>();
-        for (int g : m.evaluate(text, v.seen)) {
+        java.util.List<Integer> all = new ArrayList<>(), spoilers = new ArrayList<>(), groups = new ArrayList<>();
+        java.util.List<int[]> unsure = new ArrayList<>();
+        for (int g : m.evaluate(text, v.seen, unsure)) groups.add(g);
+        if (Looper.myLooper() == Looper.getMainLooper()) groups.addAll(contextGroups(m, text, unsure, true)); // answers already in
+        else for (int[] u : unsure) { // a notification is not covered later: wait for the model (a timeout is a no)
+            String a = ContextClassifier.windowText(text, u[1], u[2]), b = ContextClassifier.workText(m, u[0]);
+            java.util.concurrent.Future<Boolean> f = classifierThread().submit(() -> contextNow(a, b, u[3] == 1));
+            try { if (f.get(10, java.util.concurrent.TimeUnit.SECONDS)) groups.add(u[0]); } catch (java.util.concurrent.TimeoutException ignored) { }
+        }
+        for (int g : groups) {
             int k = Config.group(m.groupWorks(g), v, unlisted);
             if (k == Config.STYLE_ALL) all.add(g); else if (k == Config.STYLE_SPOILERS) spoilers.add(g);
         }
@@ -570,6 +632,68 @@ public final class SpoilerBlock implements Application.ActivityLifecycleCallback
         } catch (Throwable t) { // e.g. no ONNX Runtime library for this ABI: every match stays covered, as with style "all"
             classifierFailed = true;
             Log.e(TAG, "spoiler model unavailable, style \"spoilers\" covers every match", t);
+        }
+    }
+
+    // ---------- names the matcher is unsure about: the title-in-context model ----------
+
+    private final Map<String, Boolean> contextAnswers = new java.util.LinkedHashMap<String, Boolean>(64, 0.75f, true) { // main thread
+        @Override protected boolean removeEldestEntry(Map.Entry<String, Boolean> e) { return size() > 2000; }
+    };
+    private final Set<String> asking = new HashSet<>(); // main thread
+    private ContextClassifier context; // worker thread only: loaded on the first unsure name
+    private boolean contextFailed; // worker thread only
+
+    /**
+     * Main thread: the groups of the unsure names u ({g, s, e, o}, offsets in own, the post's own text) the model said yes
+     * to. A name not answered yet is asked on the worker thread and counts as a no until its answer comes in (the item
+     * is then judged again); with ask false, only answers already in are used.
+     */
+    List<Integer> contextGroups(Matcher m, String own, List<int[]> unsure, boolean ask) {
+        List<Integer> yes = new ArrayList<>();
+        for (int[] u : unsure) {
+            String a = ContextClassifier.windowText(own, u[1], u[2]), b = ContextClassifier.workText(m, u[0]), key = a + '\u0000' + b;
+            Boolean v = contextAnswers.get(key);
+            if (Boolean.TRUE.equals(v)) yes.add(u[0]);
+            else if (v == null && ask && asking.add(key)) classifierThread().execute(() -> {
+                boolean r = contextNow(a, b, u[3] == 1);
+                main.post(() -> {
+                    asking.remove(key);
+                    contextAnswers.put(key, r);
+                    if (r) verdictsChanged(); // a no changes nothing
+                });
+            });
+        }
+        return yes;
+    }
+
+    /** Worker thread: the model's answer, false on any failure (these names were never covered before). */
+    private boolean contextNow(String a, String b, boolean other) {
+        try {
+            if (context == null && !contextFailed) loadContext();
+            if (context == null) return false;
+            long t0 = SystemClock.uptimeMillis();
+            double p = context.prob(a, b);
+            boolean yes = p >= (other ? context.thresholdOther : context.threshold);
+            if (Log.isLoggable(TAG, Log.DEBUG)) Log.d(TAG, "context " + (yes ? "yes" : "no") + String.format(java.util.Locale.US, " p=%.3f", p) +
+                " in " + (SystemClock.uptimeMillis() - t0) + " ms: " + a + " | " + b);
+            return yes;
+        } catch (Throwable t) {
+            Log.w(TAG, "context model failed, the name is not covered", t);
+            return false;
+        }
+    }
+
+    private void loadContext() {
+        long t0 = SystemClock.uptimeMillis(), native0 = android.os.Debug.getNativeHeapAllocatedSize();
+        try {
+            context = new ContextClassifier(directAsset("spoilerblock/context/model_int8.onnx"), new String(asset("spoilerblock/context/tokenizer.json"), StandardCharsets.UTF_8),
+                new String(asset("spoilerblock/context/meta.json"), StandardCharsets.UTF_8));
+            Log.i(TAG, "context model loaded in " + (SystemClock.uptimeMillis() - t0) + " ms, native heap +" +
+                (android.os.Debug.getNativeHeapAllocatedSize() - native0) / (1 << 20) + " MB");
+        } catch (Throwable t) {
+            contextFailed = true;
+            Log.e(TAG, "context model unavailable, unsure names are not covered", t);
         }
     }
 

@@ -92,7 +92,8 @@ const PHONE = [
   ['I Let an AI Teach Another AI for 5 Generations' + M + 'AI COPYING AI 5 GENERATIONS LATER\nGEN 0\nGEN 5', []],
   ['Süzülerek\nGazapizm35' + M + 'ARGO', []],
   ["What if we didn't allow bugs?" + M + '6\'4" 6\'2" 6\'0" 5\'10" 5\'8" 5\'6"\nBugs are\nILLEGAL', []],
-  ['[World Record] NEW SKIP! Speedrun Resident evil 4 Remake any% Standa' + M + 'NEW SKIP\nWR\nFASTER THAN THE NG+\nANY STANDARD NO INTRO\n01:22:38', []],
+  // a lowercase "evil" with a game word near it: Resident Evil 4 (rule for lowercase typing, after 0.2.3)
+  ['[World Record] NEW SKIP! Speedrun Resident evil 4 Remake any% Standa' + M + 'NEW SKIP\nWR\nFASTER THAN THE NG+\nANY STANDARD NO INTRO\n01:22:38', ['Resident Evil 4']],
   ['[World Record] NEW SKIP! Speedrun Resident evil 4 Remake any% Standa' + M + 'NEW SKIP\nWR\nFASTER THAN THE NG+\nANY STANDARD NO INTRO\n01:22:38', [], 'Resident Evil'],
   ["If you are a fan of Assassin's Creed, and want to see the games and future conten\nThe Hidden One", [], "Assassin's Creed"],
   ['25 - Resident Evil Village Soundtrack - Yearning For Dark Shadows' + M + 'VILLAGE\nRESIDENT EVIL', [], 'Resident Evil'],
@@ -185,7 +186,7 @@ test('plain sentences name the best-known works and franchises (top 300 names of
   }
   // test/fixtures/top-names.json: the 300 titles of two words or more with the most sitelinks, counting the works of
   // the catalog series of that name (2026-11-19). Each, in four plain sentences, must find a work of that title.
-  // Known misses (88 of 1200; 367 before names took their franchise's fame), and why:
+  // Known misses (46 of 1200; 367 before names took their franchise's fame, 76 before Title-Case names of 3+ words), and why:
   const known = new Set([
     // a catalog entry for a list or a series item: nobody writes the name; the short name matches instead
     'Foundation series', 'Oz book series', 'Platonic dialogue', 'Spider-Man in film', 'Mortal Engines Quartet', 'The Inheritance Cycle',
@@ -204,10 +205,119 @@ test('plain sentences name the best-known works and franchises (top 300 names of
     const ok = m.evaluate(text).some((g) => built.meta.groups[g].slice(1).some((w) => built.meta.titles[w].toLowerCase() === n.toLowerCase()));
     if (!ok) { misses++; assert.ok(known.has(n), `no match: ${text}`); }
   }
-  assert.ok(misses <= 88, `${misses} misses`);
+  assert.ok(misses <= 46, `${misses} misses`);
 });
 
 test('rows the Android Scanner passed on YouTube search results (0.2.2 logs): labels as reviewed',{ skip: !has && 'no data/catalog.json' }, () => {
   const rows = fs.readFileSync(new URL('./fixtures/yt-rows.jsonl', import.meta.url), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   for (const r of rows) assert.deepEqual(m.evaluate(r.text).map((g) => built.meta.groups[g][0]), r.expect, r.text.slice(0, 80));
+});
+
+test('real X and Reddit pages: franchise inside a longer name, lowercase typing, handles, "No spoilers"', { skip: !has && 'no data/catalog.json' }, () => {
+  const labels = (t) => m.evaluate(t).map((g) => built.meta.groups[g][0]);
+  for (const [text, label] of [
+    // a weak longer name holding a strong franchise name is vouched for by it
+    ["I used to stab people on Assassin's Creed Brotherhood", "Assassin's Creed: Brotherhood"],
+    ['co działo się po premierze Assassin’s Creed Unity.', "Assassin's Creed Unity"],
+    ["¡Assassin's Creed: Odyssey está disponible", "Assassin's Creed Odyssey"],
+    ['time to enter feudal Japan with Assassin’s Creed Shadows! Join me', "Assassin's Creed Shadows"],
+    // lowercase typing: a media word near it, "is the best game", a consumption verb before it
+    ['day 3 of playing resident evil 4', 'Resident Evil 4'], ['Replaying all the resident evil games', 'Resident Evil'],
+    ['i finally finished breaking bad and the ending destroyed me', 'Breaking Bad'], ['just finished the last of us part 2', 'The Last of Us Part II'],
+    ['elden ring is the best game ever', 'Elden Ring'], ['arcane season 2 was great', 'Arcane'], ['playing minecraft', 'Minecraft'],
+  ]) assert.deepEqual(labels(text), [label], text);
+  for (const text of ['the boys were watching tv all night', 'stranger things have happened in this game', 'Is this a resident evil oc',
+    'bro assassin\'s creed had that', // no media word: an accepted miss
+    // handles and names glued by "_" are not text
+    'u/Altruistic_Mud_8425', 'Posted by @Mud_Lover99 about movies', 'u/Wonder-Lad-2Mad movie review',
+    'Altruistic_Mud_8425 movie', 'Jane Doe@Mud_Lover·3s that movie',
+    // a determiner takes nothing from the media word right after it
+    'No spoilers please!', '8 No Spoilers', 'No spoilers, but the ending was great.']) assert.deepEqual(labels(text), [], text);
+  assert.deepEqual(labels('Watching Mud tonight, great movie'), ['Mud']); // the same name outside a handle still counts
+  // a media word inside a handle is no evidence either (Reddit's user-flair line); a real one still is
+  assert.deepEqual(labels('u/Comic_Book_Reader r/movies Veteran • 20 hr. ago'), []);
+  assert.deepEqual(labels('Watched the movie Veteran last night'), ['Veteran']);
+  assert.deepEqual(labels('Watched the film No last night'), ['No']); // a media word before it still counts
+});
+
+test('acronyms in capitals, a lowercase entry of a series, names of short words', { skip: !has && 'no data/catalog.json' }, () => {
+  const labels = (t) => m.evaluate(t).map((g) => built.meta.groups[g][0]);
+  for (const [text, label] of [
+    // an everyday word written in capitals as an alias ("GTA", "GOT"): an acronym, with a media word near it
+    ['GTA is the best game series', 'Grand Theft Auto'], ['Playing GTA all night', 'Grand Theft Auto'],
+    ['Ee oynayanlar nasıl buldunuz GTA’yı', 'Grand Theft Auto'], ['I watched GOT last night', 'Game of Thrones'],
+    // a lowercase everyday name of 3+ words holding a name of the same catalog series
+    ['dune part two was a great movie', 'Dune: Part Two'], ['just finished the last of us part 2', 'The Last of Us Part II'],
+    // a name of short words takes a media word right next to it, or its year
+    ['the film Q & A', 'Q & A'], ['Q&A (1990)', 'Q & A'],
+  ]) assert.deepEqual(labels(text), [label], text);
+  for (const text of ['I GOT THE GAME YESTERDAY', 'got the game yesterday', 'I got it', 'GTA', 'gta is the best game series',
+    'the whole nine yards was a great movie', 'smiley face',
+    'Want to promote your film via community AMA/Q&A? Message the mods to set one up!']) assert.deepEqual(labels(text), [], text);
+  // an acronym names what its work's title names: "GTA" is the franchise group of "Grand Theft Auto"
+  const gta5 = built.meta.titles.indexOf('Grand Theft Auto V');
+  assert.ok(m.evaluate('GTA is the best game series').some((g) => built.meta.groups[g].includes(gta5, 1)));
+  assert.deepEqual(m.evaluate('GTA is the best game series'), m.evaluate('Grand Theft Auto is the best game series'));
+});
+
+test('Title-Case names, subtitles, songs, companies, sport, pairs of names, Turkish suffixes, the next sentence', { skip: !has && 'no data/catalog.json' }, () => {
+  const labels = (t) => m.evaluate(t).map((g) => built.meta.groups[g][0]);
+  for (const [text, label] of [
+    // a Title-Case name of 3+ words, or of 2 before a possessive or a copula
+    ["Horizon Zero Dawn's first Thunderjaw fight made me yell", 'Horizon Zero Dawn'], ['Your Lie in April made me cry on the train', 'Your Lie in April'],
+    ['Fall Guys is silly joy', 'Fall Guys'], ["Tears of the Kingdom's Ultrahand lets people build", 'The Legend of Zelda: Tears of the Kingdom'],
+    ['Love, Death & Robots is the best show in years', 'Love, Death & Robots'], ['Gone with the Wind is great', 'Gone with the Wind'],
+    // a possessive reaches one word further; a sentence that says what it is beats the line's other name
+    ["Succession's final season was bleak", 'Succession'], ['Coco is a gorgeous film about family. "Remember Me" at the end.', 'Coco'],
+    // a Turkish suffix marks a proper name; Portuguese consumption verbs
+    ["Succession'ı baştan sona bitirdim", 'Succession'], ['Terminei Succession e não consigo parar', 'Succession'], ['Zerei Control no PS5', 'Control'],
+    // a name that is no everyday word, starting its sentence, takes a media word of the next one
+    ['Deltarune chapter 2 had me grinning. Toby Fox gave us the best boss fight of the year.', 'Deltarune'],
+    // a subtitle names its work, with a media word near it
+    ['playing Napoleonic Wars this week', 'Cossacks II: Napoleonic Wars'],
+  ]) assert.ok(labels(text).includes(label), `${text} -> ${labels(text)}`);
+  for (const text of [
+    // inside a longer name or a list of names; a subtitle alone
+    'The Royal Air Force\'s flights', 'the Department of Parks and Recreation is open', 'the Old and New Worlds',
+    'Then he wrote On the Origin of Species.', 'Chinese people in New York City ran laundries.',
+    // songs in quotes next to music words; music words make weak names need a media word right next to them
+    'If you only know "Hound Dog" and "Jailhouse Rock," go listen to his gospel albums.', 'She sings "Respect" like she owns it.',
+    'Dylan made the best breakup album ever. "Simple Twist of Fate" is perfect.', 'a punk gig in a converted garage in Bushwick, a scene',
+    // a company, a sport's season, a pair of names in capitals, a compound with "scene"
+    'Roblox stock jumped after earnings.', 'Le jeu collectif au Groupama Stadium est enfin reparti. Belle saison en vue pour Lyon.',
+    'KHONTKAR & JOKER YAYINI GENİŞ ÖZET', 'Music scene in Lagos is incredible right now.',
+    // an acronym nobody writes for its work
+    'BIOS update failed again', 'PRO tips for beginners',
+  ]) assert.deepEqual(labels(text), [], text);
+});
+
+test('unsure names on the real catalog (asked to the title-in-context model)', { skip: !has && 'no data/catalog.json' }, () => {
+  const unsure = (text, seen = new Set()) => m.unsure(text, (g) => built.meta.groups[g].slice(1).every((w) => seen.has(w)))
+    .map((x) => [built.meta.groups[x.g][0], text.slice(x.s, x.e)]);
+  const labelsOf = (text) => m.evaluate(text).map((g) => built.meta.groups[g][0]);
+  assert.deepEqual(unsure('heat still has the best shootout ever put on screen'), [['Heat', 'heat']]);
+  assert.deepEqual(unsure('lost was peak tv until the last two seasons'), [['Lost', 'lost']]);
+  // "lost" is no top-1000 word and Lost is popular: asked, and the model says no
+  assert.deepEqual(unsure('i lost my keys again'), [['Lost', 'lost']]);
+  assert.ok(!unsure('it was dark inside').some(([, w]) => w === 'it'));
+  assert.deepEqual([...labelsOf('Split Is A Masterpiece'), ...unsure('Split Is A Masterpiece').map(([l]) => l)], ['Split']);
+  assert.deepEqual(unsure('u/Altruistic_Mud_8425'), []);
+  // a seen group is not asked
+  const lost = m.unsure('lost was peak tv')[0].g;
+  assert.deepEqual(unsure('lost was peak tv', new Set(built.meta.groups[lost].slice(1))), []);
+  // the names inside an accepted name are not asked ("Dune" in "Dune: Part Two")
+  assert.deepEqual(labelsOf('Dune: Part Two had the best sound design'), ['Dune: Part Two']);
+  assert.deepEqual(unsure('Dune: Part Two had the best sound design'), []);
+  // ordinary everyday words naming a less popular work are not asked
+  for (const t of ['the species of animals in the forest', 'it was bad near the airport, the police said']) assert.deepEqual(unsure(t), [], t);
+});
+
+test('unsure names on the real catalog: other flag, songs, non-ASCII posts', { skip: !has && 'no data/catalog.json' }, () => {
+  const full = (text) => m.unsure(text).map((x) => [built.meta.groups[x.g][0], text.slice(x.s, x.e), x.o]);
+  assert.deepEqual(full('Siberia is cold this year'), [['Siberia', 'Siberia', 1]]);
+  assert.deepEqual(full('She sings "Respect" like she owns it.'), []);
+  assert.deepEqual(full('Joker ft. Defkhan - Son Kale | official video'), []);
+  assert.deepEqual(full('heat dalgası çok kötü'), []); // Turkish "heat wave" typed in lowercase
+  assert.deepEqual(full('heat bom demais, ótimo filme'), []);
+  assert.deepEqual(full('road trip çok güzeldi'), []); // no English function word: not asked (the model is English-only)
 });

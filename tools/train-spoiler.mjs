@@ -8,18 +8,21 @@
 //    with titles/characters from the catalog
 //  - tools/spoiler-train/extra.mjs: hand-written implied spoilers, media talk and look-alike non-spoilers (death and
 //    betrayal words about real life, players and viewers; premises; production and fan talk)
+//  - tools/spoiler-train/gaps.mjs: hand-written implied spoilers without the obvious words, spoilers and look-alikes
+//    in Turkish, Spanish, Portuguese, German and French, and English look-alikes (video titles, real deaths, guesses)
 //  - English Wikipedia articles of the 300 most popular films, series, games and anime (CC BY-SA 4.0): late plot
 //    sentences as spoilers, the premise and production/reception sentences as non-spoilers (build/spoiler-data/wiki/)
 //  - bobotran/spoiler-matching, filtering/handlabeled (CC BY-SA 3.0, Reddit episode-discussion comments hand-labelled
 //    "discusses the episode's events" vs "irrelevant"), downloaded into build/spoiler-data/ at train time
-// Validation: patterns are split BY PATTERN (a validation pattern's fills are never seen in training), the other
+// Validation: test/fixtures/spoiler-val.jsonl (hand-written posts, validation only), and patterns are split BY PATTERN (a validation pattern's fills are never seen in training), the other
 // sources by item. The threshold is chosen on validation only.
-// usage: PYTHON=<python with torch, transformers, onnx, onnxruntime> node tools/train-spoiler.mjs [outDir=models/spoiler]
-// (about 9 min on 6 CPU cores; the shipped model was trained with torch 2.15 CPU, transformers 5.23, onnx 1.23, onnxruntime 1.32)
+// usage: [SB_EPOCHS=4] PYTHON=<python with torch, transformers, onnx, onnxruntime> node tools/train-spoiler.mjs [outDir=models/spoiler]
+// (about 18 min on 6 CPU cores with 4 epochs; the shipped model was trained with torch 2.15 CPU, transformers 5.23, onnx 1.23, onnxruntime 1.32)
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { IMPLIED, NEGATIVE, PLAIN_NEGATIVE } from './spoiler-train/patterns.mjs';
 import { IMPLIED2, NEGATIVE2, TRICKY2 } from './spoiler-train/extra.mjs';
+import { IMPLIED3, FOREIGN_POS, TRICKY3, FOREIGN_NEG, FOREIGN_PLAIN, EVERYDAY3, AMBIG_WORDS } from './spoiler-train/gaps.mjs';
 const out = process.argv[2] ?? 'models/spoiler';
 
 // deterministic RNG so the build is reproducible
@@ -117,9 +120,23 @@ for (const w of wikiWorks.filter((x) => x.enwiki)) {
     } else if (NOT_PLOT.test(head) && talk > 0) { add(body, 0, Math.min(2, talk)); talk -= 2; }
   }
 }
+// added after the Wikipedia loop so the earlier train/val splits stay as they were
+addPatterns(IMPLIED3, 1, 4);
+addPatterns(FOREIGN_POS, 1, 4);
+addPatterns(TRICKY3, 0, 4);
+addPatterns(FOREIGN_NEG, 0, 4);
+addPatterns(FOREIGN_PLAIN, 0, 4);
+addPatterns(EVERYDAY3, 0, 4);
+addPatterns(AMBIG_WORDS, 0, 6);
+// test/fixtures/spoiler-val.jsonl: hand-written posts, never trained on; used with the held-out patterns to choose
+// the threshold, and to compare runs (so its figures are tuned-on)
+for (const l of fs.readFileSync('test/fixtures/spoiler-val.jsonl', 'utf8').split('\n').filter((x) => x.trim())) {
+  const r = JSON.parse(l);
+  items.push({ text: r.text, y: r.spoiler ? 1 : 0, split: 'val', src: 'valset' });
+}
 const count = (f) => items.filter(f).length;
 console.log(`items: ${items.length} (train ${count((x) => x.split === 'train')}, val ${count((x) => x.split === 'val')}); ` +
-  `hand ${count((x) => x.src === 'hand')}, pattern ${count((x) => x.src === 'pattern')}, reddit ${count((x) => x.src === 'reddit')}, wiki ${count((x) => x.src === 'wiki')}; positives ${count((x) => x.y)}`);
+  `hand ${count((x) => x.src === 'hand')}, pattern ${count((x) => x.src === 'pattern')}, reddit ${count((x) => x.src === 'reddit')}, wiki ${count((x) => x.src === 'wiki')}, valset ${count((x) => x.src === 'valset')}; positives ${count((x) => x.y)}`);
 fs.mkdirSync('build', { recursive: true });
 fs.writeFileSync('build/spoiler-train-items.jsonl', items.map((x) => JSON.stringify(x)).join('\n'));
-execFileSync(process.env.PYTHON ?? 'python3', ['-I', 'tools/spoiler-train/finetune.py', 'build/spoiler-train-items.jsonl', out], { stdio: 'inherit' });
+execFileSync(process.env.PYTHON ?? 'python3', ['-I', 'tools/spoiler-train/finetune.py', 'build/spoiler-train-items.jsonl', out, process.env.SB_EPOCHS ?? '4'], { stdio: 'inherit' });

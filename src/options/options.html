@@ -22,6 +22,7 @@
       <nav aria-label="Sections">
         <a href="#library">Library</a>
         <a href="#custom">Add by hand</a>
+        <a href="#learned">Corrections</a>
         <a href="#blocking">Blocking</a>
         <a href="#data">Data</a>
         <a href="#about">About</a>
@@ -90,6 +91,25 @@
         <ul id="custom-list" class="lib" aria-label="Works added by hand"></ul>
       </section>
 
+      <section id="learned" aria-labelledby="h-learned">
+        <div class="head">
+          <h2 id="h-learned">Corrections</h2>
+          <p class="soft">What your reports taught SpolierBlock: "Not this" on a cover and names you added. It stays on this device.</p>
+        </div>
+        <div class="sites">
+          <h3>Not this</h3>
+          <p class="soft">Where a name does not mean the work. Posts from that channel, account or site are not covered for it.</p>
+          <ul id="not-list" class="lib" aria-label="Not this"></ul>
+          <p id="not-empty" class="soft">Nothing yet. Use "Not this" on a wrong cover.</p>
+        </div>
+        <div class="sites">
+          <h3>Other names</h3>
+          <p class="soft">Extra names a work is matched by. Add them from a work's row in the library or the search, or from the toolbar button with text selected on a page.</p>
+          <ul id="names-list" class="lib" aria-label="Works with other names"></ul>
+          <p id="names-empty" class="soft">No names added yet.</p>
+        </div>
+      </section>
+
       <section id="blocking" aria-labelledby="h-blocking">
         <div class="head">
           <h2 id="h-blocking">Blocking</h2>
@@ -124,6 +144,18 @@
           <li><label class="toggle"><span><b>Cover unrecognised film and game images</b><span class="soft">Images that look like a film, show or game but carry no title we can name.</span></span>
             <span class="switch"><input type="checkbox" id="unknownImages" role="switch"><span class="track" aria-hidden="true"></span></span></label></li>
         </ul>
+
+        <div class="sites">
+          <h3>Cover videos with no caption on these sites</h3>
+          <p class="soft">For footage the picture check cannot identify, such as raw gameplay clips. Covers every video post that has no text.</p>
+          <form id="vsite-form" class="inline">
+            <label for="vsite" class="sr">Site where videos with no caption are covered</label>
+            <input type="text" id="vsite" placeholder="x.com" autocomplete="off" spellcheck="false">
+            <button type="submit">Add site</button>
+            <span id="vsite-msg" class="soft" aria-live="polite"></span>
+          </form>
+          <ul id="vsites" class="chips" aria-label="Sites where videos with no caption are covered"></ul>
+        </div>
 
         <div class="sites">
           <h3>Paused sites</h3>
@@ -179,7 +211,7 @@
           </div>
           <div class="block">
             <h3>Reset</h3>
-            <p class="soft">Clears your library, works added by hand and settings.</p>
+            <p class="soft">Clears your library, works added by hand, settings and corrections.</p>
             <button type="button" id="reset" class="danger">Reset everything…</button>
           </div>
         </div>

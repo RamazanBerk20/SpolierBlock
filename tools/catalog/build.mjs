@@ -9,6 +9,7 @@ import { TYPES, EXCLUDE, PRIORITY, qid, yearOf, cleanTitle, batches, subclassQue
 import { seriesPrefix } from '../build-index.mjs';
 import { isCommon, setCommonWords } from '../../src/shared/build-index.js';
 import { fetchSeries, resolveSeries } from './series.mjs';
+const { tokenize } = globalThis.SBMatcher; // loaded by build-index.js
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CACHE = join(here, 'cache');
@@ -46,6 +47,22 @@ async function sparql(query) {
 }
 
 const LIMIT = 40000;
+// step 1b. Chosen against the size of index.bin: its table has 131,072 slots for up to 81,920 entries and doubles to
+// 3.1 MB beyond that (with these values the index holds about 81,000).
+const LOW_MIN = { anime: 10, manga: 10, comic: 10, book: 12 };
+const LOCAL_POP = 60, LOCAL_MAX = 1; // step 4: one name in another language, for works with at least LOCAL_POP sitelinks
+// step 1c: media franchises (P31 only) with an anime or manga work (anime 1 when one of them is an anime)
+const franchiseQuery = (min) => `SELECT ?f ?label ?sl (MAX(?a) AS ?anime) WHERE {
+  ?f wdt:P31 wd:Q196600 ; wikibase:sitelinks ?sl . FILTER(?sl >= ${min})
+  ?w wdt:P8345 ?f ; wdt:P31 ?c .
+  VALUES (?c ?a) { (wd:Q63952888 1) (wd:Q20650540 1) (wd:Q1107 1) (wd:Q220898 1) (wd:Q21198342 0) (wd:Q8274 0) }
+  ?f rdfs:label ?label . FILTER(LANG(?label) = "en")
+} GROUP BY ?f ?label ?sl`;
+const membersQuery = (b) => `SELECT ?f ?w WHERE { VALUES ?f { ${b.map((i) => 'wd:' + i).join(' ')} } ?w wdt:P8345 ?f }`;
+// step 3: the work's labels in the languages of the common-word list besides English (posts in those languages use
+// them: "El Chavo del Ocho", "Duna: Parte Dois"), and its other names there
+const LOCAL = ['tr', 'es', 'pt', 'de', 'fr', 'it'];
+const localQuery = (b) => `SELECT ?w ?p ?l WHERE { VALUES ?w { ${b.map((i) => 'wd:' + i).join(' ')} } VALUES ?p { rdfs:label skos:altLabel } ?w ?p ?l . FILTER(LANG(?l) IN (${LOCAL.map((l) => `"${l}"`).join(', ')})) }`;
 const BANDS = [15, 16, 17, 18, 20, 22, 25, 30, 40, 60, 100, 200, 100000].filter((b) => b > MIN);
 BANDS.unshift(MIN);
 
@@ -88,6 +105,7 @@ LIMIT ${LIMIT}`;
 
 // 1. works per type
 const works = new Map(); // qid -> work
+const classSets = {}; // type -> its class lists, as queried
 for (const type of PRIORITY.slice().reverse()) { /* low priority first so higher overwrites */
   const rows = [];
   const sub = new Set();
@@ -97,6 +115,7 @@ for (const type of PRIORITY.slice().reverse()) { /* low priority first so higher
   for (const x of EXCLUDE) sub.delete(x);
   console.log(type, 'subclasses', sub.size);
   const sets = [...TYPES[type].roots.map((r) => [r]), ...(sub.size ? [[...sub]] : [])];
+  classSets[type] = sets;
   for (const cls of sets) await fetchRange(cls, rows);
   const per = new Map();
   for (const r of rows) {
@@ -107,6 +126,37 @@ for (const type of PRIORITY.slice().reverse()) { /* low priority first so higher
   console.log(type, per.size);
   for (const [id, w] of per) works.set(id, w); // overwritten by higher priority later
 }
+
+// 1b. Books, comics, manga and anime have fewer Wikipedia articles than films, shows and games of the same fame ("Circe"
+// has 12 sitelinks, "Piranesi" 10, the comic "Saga" 14, the "Code Geass" anime 14): they take works down to LOW_MIN.
+// Fetched after the main pass and appended to it, so its cached queries and the batches below stay as they were.
+const main = new Set(works.keys());
+for (const type of PRIORITY.filter((t) => t in LOW_MIN && LOW_MIN[t] < MIN).reverse()) {
+  const rows = [];
+  for (const lang of ['en', 'mul']) for (const cls of classSets[type]) await fetchOne(cls, LOW_MIN[type], MIN, rows, lang);
+  let n = 0;
+  for (const r of rows) {
+    const id = qid(r.item.value);
+    if (main.has(id) || works.get(id)?.type === type) continue; // the first label (en) wins, as in step 1
+    works.set(id, { id, title: r.label.value, type, years: [], pop: Number(r.sl.value) });
+    n++;
+  }
+  console.log(type, 'from', LOW_MIN[type], 'sitelinks:', n);
+}
+
+// 1c. Some anime and manga have their Wikipedia articles on the media franchise item, not on the manga or the series
+// ("One-Punch Man": the franchise has 48 sitelinks, the anime 0). Such a franchise stands in for its works, as an anime
+// when it has an anime member, else as a manga. Step 4 drops it when its name is already a catalog name or one of its
+// works in the catalog is of another type (a film or game franchise with a side anime: "Pirates of the Caribbean").
+const standIns = new Map(); // franchise qid -> its member qids
+for (const r of await sparql(franchiseQuery(MIN))) {
+  const id = qid(r.f.value);
+  if (works.has(id)) continue;
+  works.set(id, { id, title: r.label.value, type: r.anime.value === '1' ? 'anime' : 'manga', years: [], pop: Number(r.sl.value) });
+  standIns.set(id, []);
+}
+if (standIns.size) for (const r of await sparql(membersQuery([...standIns.keys()]))) standIns.get(qid(r.f.value))?.push(qid(r.w.value));
+console.log('franchise stand-ins', standIns.size);
 
 // 2. cleanup; what each work is (P31/P136/P7937), to keep only works told as a story in step 4
 const kinds = new Map();
@@ -124,8 +174,9 @@ for (const b of batches(ids)) {
   const rows = await sparql(yearsQuery(b));
   for (const r of rows) { const y = yearOf(r.d.value); if (y) byId.get(qid(r.w.value)).years.push(y); }
 }
-const aliasSets = new Map(), chars = new Map();
+const aliasSets = new Map(), chars = new Map(), locals = new Map();
 const addTo = (m, k, v) => { (m.get(k) ?? m.set(k, []).get(k)).push(v); };
+for (const b of batches(ids)) for (const r of await sparql(localQuery(b))) addTo(locals, qid(r.w.value), [r.l.value, r.p.value.endsWith('altLabel') ? 1 : 0]);
 
 for (const b of batches(ids)) {
   const rows = await sparql(aliasQuery(b));
@@ -144,9 +195,46 @@ for (const b of batches(missing)) {
 
 // 4. assemble: no scripture, reference works, documentaries... (isNarrative)
 const ambiguous = makeAmbiguous(readFileSync(join(here, 'common-words.txt'), 'utf8'));
-const result = list.filter((w) => isNarrative(kinds.get(w.id) ?? []))
+let result = list.filter((w) => isNarrative(kinds.get(w.id) ?? []))
   .map((w) => finalizeWork(w, aliasSets.get(w.id), chars.get(w.id), ambiguous)).sort(compareWorks);
 console.log('told as a story', result.length, 'of', list.length);
+const keyOf = (s) => tokenize(s).toks.join(' ');
+{ // franchise stand-ins (step 1c) whose name the catalog has, or with a work of another type in the catalog, go
+  const byId = new Map(result.map((w) => [w.id, w]));
+  const taken = new Set(result.filter((w) => !standIns.has(w.id)).flatMap((w) => [w.title, ...w.aliases, seriesPrefix(w.title)]).filter(Boolean).map(keyOf));
+  result = result.filter((w) => !standIns.has(w.id) || (!taken.has(keyOf(w.title)) &&
+    standIns.get(w.id).every((m) => !byId.has(m) || byId.get(m).type === 'anime' || byId.get(m).type === 'manga')));
+  console.log('franchise stand-ins kept', result.filter((w) => standIns.has(w.id)).map((w) => w.title).join(', '));
+}
+{ // more names, after the (at most 8) English ones of finalizeWork
+  // the main title of a subtitled title, when no other work carries it as a title, alias or series prefix: "Rogue One"
+  // of "Rogue One: A Star Wars Story" ("Dr. Strangelove or" of "Dr. Strangelove or: How I Learned..." is no name), nor
+  // a character's name or part of one ("Voldemort" of "Voldemort: Origins of the Heir" stays Harry Potter's)
+  const count = new Map(), bump = (k) => count.set(k, (count.get(k) ?? 0) + 1);
+  for (const w of result) for (const k of new Set([w.title, ...w.aliases, seriesPrefix(w.title)].filter(Boolean).map(keyOf))) bump(k);
+  for (const w of result) for (const c of w.characters) for (const k of [keyOf(c), ...keyOf(c).split(' ')]) count.set(k, 2);
+  let mains = 0, localN = 0;
+  for (const w of result) {
+    const p = seriesPrefix(w.title), k = p && keyOf(p);
+    if (k && count.get(k) === 1 && !/ or$/.test(k) && !w.aliases.some((a) => keyOf(a) === k)) { w.aliases.push(p); mains++; }
+    // up to LOCAL_MAX labels in other languages (labels before other names, then the most often given): not a name the
+    // work already has, not a single word (an everyday word of some language, a name: "Yedi" for "Seven", "Fausto" for
+    // "Faust", a stray "SLB." for Super Mario Bros.), not two very frequent words (ambiguous)
+    // (nor one that holds the title, which matches there already: "Avatar – Aufbruch nach Pandora")
+    if (w.pop < LOCAL_POP) continue;
+    const have = new Set([w.title, ...w.aliases].map(keyOf)), tk = ' ' + keyOf(w.title) + ' ', cand = new Map();
+    for (const [l, alt] of locals.get(w.id) ?? []) {
+      const t = l.trim(), k = keyOf(t), n = k.split(' ').length;
+      if (!k || have.has(k) || n > 8 || n === 1 || /[()]/.test(t) || ambiguous(t) || (' ' + k + ' ').includes(tk)) continue;
+      const e = cand.get(k) ?? cand.set(k, { t, alt, n: 0 }).get(k);
+      e.n++;
+      if (!alt && e.alt) { e.t = t; e.alt = 0; }
+    }
+    const add = [...cand.values()].sort((a, b) => a.alt - b.alt || b.n - a.n || (a.t < b.t ? -1 : a.t > b.t ? 1 : 0)).slice(0, LOCAL_MAX).map((e) => e.t);
+    w.aliases.push(...add); localN += add.length;
+  }
+  console.log('main-title aliases', mains, 'local-language aliases', localN);
+}
 
 // 5. names that mostly mean something else: an item with the same English label or alias that is not a work or a
 // fictional thing (a place, a person, a company, a song, scripture) and has more sitelinks than the work ("Palestine",

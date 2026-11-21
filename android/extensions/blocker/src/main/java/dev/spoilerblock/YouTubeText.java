@@ -25,21 +25,35 @@ final class YouTubeText {
 
     private static boolean count(String s) { return COUNT.matcher(s.trim()).matches(); }
 
-    static String strip(String cd) {
-        if (cd == null) return null;
+    static String strip(String cd) { return cd == null ? null : split(cd)[0]; }
+
+    /**
+     * The video row's channel name (the uploader, contract rule 9), cut at " • " or " · " and without U+0001/U+0002;
+     * null for a Short or a description that fits no shape.
+     */
+    static String channel(String cd) {
+        String c = cd == null ? null : split(cd)[1];
+        if (c == null) return null;
+        c = BULLET.split(c, 2)[0].replace('\u0001', ' ').replace('\u0002', ' ').trim();
+        return c.isEmpty() ? null : c;
+    }
+    private static final Pattern BULLET = Pattern.compile("\\s[•·]\\s");
+
+    /** {the row cut to "title - channel" (or unchanged), the channel of a video row or null}. */
+    private static String[] split(String cd) {
         String[] seg = cd.split(" - ", -1);
         // views and age: the channel comes right before them
         for (int v = 1; v + 1 < seg.length; v++) {
             if (!count(seg[v]) || !count(seg[v + 1])) continue;
             String c = seg[v - 1].trim();
-            if (v == 1) return c; // "title, channel" in one part (a Short)
+            if (v == 1) return new String[]{c, null}; // "title, channel" in one part (a Short)
             List<String> head = new ArrayList<>(Arrays.asList(seg).subList(0, v - 1));
             while (head.size() > 1) {
                 String last = head.get(head.size() - 1).trim();
                 if (last.isEmpty() || names(last, c) || DURATION.matcher(last).matches()) head.remove(head.size() - 1);
                 else break;
             }
-            return String.join(" - ", head) + " - " + c;
+            return new String[]{String.join(" - ", head) + " - " + c, c};
         }
         // no counts (a live video, a channel without views): the "go to channel" label and its name
         for (int k = 1; k + 1 < seg.length; k++) {
@@ -47,7 +61,7 @@ final class YouTubeText {
             if (!names(seg[k].trim(), c)) continue;
             int end = k; // the title is seg[0 .. end)
             if (end > 1 && DURATION.matcher(seg[end - 1].trim()).matches()) end--;
-            return String.join(" - ", Arrays.copyOfRange(seg, 0, end)) + " - " + c;
+            return new String[]{String.join(" - ", Arrays.copyOfRange(seg, 0, end)) + " - " + c, c};
         }
         // an English Short: "title, views, channel, age" before the last " - " (the play button's label)
         int dash = cd.lastIndexOf(" - ");
@@ -55,9 +69,9 @@ final class YouTubeText {
             String[] p = cd.substring(0, dash).split(", ", -1);
             int n = p.length;
             if (n >= 4 && count(p[n - 1]) && count(p[n - 3]) && !p[n - 2].trim().isEmpty())
-                return String.join(", ", Arrays.copyOfRange(p, 0, n - 3)) + " - " + p[n - 2].trim();
+                return new String[]{String.join(", ", Arrays.copyOfRange(p, 0, n - 3)) + " - " + p[n - 2].trim(), null};
         }
-        return cd;
+        return new String[]{cd, null};
     }
 
     /** Whether a part is a button label naming the channel: the name as its first or last words, and more. */

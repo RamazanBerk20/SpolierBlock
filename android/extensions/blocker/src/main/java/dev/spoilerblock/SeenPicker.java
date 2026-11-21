@@ -27,8 +27,13 @@ import java.util.List;
 final class SeenPicker {
     /** The picker's note (contract, cover wording): the group's own label, or a general note when the cover names several. */
     static String note(int groups, String label) {
-        return groups > 1 ? "This post names several works. It stays covered until each one is marked."
-            : "Posts that only say \"" + label + "\" stay covered until every one is marked.";
+        return groups > 1 ? "This post names several works. It is shown once you have seen one for each name."
+            : "Posts that only say \"" + label + "\" are shown once you have seen one of these.";
+    }
+
+    /** The note for a cover of one work whose series has more unseen works (contract, cover wording). */
+    static String noteOne(String title) {
+        return "This post is about \"" + title + "\". It is shown once you mark that one.";
     }
 
     static final int SERIES_SHOWN = 6; // more than this: the rest behind "Show N more"
@@ -42,9 +47,10 @@ final class SeenPicker {
 
     /**
      * works: the unseen works of every group the cover names (they decide the cover); more: the rest of the series
-     * (optional); groups, label: how many groups, and the first one's label.
+     * (optional); groups, label: how many groups, and the first one's label; one: the title when the cover names one
+     * work (its row is ticked), else null.
      */
-    static void show(Activity a, boolean dark, Matcher m, List<Integer> works, List<Integer> more, int groups, String label) {
+    static void show(Activity a, boolean dark, Matcher m, List<Integer> works, List<Integer> more, int groups, String label, String one) {
         Ui.Palette p = new Ui.Palette(dark);
         Dialog d = new Dialog(a, android.R.style.Theme_Material_Dialog_NoActionBar);
         LinearLayout l = new LinearLayout(a);
@@ -96,7 +102,7 @@ final class SeenPicker {
         l.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
         TextView note = Ui.text(a, Ui.BODY_SMALL, p.muted, false);
-        note.setText(note(groups, label));
+        note.setText(one != null ? noteOne(one) : note(groups, label));
         note.setPadding(0, Ui.dp(a, 12), 0, Ui.dp(a, 8));
         l.addView(note, Ui.matchWidth());
 
@@ -119,6 +125,7 @@ final class SeenPicker {
             ok.setEnabled(any);
             ok.setAlpha(any ? 1f : 0.38f);
         };
+        if (one != null) for (CheckBox c : boxes) c.setChecked(true); // the one work, already ticked
         for (CheckBox c : every) c.setOnCheckedChangeListener((v, on) -> sync.run());
         sync.run();
         all.setOnClickListener(v -> { for (CheckBox c : boxes) c.setChecked(true); }); // the first section only

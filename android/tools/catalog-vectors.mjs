@@ -1,7 +1,9 @@
 // Expected outputs for the Java port of the catalog update (CatalogTest.java), produced by the extension's own JS:
 //   1. the delta fetch (src/background/catalog-update.js fetchDelta) against the mock world of tools/mock-sparql.mjs,
 //      recording every query and answer so the Java client can be fed the same exchange and must send the same queries;
-//   2. the rebuilt index (bundled catalog + that delta, merged and built by src/shared/build-index.js) as bytes.
+//   2. the rebuilt index (bundled catalog + that delta, merged and built by src/shared/build-index.js) as bytes;
+//   3. the index with hand-added works and learned.names (contract rule 11) for a catalog and a custom work, as
+//      src/background/catalog-update.js rebuild builds it, plus the config it was built from.
 // The bundled-only case needs no output: the expected bytes are dist/firefox/data/index.{bin,json} themselves
 // (tools/vectors.mjs checks that they are what data/catalog.json builds).
 // usage: node android/tools/catalog-vectors.mjs
@@ -15,7 +17,7 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const dist = path.join(repo, 'dist/firefox/data');
 const out = path.join(repo, 'android/build/vectors');
 fs.mkdirSync(out, { recursive: true });
-const { fetchDelta, mergeCatalog } = await import(path.join(repo, 'src/background/catalog-update.js'));
+const { fetchDelta, mergeCatalog, customWorks, withNames } = await import(path.join(repo, 'src/background/catalog-update.js'));
 const { buildIndex, setCommonWords } = await import(path.join(repo, 'src/shared/build-index.js'));
 const { makeAmbiguous } = await import(path.join(repo, 'src/shared/catalog-rules.js'));
 
@@ -61,6 +63,19 @@ const label = (id) => catalog.series[id]?.[0];
 assert.deepEqual(seriesOf.Q900000002.map(label), ['Star Wars']);
 assert.deepEqual(seriesOf.Q900000003.map(label), ['Grand Theft Auto']);
 assert.ok(built.meta.series.some((l) => l.includes(sw) && l.length > 20), 'sequel not listed with Star Wars');
+
+// rule 11: learned.names appended to a catalog work's and a custom work's aliases, then built like any alias
+const bb = catalog.works.find((w) => w.title === 'Breaking Bad').id;
+const namesCfg = {
+  custom: [{ id: 'custom:1', title: 'Zorvak Saga', aliases: ['ZS'], type: 'game' }, { id: 'custom:2', title: 'Rainfall Hollow', aliases: [], type: 'book' }],
+  learned: { names: { [bb]: ['Albuquerque Chemistry Tales', 'BBX'], 'custom:2': ['Rainfall Saga'] }, not: {} },
+};
+const namesMerged = mergeCatalog(catalog, customWorks(namesCfg.custom, words));
+const namesBuilt = buildIndex({ ...namesMerged, works: withNames(namesMerged.works, namesCfg.learned.names) });
+assert.ok(!Buffer.from(namesBuilt.bin).equals(Buffer.from(buildIndex(namesMerged).bin)), 'learned names changed nothing');
+fs.writeFileSync(path.join(out, 'names-config.json'), JSON.stringify(namesCfg));
+fs.writeFileSync(path.join(out, 'names-index.bin'), Buffer.from(namesBuilt.bin));
+fs.writeFileSync(path.join(out, 'names-index.json'), JSON.stringify(namesBuilt.meta));
 
 fs.writeFileSync(path.join(out, 'delta-http.json'), JSON.stringify({ sinceYear, exchanges }));
 fs.writeFileSync(path.join(out, 'delta-works.json'), JSON.stringify(fresh));

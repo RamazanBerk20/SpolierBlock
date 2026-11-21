@@ -264,11 +264,13 @@ final class Catalog {
     static {
         for (int i = 0; i < ROMAN.length; i++) { TO_ARABIC.put(ROMAN[i], String.valueOf(i + 2)); TO_ROMAN.put(String.valueOf(i + 2), ROMAN[i]); }
     }
-    private static final int[] RANK = new int[7];
+    private static final int[] RANK = new int[8];
     static {
-        RANK[Matcher.TITLE] = 0; RANK[Matcher.SERIES] = 1; RANK[Matcher.ALIAS] = 2; RANK[Matcher.CHAR] = 3;
+        RANK[Matcher.TITLE] = 0; RANK[Matcher.SERIES] = 1; RANK[Matcher.ALIAS] = 2; RANK[Matcher.ACRONYM] = 2; RANK[Matcher.CHAR] = 3;
         RANK[Matcher.CHAR1] = 4; RANK[Matcher.PART] = 5; RANK[Matcher.TAG] = 6;
     }
+    // an alias written in capitals, 2+ letters ("GTA", "GOT")
+    private static final Pattern ACRO = Pattern.compile("^\\p{Lu}{2,}$");
 
     /** The common-word list (tools/catalog/common-words.txt), in first-occurrence order like the JS Set. */
     static final class Words {
@@ -362,6 +364,24 @@ final class Catalog {
         Built(byte[] bin, String json) { this.bin = bin; this.json = json; }
     }
 
+    // build-index.js usedAcronym: the initials of the title (without a leading "The", or of its last part after a colon),
+    // or the title spelled with stops ("W.I.T.C.H."); a work of DISTINCT_POP, COMMON_POP when the capitals are an
+    // everyday word of the 10k most frequent
+    private static boolean usedAcronym(String a, Work w, Words words) {
+        String x = a.toLowerCase(java.util.Locale.ROOT);
+        String[] parts = SERIES_SPLIT.split(w.title, -1);
+        List<List<String>> forms = Arrays.asList(Matcher.tokenize(w.title).toks, Matcher.tokenize(parts[parts.length - 1]).toks);
+        boolean ok = join(forms.get(0), "").equals(x);
+        for (List<String> t : forms) {
+            for (List<String> u : Arrays.asList(t, !t.isEmpty() && t.get(0).equals("the") ? t.subList(1, t.size()) : t)) {
+                StringBuilder b = new StringBuilder();
+                for (String y : u) b.append(y.charAt(0));
+                ok |= b.toString().equals(x);
+            }
+        }
+        return ok && w.pop >= (words.everyday.contains(x) ? COMMON_POP : DISTINCT_POP);
+    }
+
     static Built buildIndex(List<Work> catalog, Words words) {
         List<Work> works = new ArrayList<>(catalog);
         Collections.sort(works, (a, b) -> Double.compare(b.pop, a.pop)); // stable, like Array.prototype.sort
@@ -385,6 +405,7 @@ final class Catalog {
             if (prefixCount.get(k) >= (colon[i] ? 2 : 3)) qualified.add(k);
         }
         String[] seriesOf = new String[works.size()];
+        List<Object[]> acronyms = new ArrayList<>(); // {alias, work, label, other}: everyday-word aliases in capitals, added last
         for (int i = 0; i < works.size(); i++) {
             Work w = works.get(i);
             boolean low = w.pop < COMMON_POP;
@@ -404,12 +425,40 @@ final class Catalog {
                 add(keys, works, words, p, i, Matcher.TAG, p, false, false, other.contains(p), true, 2);
                 seriesOf[i] = p;
             }
-            for (String a : w.aliases) for (String f : possessive(a)) for (Variant v : nameVariants(f, low, words)) add(keys, works, words, v.text, i, Matcher.ALIAS, w.title, v.free, v.numbered, other.contains(a), v.orig);
+            for (String a : w.aliases) {
+                // "GTA", "GOT": as an alias an everyday word, kept as an acronym that matches only in capitals (added below)
+                if (ACRO.matcher(a).matches() && words.isCommon(Matcher.tokenize(a).toks.get(0)) && usedAcronym(a, w, words)) acronyms.add(new Object[]{a, i, w.title, other.contains(a)});
+                for (String f : possessive(a)) for (Variant v : nameVariants(f, low, words)) add(keys, works, words, v.text, i, Matcher.ALIAS, w.title, v.free, v.numbered, other.contains(a), v.orig);
+            }
             for (String c : w.characters) {
                 add(keys, works, words, c, i, Matcher.CHAR, w.title, false, false, other.contains(c));
                 List<String> parts = Matcher.tokenize(c).toks;
                 if (parts.size() > 1) for (String t : parts) if (t.length() >= 4 && !words.isCommon(t)) add(keys, works, words, t, i, Matcher.PART, w.title, false, false, false);
             }
+        }
+        // a subtitle names its work ("Tears of the Kingdom"): the last part after a colon or dash, of 3+ words or of 2 that
+        // are not both everyday words, carried by no other title and no other name; its other senses were never looked
+        // up, so it counts as "other" (build-index.js)
+        LinkedHashMap<String, Object[]> subs = new LinkedHashMap<>(); // key -> {subtitle, work, label}, null when several titles carry it
+        for (int i = 0; i < works.size(); i++) {
+            String[] parts = SERIES_SPLIT.split(works.get(i).title, -1);
+            if (parts.length < 2) continue;
+            String sub = jsTrim(parts[parts.length - 1]);
+            List<String> t = Matcher.tokenize(sub).toks;
+            boolean allCommon = true;
+            for (String x : t) allCommon &= words.isCommon(x);
+            if (t.size() < 2 || t.size() > Matcher.MAX_N || (t.size() == 2 && allCommon)) continue;
+            String k = join(t, " ");
+            subs.put(k, subs.containsKey(k) ? null : new Object[]{sub, i, works.get(i).title});
+        }
+        for (Map.Entry<String, Object[]> x : subs.entrySet()) {
+            Object[] a = x.getValue();
+            if (a != null && !keys.containsKey(x.getKey())) add(keys, works, words, (String) a[0], (Integer) a[1], Matcher.ALIAS, (String) a[2], false, false, true);
+        }
+        // an acronym only where no other name has the same key ("FRIENDS" stays the show Friends)
+        for (Object[] a : acronyms) {
+            Key k = keys.get(Matcher.tokenize((String) a[0]).toks.get(0));
+            if (k == null || k.kind == Matcher.ACRONYM) add(keys, works, words, (String) a[0], (Integer) a[1], Matcher.ACRONYM, (String) a[2], false, false, (Boolean) a[3]);
         }
 
         Map<String, Integer> gmap = new HashMap<>();
@@ -441,7 +490,16 @@ final class Catalog {
                     typed.add(new Object[]{en.getKey() + " \u0002" + type, twa.length == 1 ? works.get(twa[0]).title : e.label, twa, null});
                 }
             }
-            e.g = groupOf(gmap, groups, e.label, ws);
+            // an acronym names what its works' title names when those titles name one group (build-index.js); acronyms
+            // come after every other key, so the title keys have their group
+            Integer tg = null;
+            boolean one = e.kind == Matcher.ACRONYM;
+            for (int k = 0; k < e.n && one; k++) {
+                Key t = keys.get(join(Matcher.tokenize(works.get(e.works[k]).title).toks, " "));
+                if (t == null || (tg != null && tg != t.g)) one = false;
+                else tg = t.g;
+            }
+            e.g = one ? tg : groupOf(gmap, groups, e.label, ws);
         }
         for (Object[] x : typed) x[3] = groupOf(gmap, groups, (String) x[1], (int[]) x[2]);
         gmap = null;
@@ -469,7 +527,7 @@ final class Catalog {
             for (int k = 0; k < e.n; k++) best = Math.min(best, e.works[k]);
             double top = works.get(best).pop;
             boolean low = top < COMMON_POP;
-            boolean titleLike = e.kind == Matcher.TITLE || e.kind == Matcher.ALIAS || e.kind == Matcher.SERIES, one = t.length == 1;
+            boolean titleLike = e.kind == Matcher.TITLE || e.kind == Matcher.ALIAS || e.kind == Matcher.SERIES || e.kind == Matcher.ACRONYM, one = t.length == 1;
             boolean allCommon = true;
             for (String x : t) if (!words.isCommon(x)) { allCommon = false; break; }
             // "The Sheep", "Thing One": everyday words only, treated like such a title
@@ -492,6 +550,7 @@ final class Catalog {
             if (num) for (String x : real) if (x.length() >= 4 && !words.top3k.contains(x)) { numOk = true; break; }
             boolean ocr = e.orig && !other && t.length >= 2 && (titleLike || e.kind == Matcher.CHAR) &&
                 (real.size() >= 2 && !(e.amb == 1 && low) || real.size() == 1 && !low && !words.isCommon(real.get(0)) || numOk);
+            ocr |= titleLike && one && (words.top1k.contains(t[0]) || top < DISTINCT_POP && words.isCommon(t[0])); // on a one-word name the bit says "quiet" (see build-index.js)
             int v = (newIdx[e.g] << 9) | (ocr ? 1 << 8 : 0) | (rare ? 1 << 7 : 0) | (cap ? 1 << 6 : 0) | (common ? 1 << 5 : 0) | (e.amb == 1 && !famous(t, e, startsWith.get(en.getKey()), works) ? 1 << 4 : 0) | (other ? 1 << 3 : 0) | e.kind;
             // buildIndexBinary: linear probing in insertion order
             int A = Matcher.SEED_A, B = Matcher.SEED_B;
@@ -597,9 +656,9 @@ final class Catalog {
 
     static byte[] utf8(String s) { return s.getBytes(StandardCharsets.UTF_8); }
 
-    private static final int[] TIER = new int[7];
+    private static final int[] TIER = new int[8];
     static {
-        TIER[Matcher.TITLE] = 0; TIER[Matcher.ALIAS] = 1; TIER[Matcher.SERIES] = 2; TIER[Matcher.CHAR] = 3;
+        TIER[Matcher.TITLE] = 0; TIER[Matcher.ALIAS] = 1; TIER[Matcher.ACRONYM] = 1; TIER[Matcher.SERIES] = 2; TIER[Matcher.CHAR] = 3;
         TIER[Matcher.CHAR1] = 4; TIER[Matcher.PART] = 4; TIER[Matcher.TAG] = 1;
     }
     private static final String[] PRIORITY_TYPES = {"movie", "tv", "game", "book", "anime", "manga", "comic"};

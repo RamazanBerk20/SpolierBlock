@@ -14,7 +14,8 @@ const idx = (title, type) => meta.titles.findIndex((t, i) => t === title && (!ty
 test('plain title, alias, character, case-insensitive, punctuation', () => {
   assert.deepEqual(titles('omg Breaking Bad season 5 is insane'), ['Breaking Bad']);
   assert.deepEqual(titles('omg game of thrones season 5 is insane'), ['Game of Thrones']); // popular + distinctive word: any case
-  assert.deepEqual(titles('omg breaking bad season 5 is insane'), []); // all everyday words: Title Case required
+  assert.deepEqual(titles('omg breaking bad season 5 is insane'), ['Breaking Bad']); // lowercase: a media word near it
+  assert.deepEqual(titles('omg breaking bad news today'), []); // lowercase and no media word
   assert.deepEqual(titles('Walter White is the best'), ['Breaking Bad']);
   assert.deepEqual(titles('Pokemon and Pokémon'), ['Pokémon']);
   assert.deepEqual(titles('Pac-Man fever'), ['Pac-Man']);
@@ -130,4 +131,103 @@ test('apostrophes, Turkish suffixes and other languages', () => {
   assert.deepEqual(titles('Severance 2. sezon finali beynimi yaktı'), ['Severance']);
   assert.deepEqual(titles("J'ai fini Interstellar hier soir"), ['Interstellar']);
   assert.deepEqual(titles('Die letzte Staffel von Severance war genial'), ['Severance']);
+});
+
+// Names the matcher is unsure about (docs/agents/contract.md): [label, name as written]
+const unsure = (text, seen = new Set()) => m.unsure(text, groupSeen(seen)).map((x) => [meta.groups[x.g][0], text.slice(x.s, x.e)]);
+
+test('unsure names: titles the rules do not confirm, for the title-in-context model', () => {
+  assert.deepEqual(titles('lost was peak tv until the last two seasons'), []);
+  assert.deepEqual(unsure('lost was peak tv until the last two seasons'), [['Lost', 'lost']]);
+  assert.deepEqual(unsure('Interstellar was on and lost was on too'), [['Lost', 'lost']]); // the accepted group is not asked
+  assert.deepEqual(unsure('lost lost lost'), []); // the name's own words are no English function word
+  assert.deepEqual(unsure('lost lost lost and lost'), [['Lost', 'lost']]); // one name per group
+  assert.deepEqual(unsure('lost peak tv'), []); // no English function word
+  // never: a lowercase determiner or pronoun, a top-1000 word, a handle, text read from pictures, a seen group
+  assert.deepEqual(unsure('it was dark inside'), []);
+  assert.deepEqual(unsure('u/Lost_Interstellar_99'), []);
+  assert.deepEqual(unsure('nice pic\u0001lost dune interstellar'), []);
+  assert.deepEqual(unsure('lost was peak tv', new Set([idx('Lost')])), []);
+  // the names inside an accepted name are not asked
+  assert.deepEqual(titles('The Last of Us Part II was a great game'), ['The Last of Us Part II']);
+  assert.deepEqual(unsure('The Last of Us Part II was a great game'), []);
+  // at most 4, most popular group first
+  const u = m.unsure('lost, dune, friends, cars, titanic, inception, interstellar and severance all came up');
+  assert.deepEqual(u.map((x) => meta.groups[x.g][0]), ['Titanic', 'Inception', 'Dune', 'Lost']);
+  assert.deepEqual(u.map((x) => x.g), [...u.map((x) => x.g)].sort((a, b) => a - b));
+});
+
+test('unsure() reuses the scan of evaluate() for the same text', () => {
+  const text = 'lost was peak tv', seen = () => false;
+  let scans = 0;
+  const scan = m.scanTokens;
+  m.scanTokens = function (tk) { scans++; return scan.call(this, tk); };
+  try {
+    m.evaluate(text, seen);
+    assert.equal(m.unsure(text, seen).length, 1);
+    assert.equal(scans, 1);
+    m.unsure('dune was on', seen); // another text: scanned
+    assert.equal(scans, 2);
+  } finally { m.scanTokens = scan; }
+});
+
+test('unsure names: the "other" flag, songs, and lowercase words in posts with non-ASCII letters', () => {
+  const full = (text) => m.unsure(text).map((x) => [meta.groups[x.g][0], text.slice(x.s, x.e), x.o]);
+  // o = 1: the name mostly means something else (a place); the caller asks with a stricter threshold
+  assert.deepEqual(full('Chernobyl exclusion zone hit by a drone overnight'), [['Chernobyl', 'Chernobyl', 1]]);
+  assert.deepEqual(full('lost was peak tv'), [['Lost', 'lost', 0]]);
+  // a quoted name next to music words is a song, and a music title names no work
+  assert.deepEqual(unsure('I keep listening to that album. "Interstellar" is the best song.'), []);
+  assert.deepEqual(unsure('lost ft. Dune - official video'), []);
+  // the context model is English-only: a lowercase single word of a post with a non-ASCII letter is not asked;
+  // capitalised and multi-word names still are
+  assert.deepEqual(unsure('lost was peak tv ö'), []);
+  assert.deepEqual(unsure('Lost çok iyiydi'), [['Lost', 'Lost']]);
+  // a name typed all in lowercase only in a post with an English function word outside the name
+  assert.deepEqual(unsure('stranger things was great, çok iyiydi'), [['Stranger Things', 'stranger things']]);
+  assert.deepEqual(unsure('stranger things çok iyiydi'), []);
+  assert.deepEqual(unsure('Lost peak tv'), [['Lost', 'Lost']]); // a capital: not held to it
+});
+
+// The uploader's name (contract rule 9): own text + U+0002 + uploader [+ U+0001 + OCR text]
+test('uploader: names no work, and the same name in the text needs media evidence', () => {
+  assert.deepEqual(titles('Look at this\u0002Minecraft'), []); // the uploader part itself
+  assert.deepEqual(titles('Minecraft\u0002Minecraft'), []); // a clean title from a channel named like the work: lost
+  assert.deepEqual(titles('Minecraft\u0002Some Channel'), ['Minecraft']); // another uploader: today's rule
+  assert.deepEqual(titles('Minecraft - Official Trailer\u0002Minecraft'), ['Minecraft']); // a media word within 3 words
+  assert.deepEqual(titles('Minecraft game night\u0002Minecraft Official'), ['Minecraft']); // a type word; suffix stripped
+  assert.deepEqual(titles('#Minecraft\u0002MinecraftVEVO'), []); // a hashtag is no evidence for it
+  assert.deepEqual(titles('Breaking Bad\u0002Minecraft - Topic'), ['Breaking Bad']); // other names are unaffected
+  // offsets stay those of the own text, and the uploader's name is never unsure
+  const t = 'lost was peak tv\u0002Lost';
+  assert.deepEqual(m.unsure(t).map((x) => t.slice(x.s, x.e)), []);
+  assert.deepEqual(unsure('lost was peak tv\u0002Some Channel'), [['Lost', 'lost']]);
+  assert.deepEqual(titles('nice\u0002Dune\u0001BREAKING BAD SEASON 5'), ['Breaking Bad']); // the OCR part still follows
+});
+
+const realFile = new URL('../data/catalog.json', import.meta.url);
+test('uploader and music words on the real catalog: a rapper called Joker is not the film', { skip: !fs.existsSync(realFile) && 'no data/catalog.json' }, () => {
+  const real = buildIndex(JSON.parse(fs.readFileSync(realFile, 'utf8'))), rm = new Matcher(real.bin, real.meta);
+  const names = (text) => rm.evaluate(text).map((g) => real.meta.groups[g][0]);
+  const unsureOf = (text) => rm.unsure(text).map((u) => real.meta.groups[u.g][0]);
+  // with the channel: none of these is the film, and none is an unsure name
+  for (const t of ['Joker - Element (Official Video)', 'Joker - Mikrofon Şov', 'Element - Joker', 'Joker & Allame - Rapstar', 'JOKER - ŞİFA',
+    'Joker yeni albüm çıkardı', 'Joker freestyle']) {
+    for (const up of ['Joker', 'Joker Official', 'JokerVEVO', 'Joker - Topic', 'joker müzik']) {
+      assert.deepEqual(names(`${t}\u0002${up}`), [], `${t} / ${up}`);
+      assert.deepEqual(unsureOf(`${t}\u0002${up}`), [], `${t} / ${up}`);
+    }
+  }
+  // unsure names need an English function word outside the name: Turkish typed in ASCII ("Skip navigation") is not asked
+  assert.deepEqual(unsureOf('Gezinmeyi atla'), []);
+  for (const t of ['atla is still the best show ever made', 'rewatching atla with my kids']) assert.deepEqual(unsureOf(t), ['Avatar: The Last Airbender'], t);
+  assert.deepEqual(unsureOf('lost was peak tv'), ['Lost']);
+  // without it: music words keep the song lines off; the bare "Artist - Song" shapes still match (no uploader known)
+  for (const t of ['Joker - Element (Official Video)', 'Joker yeni albüm çıkardı', 'Joker freestyle']) assert.deepEqual(names(t), [], t);
+  for (const t of ['Joker - Mikrofon Şov', 'Element - Joker', 'Joker & Allame - Rapstar', 'JOKER - ŞİFA']) assert.deepEqual(names(t), ['Joker'], t);
+  // media evidence still names the film from the channel Joker; an official channel's trailer still matches
+  for (const t of ['Joker review', 'Joker (2019) ending explained', 'Joker is the best movie', 'Joker trailer reaction']) assert.deepEqual(names(`${t}\u0002Joker`), ['Joker'], t);
+  assert.deepEqual(names('Minecraft - Official Trailer\u0002Minecraft'), ['Minecraft']);
+  // music words do not turn a post about a work into a song: soundtrack and OST are media words
+  assert.deepEqual(names('Joker soundtrack album, haunting'), ['Joker']);
 });

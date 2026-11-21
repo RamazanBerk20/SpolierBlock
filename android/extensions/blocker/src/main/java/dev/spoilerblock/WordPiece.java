@@ -19,7 +19,8 @@ final class WordPiece {
     private static final String[] SPECIAL = {"[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"}; // added_tokens, matched literally
     private static final int MAX_WORD = 100;
     private final Map<String, Integer> vocab = new HashMap<>();
-    private final int unk, cls, sep;
+    private final int unk;
+    final int cls, sep;
 
     WordPiece(String tokenizerJson) throws Exception {
         JSONObject v = new JSONObject(tokenizerJson).getJSONObject("model").getJSONObject("vocab");
@@ -31,6 +32,17 @@ final class WordPiece {
     long[] encode(String text, int maxLength) {
         List<Integer> ids = new ArrayList<>();
         ids.add(cls);
+        ids.addAll(tokens(text));
+        ids.add(sep);
+        int n = Math.min(ids.size(), maxLength);
+        long[] out = new long[n];
+        for (int i = 0; i < n; i++) out[i] = ids.get(i);
+        return out;
+    }
+
+    /** The ids of text without [CLS]/[SEP] and without truncation: tok.encode(text, { add_special_tokens: false }). */
+    List<Integer> tokens(String text) {
+        List<Integer> ids = new ArrayList<>();
         int from = 0;
         while (from <= text.length()) { // split out special tokens written in the text, as the added-tokens splitter does
             int at = text.length(), len = 0;
@@ -40,11 +52,7 @@ final class WordPiece {
             ids.add(vocab.get(text.substring(at, at + len)));
             from = at + len;
         }
-        ids.add(sep);
-        int n = Math.min(ids.size(), maxLength);
-        long[] out = new long[n];
-        for (int i = 0; i < n; i++) out[i] = ids.get(i);
-        return out;
+        return ids;
     }
 
     private void section(String x, List<Integer> ids) {

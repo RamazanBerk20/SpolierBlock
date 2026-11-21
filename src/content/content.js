@@ -20,11 +20,12 @@
   const MIN_MEDIA = 96; // px; smaller images are icons/avatars and are never scanned
   const MAX_BLOCK_TEXT = 3000; // a "post-like" container larger than this is a page section, not a post
   const FRAME_EVERY_MS = 5000; // video re-check period during playback
-  const DEFAULTS = { enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], catalogUpdate: 'off' };
+  const DEFAULTS = { enabled: true, scanImages: true, blockUnlisted: true, style: 'all', unknownImages: false, pausedSites: [], captionlessVideos: [], catalogUpdate: 'off' };
 
   let matcher = null, meta = null;
   let settings = DEFAULTS, works = {}, workState = new Map(); // workIdx -> works entry
-  let active = false;
+  let learned = {}, notMap = new Map(); // storage `learned` (rule 11); workIdx -> where its names are not this work
+  let active = false, bareVideos = false; // bareVideos: this site is in settings.captionlessVideos (rule 10)
 
   // Fail-safe: never leave a page invisible if something below throws or the index fails to load.
   const failSafe = setTimeout(() => root.setAttribute('data-sb-ready', ''), 2500);
@@ -41,10 +42,26 @@
       'ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, ytd-reel-item-renderer, ytd-comment-thread-renderer, ' +
       'ytd-watch-metadata, yt-lockup-view-model, ytm-shorts-lockup-view-model, ytm-video-with-context-renderer, ytm-comment-thread-renderer, ' +
       'ytd-notification-renderer, ytd-post-renderer, yt-live-chat-text-message-renderer, yt-live-chat-paid-message-renderer, ' +
-      'yt-live-chat-membership-item-renderer',
+      'yt-live-chat-membership-item-renderer, ' +
+      // the player's end screen, end cards, autoplay "up next" card and pause-overlay suggestions: one card each
+      '.ytp-videowall-still, .ytp-modern-videowall-still, .ytp-ce-element, .ytp-autonav-endscreen-upnext-container, ' +
+      '.ytp-suggestion-link, .ytp-suggestion-set',
     'reddit.com': 'shreddit-post, shreddit-comment, [data-testid="post-container"], .thing, article',
   };
   const siteSel = SITE_BLOCKS[host] ?? null;
+  // A video block's channel name, passed to the matcher as the uploader (contract rule 9): the first non-empty one, cut at
+  // a " • " ("Joker • 1.2M views" on end-screen cards); comments and chat have no uploader. Not found: no uploader part.
+  const YT_CHANNEL = 'ytd-channel-name #text, #channel-name #text, #byline, .ytp-videowall-still-info-author, ' +
+    '.ytp-modern-videowall-still-info-author, .ytp-autonav-endscreen-upnext-author, [class*="metadata-row"] a, ' +
+    'a[href^="/@"], a[href^="/channel/"]';
+  function uploader(block) {
+    if (host !== 'youtube.com' || /comment|live-chat/.test(block.localName)) return '';
+    for (const e of block.querySelectorAll(YT_CHANNEL)) {
+      const t = e.textContent.split(/\s[•·]\s/)[0].replace(/[\u0001\u0002]/g, ' ').trim();
+      if (t) return t;
+    }
+    return '';
+  }
   // role=row/listitem/option: chat messages, notification and conversation lists, search suggestions
   const GENERIC = 'article, [role="article"], li, figure, blockquote, [role="row"], [role="listitem"], [role="option"], ' +
     '[class*="card" i], [class*="post" i], [class*="tweet" i], [class*="comment" i], [class*="message" i], [class*="item" i], [class*="entry" i]';
@@ -59,7 +76,7 @@
   const roots = new WeakSet();
   let anyRoot = false; // most pages have no shadow roots: skip the per-block host lookups
   const ROOT_CSS = '[data-sb-blocked]>:not(sb-overlay),:host([data-sb-blocked])>:not(sb-overlay){visibility:hidden!important}' +
-    '[data-sb-blocked][data-sb-pos]{position:relative!important}';
+    '[data-sb-blocked][data-sb-pos]{position:relative!important}[data-sb-blocked]{isolation:isolate!important}';
   function adopt(hostEl, sr) {
     if (roots.has(sr)) return;
     roots.add(sr);
@@ -88,15 +105,34 @@
   }
 
   // ---------- block discovery ----------
+  // A box that holds the site's posts is a feed or a shelf, never one post (Reddit's feed wrapper, YouTube's shelves).
+  const holdsPosts = (e) => !!siteSel && !!e.querySelector(siteSel);
   function findBlock(el, maxLeaf = MAX_BLOCK_TEXT * 3) {
+    // the site's own post first, however far up: a "card"-classed box inside it is a part of the post, not the post
+    if (siteSel) for (let e = el; e && e !== document.body && e !== root; e = up(e)) if (e.matches(siteSel)) return e;
     let leaf = null;
     for (let e = el; e && e !== document.body && e !== root; e = up(e)) {
-      if (siteSel && e.matches(siteSel)) return e;
-      if (e.matches(GENERIC) && e.textContent.length <= MAX_BLOCK_TEXT) return e;
+      if (e.matches(GENERIC) && e.textContent.length <= MAX_BLOCK_TEXT && !holdsPosts(e)) return e;
       if (!leaf && LEAFY.has(e.tagName)) leaf = e;
     }
     const b = leaf ?? (el === document.body ? null : el);
-    return b && b !== root && b !== document.body && b.textContent.length <= maxLeaf ? b : null;
+    if (!b || b === root || b === document.body || b.textContent.length > maxLeaf || holdsPosts(b)) return null;
+    // a big box of paragraphs is a page section (old Reddit's sidebar: a heading, buttons and 4,000 characters of
+    // rules): the part of it that holds this text is the unit, and its paragraphs are judged on their own
+    if (b !== el && b.textContent.length > MAX_BLOCK_TEXT && b.querySelector('p, li, h1, h2, h3, h4, blockquote')) {
+      let c = el;
+      while (up(c) !== b) c = up(c);
+      return c;
+    }
+    // a plain box whose text is all links is a menu (a site's navigation bar): the one link is the unit, not the bar
+    const link = el.closest('a, button');
+    if (link && link !== b && b.contains(link) && !b.closest('p')) {
+      const links = b.querySelectorAll('a, button');
+      let n = 0;
+      for (const l of links) n += l.textContent.length;
+      if (links.length >= 3 && n >= 0.9 * b.textContent.length) return link;
+    }
+    return b;
   }
   // The post around a picture; only a picture outside any post gets its own box covered.
   const findMediaBlock = (el) => { const p = up(el); return p && (findBlock(p, MAX_BLOCK_TEXT) ?? p); };
@@ -112,17 +148,20 @@
     let t = '';
     const tw = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
     for (let n; (n = tw.nextNode());) if (!SKIP_TEXT.has(n.parentElement?.tagName)) t += n.data + '\n';
-    for (const e of node.querySelectorAll('img[alt], [aria-label], [title]')) {
+    const LABELLED = 'img[alt], [aria-label], [title]';
+    // the block's own label too: an end-screen card is often one labelled link with no text inside
+    for (const e of [...(node.nodeType === 1 && node.matches(LABELLED) ? [node] : []), ...node.querySelectorAll(LABELLED)]) {
       t += '\n' + (e.getAttribute('alt') || '') + '\n' + (e.getAttribute('aria-label') || '') + '\n' + (e.getAttribute('title') || '');
     }
     for (const h of hostsIn(node)) { const sr = shadowOf(h); if (sr) t += domText(sr); }
-    return t.replaceAll(OCR_MARK, ' '); // page text cannot pose as OCR text
+    return t.replace(/[\u0001\u0002]/g, ' '); // page text cannot pose as OCR text or an uploader
   }
 
   // ---------- state ----------
   // Matches are name groups (index.json `groups`: [label, workIdx...]).
   const UNKNOWN = -1;
   const OCR_MARK = '\u0001'; // own text + OCR_MARK + text read from the post's pictures (contract, rule 8)
+  const UP_MARK = '\u0002'; // own text + UP_MARK + uploader's name, before any OCR part (contract, rule 9)
   // CLIP verdicts name groups of the bundled index; an updated index (opt-in catalog update) maps them via fromBundled.
   // shortcut: works added by a catalog update have no CLIP title rows (the text tower is not shipped), so their images
   // only get the generic verdict; ship rows for them if visual titles matter.
@@ -145,11 +184,11 @@
 
   function groupState(g) {
     const ws = meta.groups[g];
-    let seen = true;
+    let seen = false; // contract rule 1: one seen work is enough for an ambiguous name, a blocked one wins
     for (let i = 1; i < ws.length; i++) {
       const s = workState.get(ws[i])?.state;
       if (s === 'blocked') return 'blocked';
-      if (s !== 'seen') seen = false;
+      if (s === 'seen') seen = true;
     }
     return seen ? 'seen' : 'unlisted';
   }
@@ -167,13 +206,15 @@
 
   // The decision rule of docs/agents/contract.md. Returns null or { label, marks } (marks: groups "I've seen it" marks).
   function decide(st, onVerdict) {
-    const tg = st.groups.filter(covers); // in the matcher's order, own-text groups first (rule 7)
+    // rule 11: a group every work of which the user said "Not this" to here (this source or this site) was never matched
+    const where = st.where ?? [site], keep = (g) => !notMap.size || !notHere(g, where);
+    const tg = st.groups.filter((g) => keep(g) && covers(g)); // in the matcher's order, own-text groups first (rule 7)
     // rule 7: the image model's title only speaks for a picture no text identifies: dropped when the post's own text names
     // any work (and, per picture, when its OCR text does: mediaInfo). A post whose own text names a seen work and no
     // covered one is not covered by its pictures (names found only in OCR text: matcher.evaluate, after the marker).
-    const own = st.own ?? [];
+    const own = (st.own ?? []).filter(keep);
     const ownSeenOnly = () => own.some(isSeenGroup) && !own.some(covers);
-    const img = own.length ? [] : st.hits.map(fromClip).filter((g) => g !== UNKNOWN && covers(g));
+    const img = own.length ? [] : st.hits.map(fromClip).filter((g) => g !== UNKNOWN && keep(g) && covers(g));
     const marks = [...new Set([...tg, ...img])];
     const all = tg.filter((g) => groupStyle(g) === 'all');
     if (all.length) return { label: `Mentions ${names(all)}`, marks };
@@ -184,6 +225,8 @@
     if (tg.length && v === undefined) return { label: `Checking ${names(tg)} for spoilers…`, marks };
     if (settings.unknownImages && st.hits.some((h) => fromClip(h) === UNKNOWN) &&
         (tg.length || !ownSeenOnly())) return { label: 'Possible film, show or game image', marks: [] };
+    // rule 10: on a listed site, a video post whose own text names no work, seen or not, and that has no caption
+    if (st.bare && !own.length) return { label: 'Video with no caption', marks: [] };
     return null;
   }
 
@@ -208,18 +251,69 @@
 
   function scanBlock(block, force) {
     if (!block || !active || !block.isConnected) return;
-    const dom = domText(block), mi = mediaInfo(block);
-    const text = mi.ocr ? dom + OCR_MARK + mi.ocr.trim() : dom; // rule 8: the matcher reads OCR text more strictly
-    const key = text + '\0' + mi.hits.join();
+    // a covered box that grew into a page section since it was judged (a feed filling up) is no longer one post
+    for (let e = up(block); e && blocked.size; e = up(e)) {
+      if (blocked.has(e) && (holdsPosts(e) || e.textContent.length > MAX_BLOCK_TEXT * 3)) { scanned.delete(e); unblock(e); }
+    }
+    const dom = domText(block), mi = mediaInfo(block), channel = uploader(block);
+    const typed = channel ? dom + UP_MARK + channel : dom; // rule 9: the uploader's name follows the own text
+    const text = mi.ocr ? typed + OCR_MARK + mi.ocr.trim() : typed; // rule 8: the matcher reads OCR text more strictly
+    const bare = bareVideos && hasVideo(block) && !hasCaption(block);
+    const where = whereOf(isX ? xHandle(block) : channel); // rule 11: "Not this" keys, the most specific first
+    const key = text + '\0' + mi.hits.join() + (bare ? '\0bare' : '') + '\0' + where[0];
     if (!force && scanned.get(block)?.key === key) return;
     let groups = matcher.evaluate(text, isSeenGroup), own = null;
-    if (mi.ocr || mi.hits.length) {
-      own = matcher.evaluate(dom); // every work the post's own text names, seen or not (rule 7)
+    // before any other evaluate: unsure() reuses this scan
+    const yes = contextGroups(text, dom, () => { if (block.isConnected && scanned.get(block)?.dom === dom) scanBlock(block, true); });
+    if (mi.ocr || mi.hits.length || bare) {
+      own = [...matcher.evaluate(typed), ...yes]; // every work the post's own text names, seen or not (rules 7 and 10)
       // own-text groups before OCR-only ones, keeping the matcher's order (a no-op once the matcher orders them so)
       groups = [...groups.filter((g) => own.includes(g)), ...groups.filter((g) => !own.includes(g))];
     }
-    scanned.set(block, { dom, text, key, hits: mi.hits, groups, own, show: showKey(block, dom) });
+    if (yes.length) groups = [...groups, ...yes];
+    scanned.set(block, { dom, text, key, hits: mi.hits, groups, own, bare, where, show: showKey(block, dom) });
     apply(block);
+  }
+
+  // ---------- rule 11: "Not this" ----------
+  // Keys: "{site}/{source}" (the YouTube channel, the x.com author's handle with its @) and "{site}", lower-case.
+  const xHandle = (block) => { const h = block.querySelector('[data-testid="User-Name"] a[href^="/"]')?.getAttribute('href')?.split('/')[1]; return h ? '@' + h : ''; };
+  const whereOf = (src) => (src ? [`${site}/${src.toLowerCase()}`, site] : [site]);
+  function notHere(g, where) {
+    const ws = meta.groups[g];
+    for (let i = 1; i < ws.length; i++) { const k = notMap.get(ws[i]); if (!k || !where.some((w) => k.has(w))) return false; }
+    return true;
+  }
+  async function notThis(block, ov) {
+    const key = (scanned.get(block)?.where ?? [site])[0], xs = [...new Set(ov.marks.flatMap((g) => meta.groups[g].slice(1)))];
+    for (const x of xs) (notMap.get(x) ?? notMap.set(x, new Set()).get(x)).add(key);
+    apply(block); // the cover goes at once
+    const { learned: l } = await api.storage.local.get('learned');
+    const not = { ...(l?.not ?? {}) };
+    for (const x of xs) not[meta.ids[x]] = [...new Set([...(Array.isArray(not[meta.ids[x]]) ? not[meta.ids[x]] : []), key])];
+    await api.storage.local.set({ learned: { names: l?.names ?? {}, ...l, not } }); // re-judges every tab
+  }
+
+  // ---------- rule 10: videos with no caption ----------
+  const hasVideo = (b) => !!b.querySelector('video') || hostsIn(b).some((h) => !!shadowOf(h)?.querySelector('video'));
+  const isX = host === 'x.com' || host === 'twitter.com';
+  // A caption: on x.com the tweet text; elsewhere one run of 4+ words, a run being the text of one element's own text
+  // nodes, not counting buttons, times and hidden text (names, handles, counters and button labels are short).
+  function hasCaption(block) {
+    if (isX) return !!block.querySelector('[data-testid="tweetText"]')?.textContent.trim();
+    const runs = new Map(); // element -> its own text
+    const visit = (n) => {
+      const tw = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+      for (let t; (t = tw.nextNode());) {
+        const p = t.parentElement;
+        if (!p || SKIP_TEXT.has(p.tagName) || p.closest('button, [role="button"], time, [aria-hidden="true"]')) continue;
+        runs.set(p, (runs.get(p) ?? '') + ' ' + t.data);
+      }
+    };
+    visit(block);
+    for (const h of hostsIn(block)) { const sr = shadowOf(h); if (sr) visit(sr); }
+    for (const t of runs.values()) if (t.trim().split(/\s+/).length >= 4) return true;
+    return false;
   }
 
   function apply(block) {
@@ -233,7 +327,7 @@
     if (waiting.has(text)) return void waiting.get(text).add(cb);
     waiting.set(text, new Set([cb]));
     setBusy(1);
-    ask({ type: 'text.classify', text: text.replace(OCR_MARK, '\n').slice(0, 4000) })
+    ask({ type: 'text.classify', text: text.replace(/[\u0001\u0002]/g, '\n').slice(0, 4000) })
       // fail closed: an engine error keeps the cover
       .then((r) => verdicts.set(text, !r || r.error ? true : !!r.spoiler), () => verdicts.set(text, true))
       .finally(() => {
@@ -244,14 +338,48 @@
       });
   }
 
+  // ---------- unsure names: the title-in-context model ----------
+  // Contract, "Names the matcher is unsure about": a yes makes the group a matched group of the post's own text, after
+  // the groups the rules accepted. Not covered while asking; a model error is a no. Answers are kept per (segment A,
+  // group) for the page; the callback re-decides only a block that still shows the same text.
+  const ctxAnswers = new Map(); // segment A + '\0' + group -> yes
+  const ctxWaiting = new Map(); // same key -> callbacks for a question in flight
+  const CTX_MAX = 2000;
+  // Must follow matcher.evaluate(text, isSeenGroup) of the same text (matcher.unsure reuses that scan); own: the post's
+  // own text (text before the OCR marker), where the unsure names' offsets point. -> groups the model said yes to
+  function contextGroups(text, own, onAnswer) {
+    const out = [];
+    for (const u of matcher.unsure(text, isSeenGroup)) {
+      const a = globalThis.SBContext.windowText(own, u.s, u.e), key = a + '\0' + u.g, v = ctxAnswers.get(key);
+      if (v) out.push(u.g);
+      else if (v === undefined) askContext(key, { type: 'text.context', a, b: globalThis.SBContext.workText(meta, u.g), o: u.o ? 1 : 0 }, onAnswer);
+    }
+    return out;
+  }
+  function askContext(key, msg, cb) {
+    if (ctxWaiting.has(key)) return void ctxWaiting.get(key).add(cb);
+    ctxWaiting.set(key, new Set([cb]));
+    stats.ctx = (stats.ctx ?? 0) + 1; // questions asked on this page (read by the e2e test)
+    setBusy(1);
+    ask(msg).then((r) => !!r?.yes, () => false).then((yes) => {
+      ctxAnswers.set(key, yes);
+      if (ctxAnswers.size > CTX_MAX) ctxAnswers.delete(ctxAnswers.keys().next().value);
+      const cbs = ctxWaiting.get(key);
+      ctxWaiting.delete(key);
+      try { if (yes) cbs.forEach((f) => f()); } finally { setBusy(-1); } // a no changes nothing; busy drops after the re-decision
+    });
+  }
+
   // ---------- cover ----------
   // Every rule is !important on :host so page CSS can never put the cover in flow; size containment keeps it to its block.
+  // `all: initial !important` beats every normal declaration of the same rule, so each one that must hold is !important too.
+  // overflow: clip (not hidden) so the label can stick inside a cover taller than the window instead of sitting off screen.
   const OVERLAY_CSS = `:host{all:initial!important;position:absolute!important;inset:0!important;z-index:2147483646!important;
-    display:block!important;visibility:inherit!important;box-sizing:border-box!important;overflow:hidden!important;
-    container-type:size;border-radius:inherit;--bg:#eef1f4;--fg:#1f2328;--line:#b9c0c8;--ring:#0b57d0;
-    background:var(--bg);color:var(--fg);font:13px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+    display:block!important;visibility:inherit!important;box-sizing:border-box!important;overflow:clip!important;
+    container-type:size!important;border-radius:inherit!important;--bg:#eef1f4;--fg:#1f2328;--line:#b9c0c8;--ring:#0b57d0;
+    background:var(--bg)!important;color:var(--fg)!important;font:13px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif!important}
     :host([data-dark]){--bg:#22272e;--fg:#e6e8eb;--line:#59616b;--ring:#8ab4f8}
-    .b{box-sizing:border-box;height:100%;display:flex;flex-wrap:wrap;align-content:center;align-items:center;
+    .b{box-sizing:border-box;height:min(100%,100vh);position:sticky;top:0;display:flex;flex-wrap:wrap;align-content:center;align-items:center;
       justify-content:center;gap:6px 8px;padding:6px 10px;text-align:center}
     p{margin:0;flex:0 0 100%;overflow-wrap:anywhere}
     button{font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:999px;
@@ -260,8 +388,10 @@
     button:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
     [data-a=menu]{border-color:transparent;min-width:28px;padding:0 6px;font-size:16px;line-height:1}
     @container (max-height:76px){.b{flex-wrap:nowrap;justify-content:flex-start;padding:2px 8px}
-      p{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:start}}
+      p{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:start}
+      button{flex:0 .25 auto;min-width:3em;overflow:hidden;text-overflow:ellipsis}[data-a=menu]{flex-shrink:0;min-width:28px}}
     @container (max-height:34px){button{min-height:22px;padding:0 8px}.b{gap:4px}}
+    @container (max-width:150px){p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}button{min-height:22px;padding:0 6px}.b{gap:2px 4px;padding:2px}}
     .pk{box-sizing:border-box;width:min(360px,calc(100vw - 32px));max-height:min(70vh,520px);padding:16px;border:1px solid var(--line);
       border-radius:12px;background:var(--bg);color:var(--fg);font:inherit;text-align:start;box-shadow:0 8px 32px rgba(0,0,0,.35)}
     .pk[open]{display:flex;flex-direction:column;gap:10px}
@@ -301,6 +431,7 @@
       const sr = ov.attachShadow({ mode: 'open' });
       sr.innerHTML = `<style>${OVERLAY_CSS}</style><div class="b" role="group" aria-labelledby="l"><p id="l"></p>` +
         `<button type="button" data-a="once">Show once</button><button type="button" data-a="seen">I've seen it</button>` +
+        `<button type="button" data-a="not">Not this</button>` +
         `<button type="button" data-a="menu" aria-label="SpolierBlock settings" title="SpolierBlock settings">⋮</button></div>` +
         `<dialog class="pk" aria-labelledby="pt"><p id="pt" class="h">Which have you seen?</p><div class="sc"><ul class="first"></ul>` +
         `<p class="note"></p><section class="more" aria-labelledby="mt" hidden><div class="mh"><p id="mt" class="h2">More from this series</p>` +
@@ -323,6 +454,7 @@
           unblock(block);
         }
         if (a === 'seen') seenClicked(ov);
+        if (a === 'not') notThis(block, ov);
         if (a === 'pk-all') sr.querySelectorAll('.pk .first input').forEach((c) => { c.checked = true; });
         if (a === 'pk-all2') sr.querySelectorAll('.pk .second input').forEach((c) => { c.checked = true; });
         if (a === 'pk-more') {
@@ -345,8 +477,9 @@
     ov.marks = d.marks;
     silence(block); // also media added to the post since it was covered
     const p = ov.shadowRoot.querySelector('p');
-    if (p.textContent !== d.label) p.textContent = d.label;
-    ov.shadowRoot.querySelector('[data-a="seen"]').hidden = !d.marks.length; // nothing to mark for an unidentified image
+    if (p.textContent !== d.label) p.textContent = p.title = d.label; // the title: a narrow cover cuts the label short
+    // nothing to mark or report for an unidentified image or a video with no caption
+    for (const b of ov.shadowRoot.querySelectorAll('[data-a="seen"], [data-a="not"]')) b.hidden = !d.marks.length;
   }
 
   function unblock(block) {
@@ -438,21 +571,25 @@
   function seenClicked(ov) {
     const all = [...new Set(ov.marks.flatMap((g) => meta.groups[g].slice(1)))];
     const xs = all.filter((x) => workState.get(x)?.state !== 'seen');
-    if (all.length <= 1) return markWorks(all);
+    const more = moreFromSeries(ov.marks);
+    // one work: marked at once, unless its series has more unseen works to offer (contract, "Cover wording")
+    if (all.length <= 1 && !more.length) return markWorks(all);
     const dlg = ov.shadowRoot.querySelector('dialog');
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
     const row = (x, i) => `<li${i >= MORE_SHOWN ? ' hidden' : ''}><label><input type="checkbox" value="${x}"><span>${esc(meta.titles[x])}` +
       `<small>${esc([TYPE_NAMES[meta.types[x]] ?? meta.types[x], meta.years[x]].filter(Boolean).join(' · '))}</small></span></label></li>`;
+    const one = all.length === 1;
     dlg.querySelector('.first').innerHTML = xs.map((x) => row(x, 0)).join('');
-    const more = moreFromSeries(ov.marks);
+    if (one) dlg.querySelector('.first input').checked = true;
     dlg.querySelector('.more').hidden = !more.length;
     dlg.querySelector('.second').innerHTML = more.map(row).join('');
     dlg.querySelector('[data-a="pk-all2"]').textContent = `All ${more.length}`;
     const moreBtn = dlg.querySelector('[data-a="pk-more"]');
     moreBtn.hidden = more.length <= MORE_SHOWN;
     moreBtn.textContent = `Show ${more.length - MORE_SHOWN} more`;
-    dlg.querySelector('.note').textContent = ov.marks.length > 1 ? 'This post names several works. It stays covered until each one is marked.'
-      : `Posts that only say "${meta.groups[ov.marks[0]][0]}" stay covered until every one is marked.`;
+    dlg.querySelector('.note').textContent = one ? `This post is about "${meta.titles[all[0]]}". It is shown once you mark that one.`
+      : ov.marks.length > 1 ? 'This post names several works. It is shown once you have seen one for each name.'
+      : `Posts that only say "${meta.groups[ov.marks[0]][0]}" are shown once you have seen one of these.`;
     dlg.showModal();
     dlg.querySelector('input')?.focus();
   }
@@ -465,7 +602,7 @@
     const cur = document.title;
     if (!force && (cur === titleSet || (titleSet === null && cur === titleOrig))) return; // our own write, or unchanged
     if (cur !== titleSet) titleOrig = cur;
-    const groups = active && titleOrig ? matcher.evaluate(titleOrig, isSeenGroup) : [];
+    const groups = active && titleOrig ? [...matcher.evaluate(titleOrig, isSeenGroup), ...contextGroups(titleOrig, titleOrig, () => scanTitle(true))] : [];
     const d = groups.length ? decide({ text: titleOrig, dom: titleOrig, hits: [], groups }, () => scanTitle(true)) : null;
     const want = d?.label ?? titleOrig;
     titleSet = d ? want : null;
@@ -489,13 +626,14 @@
     for (let n = node; n; n = tw.nextNode()) {
       if (n.nodeType === 3) { addText(n); continue; }
       if (n.nodeType !== 1 || n.localName === 'sb-overlay') continue;
+      // a label with no text node under it (an end-screen card, a thumbnail link) has nothing else to queue its block
+      if (n.hasAttribute('alt') || n.hasAttribute('aria-label') || (bareVideos && n.localName === 'video')) pending.add(n);
       const sr = shadowOf(n);
       if (sr) { adopt(n, sr); collect(sr); } else if (n.localName.includes('-') && !later.has(n) && n.matches(':not(:defined)')) {
         later.set(n, Date.now() + 30000);
         if (!laterTimer) laterTimer = setTimeout(retryLater, 500);
       }
     }
-    if (node.nodeType === 1 && (node.hasAttribute('alt') || node.hasAttribute('aria-label'))) pending.add(node);
   }
 
   function flush(force) {
@@ -511,7 +649,7 @@
     for (const b of blocks) scanBlock(b, force);
   }
 
-  const OBSERVE = { childList: true, subtree: true, characterData: true, attributes: true, attributeOldValue: true, attributeFilter: ['src', 'srcset', 'poster', 'alt', 'style'] };
+  const OBSERVE = { childList: true, subtree: true, characterData: true, attributes: true, attributeOldValue: true, attributeFilter: ['src', 'srcset', 'poster', 'alt', 'aria-label', 'style'] };
   const mo = new MutationObserver((recs) => {
     for (const r of recs) {
       const t = r.target;
@@ -521,7 +659,7 @@
       } else if (r.type === 'characterData') {
         collect(t);
         if (t.parentNode?.nodeName === 'TITLE') titleDirty = true;
-      } else if (r.attributeName === 'alt') pending.add(t);
+      } else if (r.attributeName === 'alt' || r.attributeName === 'aria-label') pending.add(t);
       else if (r.attributeName === 'style') { if (t.hasAttribute('data-sb-bg') || (!t.firstElementChild && t.getAttribute('style')?.includes('url('))) resetMedia(t); }
       // decided on the attribute: Firefox updates currentSrc only once the new picture starts loading
       else if ((t.tagName === 'IMG' || t.tagName === 'VIDEO') && r.oldValue !== t.getAttribute(r.attributeName)) resetMedia(t, true);
@@ -690,14 +828,22 @@
     }
   }
 
+  // the popup's questions (through the background, top frame only): the cover count and the page's text selection, offered
+  // as a new name when it is 2 to 60 characters (rule 11)
+  const selectionText = () => { const t = (getSelection()?.toString() ?? '').replace(/\s+/g, ' ').trim(); return t.length >= 2 && t.length <= 60 ? t : ''; };
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg?.type === 'sb.stats' && window === top) sendResponse({ blocked: coverCount() });
+    if (window !== top) return;
+    if (msg?.type === 'sb.stats') sendResponse({ blocked: coverCount(), selection: selectionText() });
   });
 
   function computeActive() {
     const paused = (settings.pausedSites ?? []).some((s) => hostname === s || hostname.endsWith('.' + s));
     return settings.enabled !== false && !paused;
   }
+  // x.com and twitter.com are one site (SITE_BLOCKS); an entry covers its subdomains, as in pausedSites
+  const xcom = (h) => h.replace(/(^|\.)twitter\.com$/, '$1x.com');
+  const listed = (list) => (list ?? []).some((s) => xcom(host) === xcom(s) || xcom(host).endsWith('.' + xcom(s)));
+  const site = xcom(host).toLowerCase(); // the site of a "Not this" key (rule 11)
 
   function rescanAll() {
     scanTitle(true);
@@ -717,17 +863,24 @@
     const raw = s.settings ?? {};
     settings = { ...DEFAULTS, ...raw, style: raw.style ?? (raw.mode === 'spoiler' ? 'spoilers' : 'all') };
     works = s.works ?? migrateSeen(s.seen);
+    learned = s.learned && typeof s.learned === 'object' ? s.learned : {};
   }
 
   function applySettings() {
     active = computeActive();
+    bareVideos = listed(settings.captionlessVideos);
     root.toggleAttribute('data-sb-off', !active);
     root.toggleAttribute('data-sb-noimg', !settings.scanImages);
     workState = new Map();
-    if (meta) meta.ids.forEach((id, i) => { if (works[id]) workState.set(i, works[id]); });
+    notMap = new Map();
+    const not = learned.not && typeof learned.not === 'object' ? learned.not : {};
+    if (meta) meta.ids.forEach((id, i) => {
+      if (works[id]) workState.set(i, works[id]);
+      if (Array.isArray(not[id]) && not[id].length) notMap.set(i, new Set(not[id]));
+    });
   }
 
-  const CONFIG_KEYS = ['works', 'seen', 'settings'];
+  const CONFIG_KEYS = ['works', 'seen', 'settings', 'learned'];
   api.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !meta) return;
     if (changes.catalogIndex) { // a catalog update finished: swap the index in this (already open) tab

@@ -1,6 +1,6 @@
 # End-to-end fine-tune of all-MiniLM-L6-v2 (mean pooling + linear head, one logit) for "is this sentence a plot spoiler".
 # Called by tools/train-spoiler.mjs, which assembles the items. usage: python -I finetune.py <items.jsonl> <outDir> [epochs=3]
-# The threshold is chosen on validation (hand-written + held-out patterns, balanced accuracy), never on the eval sets.
+# The threshold is chosen on validation (hand-written + held-out patterns + spoiler-val.jsonl, balanced accuracy), never on the eval sets.
 # Writes <outDir>/model_int8.onnx (input_ids, attention_mask -> logit), the tokenizer files and meta.json {threshold}.
 import sys, json, random, time, os
 import numpy as np, torch
@@ -11,7 +11,7 @@ src, od = sys.argv[1], sys.argv[2]
 epochs = int(sys.argv[3]) if len(sys.argv) > 3 else 3
 items = [json.loads(l) for l in open(src)]
 train = [x for x in items if x['split'] == 'train']
-sel = [x for x in items if x['split'] == 'val' and x['src'] in ('hand', 'pattern')]
+sel = [x for x in items if x['split'] == 'val' and x['src'] in ('hand', 'pattern', 'valset')]
 tok = AutoTokenizer.from_pretrained(BASE)
 class M(torch.nn.Module):
     def __init__(s):

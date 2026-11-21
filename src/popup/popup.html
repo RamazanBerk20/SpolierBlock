@@ -23,6 +23,23 @@
         <span id="pause-label">Pause on this site</span>
         <span class="switch"><input type="checkbox" id="pause" role="switch"><span class="track" aria-hidden="true"></span></span>
       </label>
+      <label class="pause" id="bare-row" hidden>
+        <span>Cover caption-less videos here</span>
+        <span class="switch"><input type="checkbox" id="bare" role="switch"><span class="track" aria-hidden="true"></span></span>
+      </label>
+    </div>
+
+    <div class="teach" id="teach" hidden>
+      <button type="button" id="name-btn" class="wide"></button>
+      <div id="pick" class="finder" hidden>
+        <p id="pick-what"></p>
+        <label for="pick-search" class="sr">Search for the work</label>
+        <input type="search" id="pick-search" autocomplete="off" spellcheck="false" placeholder="Which work?">
+        <p id="pick-msg" class="soft" aria-live="polite" hidden></p>
+        <ul id="pick-results" class="results"></ul>
+        <div id="pick-confirm" class="row" hidden><button type="button" id="pick-ok" class="primary" hidden>Add name</button><button type="button" id="pick-cancel" class="quiet">Cancel</button></div>
+        <p id="pick-done" class="soft" role="status" aria-live="polite"></p>
+      </div>
     </div>
 
     <div class="finder">

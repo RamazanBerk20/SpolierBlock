@@ -7,7 +7,7 @@ Entry point for coding agents working on SpolierBlock 0.2.3. Humans: start with 
 - SpolierBlock covers spoilers about films, shows, games, books, manga, anime and comics. Everything runs on the device.
 - Browser extension (Manifest V3, Firefox-family and Chromium, one codebase): `src/`, `manifest.json`, `tools/build.mjs`.
 - Android: a Morphe patch bundle (`android/patches`, Java extension `android/extensions/blocker`) for YouTube, X and Instagram, plus a companion app (`android/companion`, package `dev.spoilerblock`) that owns the shared settings.
-- Text matching is a hash-index matcher over a Wikidata catalog (24,609 works, each with its series for the picker); a fine-tuned MiniLM classifier tells spoilers from mentions; a SigLIP 2 model and PaddleOCR read images (the same models on Android).
+- Text matching is a hash-index matcher over a Wikidata catalog (26,968 works, each with its series for the picker); a fine-tuned MiniLM classifier tells spoilers from mentions; a second MiniLM model, the title-in-context model (`models/context`), decides the names the rules are unsure about (everyday-word titles with no media word near them; browser extension and Android); a SigLIP 2 model and PaddleOCR read images (the same models on Android).
 - JavaScript is the source of truth. The Java code is a port, held in parity by vector tests.
 
 ## Repo map
@@ -17,9 +17,9 @@ Entry point for coding agents working on SpolierBlock 0.2.3. Humans: start with 
 | `src/content/` | Content script (`content.js`), text matcher (`matcher.js`), page CSS. |
 | `src/background/` | Background, engine (title model, classifier), `ocr.js`, catalog update, Chrome offscreen page. |
 | `src/options/` | Settings page, `config.js` (pure config functions), `ui.js` helpers. `src/popup/` is the quick panel. |
-| `src/shared/` | Catalog rules and index builder, run by Node and by the extension. |
-| `data/catalog.json`, `models/` | The catalog; the spoiler classifier (`models/spoiler`) and the OCR character list. |
-| `tools/` | Build, catalog build, calibration, evaluation, training. `tools/catalog/` (including `series.mjs`, the series step of the catalog build, and the common-word list `common-words.txt` with `words.mjs`, which builds it) and `tools/spoiler-train/` hold sub-tools. |
+| `src/shared/` | Catalog rules and index builder, run by Node and by the extension; `context-input.js` builds the title-in-context model's input. |
+| `data/catalog.json`, `models/` | The catalog; the spoiler classifier (`models/spoiler`), the title-in-context model (`models/context`) and the OCR character list. |
+| `tools/` | Build, catalog build, calibration, evaluation, training. `tools/context-train/` and `tools/train-context.mjs` / `tools/eval-context.mjs` (the title-in-context model). `tools/catalog/` (including `series.mjs`, the series step of the catalog build, and the common-word list `common-words.txt` with `words.mjs`, which builds it) and `tools/spoiler-train/` hold sub-tools. |
 | `test/` | Unit tests (`*.test.js`), fixtures, the end-to-end runner `test/e2e/`. |
 | `android/` | `patches/` (Kotlin patch), `extensions/blocker/` (Java, tests), `companion/`, `demo/`, `tools/` (scripts, vector generators), `apply.sh`. |
 | `research/` | 0.1-era model research (`REPORT.md`, scripts). Mostly not in git. Not a source of truth. |
@@ -40,9 +40,11 @@ Hold the lock when two agents might be running. `H` = `flock ~/.cache/sb-heavy.l
 | Image cut-offs | `SB_RESEARCH=research node tools/calibrate-clip.mjs` (needs the research image sets) | minutes | H |
 | Image input across browsers | `node tools/bench-engine.mjs chrome --stats > chrome.json`, the same for `firefox`, then `node tools/bench-stats-diff.mjs chrome.json firefox.json` | minutes | B, and nobody on H |
 | Engine latency | `node tools/bench-engine.mjs chrome` or `firefox` (after a build) | minutes | B, and nobody on H |
-| Classifier training | `PYTHON=... node tools/train-spoiler.mjs` | about 9 minutes, 6 cores | H |
-| Java parity | `node android/tools/vectors.mjs`, `catalog-vectors.mjs`, `spoiler-vectors.mjs`, `clip-vectors.mjs`, then `cd android && ./gradlew :extensions:blocker:testDebugUnitTest` (it also runs `ocrTestDebugUnitTest`) | minutes, 2 GB heap | H |
-| Android end to end | `android/tools/demo-build.sh`, install, `android/tools/demo-fling.sh` | heavy; needs an emulator | H |
+| Classifier training | `PYTHON=... node tools/train-spoiler.mjs` | about 18 minutes with 4 epochs, 6 cores | H |
+| Context model evaluation | `node tools/eval-context.mjs [file]` (default: `fp-posts.jsonl` and `headlines.jsonl`; `test/fixtures/posts-dev.jsonl` is allowed, `posts-heldout.jsonl` is not for tuning) | about a minute a file | H |
+| Context model training | `PYTHON=... node tools/train-context.mjs` | about 45 minutes for 3 epochs, plus about 5 to score, 6 cores | H |
+| Java parity | `node android/tools/vectors.mjs`, `catalog-vectors.mjs`, `spoiler-vectors.mjs`, `clip-vectors.mjs`, `context-vectors.mjs`, then `cd android && ./gradlew :extensions:blocker:testDebugUnitTest` (it also runs `ocrTestDebugUnitTest`) | minutes, 2 GB heap | H |
+| Android end to end | `android/tools/demo-build.sh`, install, `android/tools/demo-fling.sh` (and `android/tools/demo-bar.sh` for the demo's bottom bar) | heavy; needs an emulator | H |
 
 `npm run build:fixture` and `npm run build` write the same `dist/`. Run the real build again after an e2e session if you need the real catalog.
 
@@ -54,7 +56,7 @@ Hold the lock when two agents might be running. `H` = `flock ~/.cache/sb-heavy.l
 4. **The Android library has no resources and no AndroidX.** It is merged into other apps' APKs. UI is plain framework views built in code (`Ui.java`).
 5. **JavaScript is the source of truth.** A change to matching, the catalog builder, the catalog update, the config or the classifier's pre- and post-processing needs the same change in Java, and the vector tests must pass.
 6. **Change [docs/agents/contract.md](docs/agents/contract.md) first** when you touch the config, the decision rule or the cover wording. Then change both platforms. The strings must stay identical.
-7. **Never train on, tune on or choose a threshold with the held-out files** (`test/fixtures/spoiler-eval.jsonl`, `spoiler-eval2.jsonl`, the held-out image split). Report what you measured, with its caveat, and do not tune a rule against a benchmark and then quote that benchmark as evidence.
+7. **Never train on, tune on or choose a threshold with the held-out files** (`test/fixtures/spoiler-eval.jsonl`, `spoiler-eval2.jsonl`, `test/fixtures/posts-heldout.jsonl`, the held-out image split). `posts-heldout.jsonl` is 400 fresh posts held out for the text-matching and context-model decision: never look at its rows and never tune on it. `test/fixtures/posts-dev.jsonl` (400 posts) is a development set, not held out: its per-class errors informed one training round of the context model, so it is tuned-on. Report what you measured, with its caveat, and do not tune a rule against a benchmark and then quote that benchmark as evidence.
 8. **A cover never changes the measured size of a page element.** See [docs/agents/pitfalls.md](docs/agents/pitfalls.md).
 9. **The machine is a 16 GB desktop.** One heavy job at a time. Use the emulator only, never a real phone, unless the owner says otherwise. The owner's budget for the models is about 1 GB on a 16 GB iGPU desktop and an 8 GB phone.
 10. **Report plainly what you did not verify.** "Not run" and "emulator only" are acceptable answers. Do not write a statement into the docs that you did not check against the code.

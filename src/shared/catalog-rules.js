@@ -55,8 +55,9 @@ export const NOT_NARRATIVE = new Set((
 // ...unless it is also told as a story: novel, novella, short story, play, light novel, novel series, fiction, or a
 // fiction film genre (drama, comedy, comedy-drama, crime, thriller, action, romance, horror, science fiction)
 // ...or a reality competition or talent show, whose results are spoilers
+// ...or a graphic novel: a graphic memoir or biography ("Maus", "Persepolis") is told as a story
 const NARRATIVE = new Set(('Q8261 Q149537 Q49084 Q25379 Q1279564 Q104213567 Q1667921 Q8253 ' +
-  'Q130232 Q157443 Q859369 Q959790 Q2484376 Q188473 Q1054574 Q200092 Q471839 Q182415 Q1484397 Q106603795').split(' '));
+  'Q130232 Q157443 Q859369 Q959790 Q2484376 Q188473 Q1054574 Q200092 Q471839 Q182415 Q1484397 Q106603795 Q725377').split(' '));
 export const isNarrative = (vals) => !vals.some((v) => NOT_NARRATIVE.has(v)) || vals.some((v) => NARRATIVE.has(v));
 
 // ---- names that mostly mean something else (catalog build and update) ----

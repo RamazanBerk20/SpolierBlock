@@ -199,6 +199,12 @@ final class Store {
             JSONObject works = new JSONObject(c.works.toString());
             for (java.util.Iterator<String> i = cfg.works.keys(); i.hasNext(); ) { String id = i.next(); if (!works.has(id)) works.put(id, JSONObject.NULL); }
             p.put("works", works);
+            JSONObject learned = new JSONObject(c.learned.toString()); // learned merges per work too: null the ones that go
+            for (String part : new String[]{"names", "not"}) {
+                JSONObject to = learned.getJSONObject(part);
+                for (java.util.Iterator<String> i = cfg.learned.getJSONObject(part).keys(); i.hasNext(); ) { String id = i.next(); if (!to.has(id)) to.put(id, JSONObject.NULL); }
+            }
+            p.put("learned", learned);
             patch(p);
         } catch (JSONException e) {
             throw new IllegalStateException(e);

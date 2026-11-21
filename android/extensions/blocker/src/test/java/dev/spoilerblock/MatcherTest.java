@@ -34,7 +34,8 @@ public class MatcherTest {
             JSONArray s = c.getJSONArray("seen");
             for (int j = 0; j < s.length(); j++) seen[s.getInt(j)] = true;
             List<String> got = new ArrayList<>();
-            int[] gs = m.evaluate(c.getString("text"), seen);
+            List<int[]> unsure = new ArrayList<>();
+            int[] gs = m.evaluate(c.getString("text"), seen, unsure);
             for (int g : gs) got.add(m.labels[g]);
             List<String> want = strs(c.getJSONArray("expect"));
             // "More from this series" of those groups (Matcher.moreFromSeries == matcher.js moreFromSeries)
@@ -43,6 +44,17 @@ public class MatcherTest {
             int[] wm = new int[mo.length()];
             for (int j = 0; j < wm.length; j++) wm[j] = mo.getInt(j);
             want.add("more=" + java.util.Arrays.toString(wm));
+            // the names the matcher is unsure about, [group, start, end, other] (also through unsure(), the same scan)
+            List<String> gu = new ArrayList<>(), wu = new ArrayList<>(), gu2 = new ArrayList<>();
+            for (int[] x : unsure) gu.add(java.util.Arrays.toString(x));
+            for (int[] x : m.unsure(c.getString("text"), seen)) gu2.add(java.util.Arrays.toString(x));
+            JSONArray ju = c.getJSONArray("unsure");
+            for (int j = 0; j < ju.length(); j++) {
+                JSONArray x = ju.getJSONArray(j);
+                wu.add(java.util.Arrays.toString(new int[]{x.getInt(0), x.getInt(1), x.getInt(2), x.getInt(3)}));
+            }
+            got.add("unsure=" + gu + gu2);
+            want.add("unsure=" + wu + wu);
             if (!got.equals(want)) {
                 if (++failures <= 20) System.err.println("MISMATCH " + c.getString("text") + " seen=" + s + " js=" + want + " java=" + got);
             }

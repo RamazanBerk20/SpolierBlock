@@ -26,7 +26,8 @@ import java.util.WeakHashMap;
 
 /**
  * One per activity window. Before every frame (OnPreDrawListener: after layout, before draw) it judges the children
- * of the window's scrolling containers ("feed items") whose content changed, and covers matching ones.
+ * of the window's scrolling containers ("feed items") and the clickable cards outside them ("loose" items, activity
+ * windows only) whose content changed, and covers matching ones.
  */
 final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObserver.OnGlobalLayoutListener {
     // Safety net only: re-read a visible item whose fingerprint did not change (custom-drawn content mutated in place).
@@ -44,11 +45,16 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     private final Map<Class<?>, Boolean> listClass = new HashMap<>();
     private final int[] loc = new int[2];
     private final List<View> media = new ArrayList<>();
+    private final List<View> loose = new ArrayList<>(); // cards outside every list (an end screen's, an overlay's): items too
+    private final List<View> videos = new ArrayList<>(); // the window's video surfaces now (uncoveredVideo)
+    // rule 10: per item view, the text (shownKey) it was covered for as a video with no caption, kept while its player
+    // comes and goes and across a detach (a list's cached row comes back without a rebind, before its player)
+    private final Map<View, String> noCaption = new WeakHashMap<>();
     // stats for logcat
     private long statFrames, statNs, statMaxNs, statReads, statReadNs, statEvals, statEvalNs, statLast = SystemClock.uptimeMillis();
 
     private static final class Item implements View.OnAttachStateChangeListener {
-        long fp; int gen = -1; long at; String text; int[] groups; boolean stale, pending, ownSeenOnly, ownNames; String own; int ownGen = -1;
+        long fp; int gen = -1; long at; String text; int[] groups; boolean stale, pending, ownSeenOnly, ownNames, loose; String own; int ownGen = -1;
         // A recycled view is removed and re-added (RecyclerView pool): treat it as unknown, whatever its fingerprint.
         @Override public void onViewAttachedToWindow(View v) { stale = true; }
         @Override public void onViewDetachedFromWindow(View v) { stale = true; }
@@ -80,6 +86,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         shades.clear();
         for (View v : new ArrayList<>(pictureShades.keySet())) unshade(v);
         items.clear();
+        noCaption.clear();
     }
 
     // ---------- pictures still being judged (as the extension dims unjudged media) ----------
@@ -156,11 +163,12 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         long now = SystemClock.uptimeMillis();
         if (layoutDirty || now - lastDiscover > REDISCOVER_MS) {
             layoutDirty = false; lastDiscover = now;
-            containers.clear();
-            discover(decor);
+            containers.clear(); loose.clear();
+            discover(decor, activityWindow);
         }
         Matcher m = sb.matcher;
         sb.images.capturedThisFrame = false;
+        videosFresh = false;
         // index of the containers list grows while we read items: nested lists found inside items are judged too
         for (int ci = 0; ci < containers.size(); ci++) {
             View c = containers.get(ci);
@@ -170,18 +178,24 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
                 View it = g.getChildAt(i);
                 if (it.getVisibility() != View.VISIBLE || it.getWidth() == 0) continue;
                 if (m == null && (m = sb.awaitMatcher()) == null) return;
-                judge(it, g, m, now);
+                judge(it, g, m, now, false);
             }
+        }
+        for (View it : loose) {
+            if (!it.isAttachedToWindow() || !it.isShown() || it.getWidth() == 0 || !(it.getParent() instanceof ViewGroup)) continue;
+            if (m == null && (m = sb.awaitMatcher()) == null) return;
+            judge(it, (ViewGroup) it.getParent(), m, now, true);
         }
         // a dialog or popup without a list (a message preview, a bottom sheet): its whole content is one item
         if (!activityWindow && containers.isEmpty() && decor instanceof ViewGroup && ((ViewGroup) decor).getChildCount() > 0) {
             View it = ((ViewGroup) decor).getChildAt(0);
-            if (it.getVisibility() == View.VISIBLE && it.getWidth() > 0 && (m != null || (m = sb.awaitMatcher()) != null)) judge(it, (ViewGroup) decor, m, now);
+            if (it.getVisibility() == View.VISIBLE && it.getWidth() > 0 && (m != null || (m = sb.awaitMatcher()) != null)) judge(it, (ViewGroup) decor, m, now, false);
         }
-        // covers whose item left its list (removed, recycled into the scrap) go; a re-attached item is judged again
+        // covers whose item left its list (removed, recycled into the scrap) or stopped being a loose card go; a re-attached item is judged again
         for (int i = covers.size() - 1; i >= 0; i--) {
             Cover cv = covers.get(i);
-            if (!cv.item.isAttachedToWindow()) { cv.remove(); covers.remove(i); items.remove(cv.item); }
+            Item st = items.get(cv.item);
+            if (!cv.item.isAttachedToWindow() || st != null && st.loose && !loose.contains(cv.item)) { cv.remove(); covers.remove(i); items.remove(cv.item); }
             else cv.sync();
         }
         shadeFloaters();
@@ -207,17 +221,50 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
 
     /**
      * Whether something covered here can be playing: a cover over most of the window (a full-screen pager page:
-     * Reels, Shorts, stories) or over a video surface (a feed's inline player, inside the item or floating over it).
+     * Reels, Shorts, stories) or over a video surface (a feed's inline player, inside the item or floating over it),
+     * unless a player no cover hides is on screen too: then that one is what plays (the video the user chose, next to a
+     * covered post) and its sound stays on.
      */
     private boolean hidesSound() {
         long window = (long) decor.getWidth() * decor.getHeight();
+        boolean hides = false;
         for (Cover c : covers) {
             if (!c.item.isShown()) continue;
-            if ((long) c.item.getWidth() * c.item.getHeight() * 10 >= window * 6) return true;
-            if (hasVideo(c.item)) return true;
+            if ((long) c.item.getWidth() * c.item.getHeight() * 10 >= window * 6 || hasVideo(c.item)) { hides = true; break; }
         }
-        for (View v : shades.keySet()) if (v.isShown() && hasVideo(v)) return true;
+        if (!hides) for (View v : shades.keySet()) if (v.isShown() && hasVideo(v)) { hides = true; break; }
+        return hides && !uncoveredVideo();
+    }
+
+    /**
+     * A video surface at least half visible on screen that is not inside a covered item or a shaded floater and does
+     * not lie (>= 90 %) under the visible part of a cover (a pager's player kept behind its pages).
+     * shortcut: a covered and an uncovered player both on screen leave the sound on, track which player plays to do better.
+     */
+    private boolean uncoveredVideo() {
+        Rect r = new Rect();
+        // found afresh: a page swiped in is attached during the scroll, with no layout pass to trigger discover (only
+        // walked while a cover would mute, so its cost is paid on screens with a covered video or full-screen page)
+        videos.clear();
+        surfaces(decor);
+        for (View v : videos) {
+            if (!v.isAttachedToWindow() || !visibleOnScreen(v, r) || (long) r.width() * r.height() * 2 < (long) v.getWidth() * v.getHeight()) continue;
+            boolean hidden = false;
+            for (Object p = v; p instanceof View && !hidden; p = ((View) p).getParent()) hidden = shades.containsKey(p) || coverOf((View) p) != null;
+            long va = (long) r.width() * r.height();
+            for (int k = 0; k < coverRects.size() && !hidden; k++) {
+                Rect in = new Rect(r);
+                hidden = in.intersect(coverRects.get(k)) && (long) in.width() * in.height() * 10 >= va * 9;
+            }
+            if (!hidden) return true;
+        }
         return false;
+    }
+
+    private void surfaces(View v) {
+        if (v.getVisibility() != View.VISIBLE) return;
+        if (v instanceof android.view.TextureView || v instanceof android.view.SurfaceView) videos.add(v);
+        else if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) surfaces(((ViewGroup) v).getChildAt(i));
     }
 
     private static boolean hasVideo(View v) {
@@ -237,6 +284,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     private final List<int[]> coverOrigins = new ArrayList<>(); // where each covered item starts, on screen
     private final List<Cover> rectCovers = new ArrayList<>();
     private final Set<View> shaded = new HashSet<>();
+    private final Set<View> coverChains = new HashSet<>(); // covered items and their ancestors
 
     /**
      * Where an item is visible on screen: its bounds clipped by its list and every other ancestor (a row scrolled under
@@ -268,6 +316,8 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             rectCovers.add(c);
         }
         shaded.clear();
+        coverChains.clear(); // a loose card and its parents are not floaters over it
+        for (Cover c : rectCovers) for (Object p = c.item; p instanceof View; p = ((View) p).getParent()) coverChains.add((View) p);
         if (!coverRects.isEmpty()) floaters(decor);
         for (java.util.Iterator<Map.Entry<View, Shade>> i = shades.entrySet().iterator(); i.hasNext(); ) {
             Map.Entry<View, Shade> e = i.next();
@@ -276,9 +326,9 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     }
 
     private void floaters(View v) {
-        if (v.getVisibility() != View.VISIBLE || containers.contains(v)) return; // list items are covered themselves
+        if (v.getVisibility() != View.VISIBLE || containers.contains(v) || coverOf(v) != null) return; // items are covered themselves
         long area = (long) v.getWidth() * v.getHeight();
-        for (int k = 0; k < coverRects.size(); k++) {
+        for (int k = 0; k < coverRects.size() && !coverChains.contains(v); k++) {
             Rect r = coverRects.get(k);
             View item = rectCovers.get(k).item;
             long ra = (long) item.getWidth() * item.getHeight();
@@ -324,11 +374,51 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         return c;
     }
 
-    private void discover(View v) {
-        if (!(v instanceof ViewGroup) || v.getVisibility() != View.VISIBLE) return;
+    /** Lists and (with outside: not in a list or a loose card yet) loose cards. */
+    private void discover(View v, boolean outside) {
+        if (v.getVisibility() != View.VISIBLE) return;
+        if (outside && looseItem(v)) { loose.add(v); outside = false; }
+        if (!(v instanceof ViewGroup)) return;
         ViewGroup g = (ViewGroup) v;
-        if (isList(g)) containers.add(g);
-        for (int i = 0; i < g.getChildCount(); i++) discover(g.getChildAt(i));
+        if (isList(g)) { containers.add(g); outside = false; }
+        for (int i = 0; i < g.getChildCount(); i++) discover(g.getChildAt(i), outside);
+    }
+
+    /**
+     * A card outside every list (a player's end screen, an "up next" card, an overlay): a clickable view that is not an
+     * icon button or a TextView, at most half the window, and holds no video surface (so never the player itself) and
+     * no list (a panel: its cards are looked for inside).
+     * Its text decides like a list item's, if it has at least LOOSE_WORDS words (see judge).
+     */
+    private boolean looseItem(View v) {
+        // a TextView alone is a label, a button or a search box's query (YouTube's results bar), never a card
+        if (!v.isClickable() || v.getWidth() == 0 || v instanceof TextView || iconButton(v)) return false;
+        return (long) v.getWidth() * v.getHeight() * 2 <= (long) decor.getWidth() * decor.getHeight() && !panel(v);
+    }
+
+    private boolean panel(View v) {
+        if (v.getVisibility() != View.VISIBLE) return false;
+        if (v instanceof android.view.TextureView || v instanceof android.view.SurfaceView) return true;
+        if (!(v instanceof ViewGroup)) return false;
+        ViewGroup g = (ViewGroup) v;
+        if (isList(g)) return true;
+        for (int i = 0; i < g.getChildCount(); i++) if (panel(g.getChildAt(i))) return true;
+        return false;
+    }
+
+    // A loose card's text needs this many words: a bar button's or a tab's label ("Home", "Subscriptions") is never one.
+    private static final int LOOSE_WORDS = 3;
+
+    /** Whitespace-separated words that hold a letter: digits, times and punctuation alone are no words. */
+    static int words(String s) {
+        int n = 0;
+        boolean letter = false;
+        for (int i = 0; i <= s.length(); i++) {
+            char ch = i < s.length() ? s.charAt(i) : ' ';
+            if (Character.isWhitespace(ch)) { if (letter) n++; letter = false; }
+            else letter |= Character.isLetter(ch);
+        }
+        return n;
     }
 
     boolean isList(ViewGroup g) {
@@ -347,27 +437,40 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         return b;
     }
 
-    private void judge(View it, ViewGroup parent, Matcher m, long now) {
+    private void judge(View it, ViewGroup parent, Matcher m, long now, boolean loose) {
         Item st = items.get(it);
         if (st == null) { items.put(it, st = new Item()); it.addOnAttachStateChangeListener(st); }
+        st.loose = loose;
         long fp = fingerprint(it, 17);
         if (!st.stale && !st.pending && st.gen == sb.generation && st.fp == fp && now - st.at < RECHECK_MS) return;
         long r0 = System.nanoTime();
         TextCapture.Texts texts = new TextCapture.Texts();
         Cover paused = coverOf(it); // the real text, not the cover's accessibility nodes
         if (paused != null) paused.a11yPause(true);
+        channel = null;
         try { collect(it, texts, true); } finally { if (paused != null) paused.a11yPause(false); }
-        String text = texts.sb.toString().replace('\u0001', ' '); // the app's text cannot pose as text read from pictures
+        // the app's text cannot pose as text read from pictures or as an uploader
+        String text = texts.sb.toString().replace('\u0001', ' ').replace('\u0002', ' ');
+        // rule 9: a YouTube video row's channel follows the own text, behind one U+0002 (the uploader names no work)
+        String typed = channel == null ? text : text + '\u0002' + channel;
+        // rule 11: the item's "Not this" keys: the source is the YouTube channel, or the author's @handle on X (and the demo)
+        String[] where = Config.where(sb.site, channel != null ? channel : "x.com".equals(sb.site) || "demo.test".equals(sb.site) ? texts.handle : null);
+        if (loose && words(text) < LOOSE_WORDS) { // a button or a label, not a card: never covered, nor its pictures judged
+            st.fp = fp; st.gen = sb.generation; st.at = now; st.text = null; st.stale = st.pending = false;
+            Cover cv = coverOf(it);
+            if (cv != null) { cv.remove(); covers.remove(cv); }
+            return;
+        }
         // media views: their verdicts (requested here when missing) and the text OCR found in them
         media.clear();
         if (sb.imagesMatter()) sb.images.candidates(it, this, media, true);
         Config.Works v = sb.worksFor(m);
         // rule 7: what the post's own text names decides how much its pictures may say
         if (media.isEmpty()) st.ownSeenOnly = st.ownNames = false;
-        else if (st.ownGen != sb.generation || !text.equals(st.own)) { ownNames(m, text, v, st); st.own = text; st.ownGen = sb.generation; }
+        else if (st.ownGen != sb.generation || !typed.equals(st.own)) { ownNames(m, text, typed, v, st, where); st.own = typed; st.ownGen = sb.generation; }
         boolean pending = false, unknown = false;
         List<Integer> imgGroups = new ArrayList<>();
-        StringBuilder ocr = new StringBuilder(), key = new StringBuilder(text);
+        StringBuilder ocr = new StringBuilder(), key = new StringBuilder(typed);
         List<View> toShade = new ArrayList<>();
         for (View mv : media) {
             Images.State s = sb.images.state(mv);
@@ -378,6 +481,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             if (!st.ownNames && !ocrNames(m, s)) for (double[] h : s.hits) { // the first hit not seen, as the extension takes it
                 int g = (int) h[0];
                 if (g == Clip.UNKNOWN) { unknown = true; break; }
+                if (Config.notHere(m.groupWorks(g), v, where)) continue; // rule 11: never matched here
                 if (!m.groupSeen(g, v.seen)) {
                     if (Config.group(m.groupWorks(g), v, sb.blockUnlisted) != Config.NOT_COVERED && !imgGroups.contains(g)) imgGroups.add(g);
                     break;
@@ -386,21 +490,33 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             if (!s.ocr.isEmpty()) ocr.append('\n').append(s.ocr);
         }
         // rule 8: text read from pictures goes after the post's own text, behind one U+0001 (the matcher reads it more strictly)
-        String full = ocr.length() == 0 ? text : text + '\u0001' + ocr.substring(Math.max(1, ocr.length() - 4000));
+        String full = ocr.length() == 0 ? typed : typed + '\u0001' + ocr.substring(Math.max(1, ocr.length() - 4000));
         statReads++;
         statReadNs += System.nanoTime() - r0;
         if (st.gen != sb.generation || !full.equals(st.text)) {
             long e0 = System.nanoTime();
-            st.groups = m.evaluate(full, v.seen);
+            List<int[]> unsure = new ArrayList<>();
+            int[] rules = m.evaluate(full, v.seen, unsure);
+            // a name the matcher is unsure about counts once the model says yes, after the rules' groups; until its
+            // answer is in, the item is not covered for it (the answer re-judges every item)
+            List<Integer> yes = sb.contextGroups(m, text, unsure, true);
+            st.groups = java.util.Arrays.copyOf(rules, rules.length + yes.size());
+            for (int i = 0; i < yes.size(); i++) st.groups[rules.length + i] = yes.get(i);
             statEvals++; statEvalNs += System.nanoTime() - e0;
             if (Log.isLoggable(SpoilerBlock.TAG, Log.VERBOSE)) { // what the matcher was given and what it found (adb shell setprop log.tag.SpoilerBlock VERBOSE)
                 StringBuilder gs = new StringBuilder();
                 for (int g : st.groups) gs.append(gs.length() > 0 ? ", " : "").append(m.labels[g]);
-                Log.v(SpoilerBlock.TAG, "evaluate " + it.getClass().getName() + " groups=[" + gs + "] text=" + full.replace("\n", "\\n").replace("\u0001", "<U+0001>"));
+                Log.v(SpoilerBlock.TAG, "evaluate " + it.getClass().getName() + " groups=[" + gs + "] text=" + full.replace("\n", "\\n").replace("\u0001", "<U+0001>").replace("\u0002", "<U+0002>"));
             }
         }
         // rule 7: own text naming a seen work and no covered one outranks the pictures (their titles and their OCR names)
         int[] groups = st.ownSeenOnly ? new int[0] : st.groups;
+        if (v.anyNot) { // rule 11: a group every work of which the user said "Not this" to here was never matched
+            int n = 0;
+            int[] kept = new int[groups.length];
+            for (int g : groups) if (!Config.notHere(m.groupWorks(g), v, where)) kept[n++] = g;
+            groups = java.util.Arrays.copyOf(kept, n);
+        }
         st.fp = fp; st.gen = sb.generation; st.at = now; st.text = full; st.stale = false; st.pending = pending; // a pending image is asked again next frame
 
         // the contract's decision rule: which groups cover, and why (its cover wording)
@@ -417,7 +533,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         if (!all.isEmpty()) { msg = "Mentions "; named.addAll(textGroups); }
         else if (!imgGroups.isEmpty()) { msg = "Image from "; named.addAll(imgGroups); named.addAll(spoilers); }
         else if (!spoilers.isEmpty()) {
-            Boolean spoiler = sb.spoilerVerdict(full.replace('\u0001', '\n'));
+            Boolean spoiler = sb.spoilerVerdict(full.replace('\u0001', '\n').replace('\u0002', '\n'));
             if (spoiler == null) msg = "Checking ";
             else if (spoiler) msg = "Spoiler about ";
             if (msg != null) named.addAll(spoilers);
@@ -430,6 +546,12 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         } else if (unknown && Config.coverUnknownImage(sb.unknownImages, st.ownSeenOnly, !all.isEmpty() || !spoilers.isEmpty())) {
             msg = "Possible film, show or game image";
         }
+        // rule 10, lowest: on a listed site, a video item whose text has no run of 4+ words and names no work, seen or not
+        if (msg == null && sb.captionless && texts.maxWords < 4) {
+            String k = shownKey(typed, ""); // counters tick: the post stays the same
+            if (hasVideo(it) || floatingVideo(it)) noCaption.put(it, k);
+            if (k.equals(noCaption.get(it)) && !(media.isEmpty() ? namesWork(m, text, typed, v, where) : st.ownNames)) msg = "Video with no caption";
+        }
         shadePictures(it, msg == null ? toShade : new ArrayList<>()); // pending pictures are shaded, not the whole post
         String reveal = shownKey(text, key); // "Show once" is for this post, whatever its counters, players and pictures do next
         Cover cv = coverOf(it);
@@ -439,8 +561,9 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             if (cv == null) { covers.add(cv = new Cover(this, it, parent)); if (!activityWindow) catcher(); }
             int[] marks = new int[label != null ? named.size() : 0];
             for (int i = 0; i < marks.length; i++) marks[i] = named.get(i);
+            cv.notKey = where.length > 0 ? where[0] : null;
             if (cv.show(msg, marks, reveal) && log) {
-                Log.d(SpoilerBlock.TAG, "block \"" + msg + "\" " + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)) + " text=" + full.replace('\n', '|'));
+                Log.d(SpoilerBlock.TAG, "block \"" + msg + "\" " + (st.loose ? "loose " : "") + it.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(it)) + " text=" + full.replace('\n', '|'));
             }
         } else if (cv != null) {
             cv.remove();
@@ -460,6 +583,33 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         return "\u0000" + media;
     }
 
+    /** Rule 10 when no picture made judge ask ownNames: whether the own text names any work, seen or not. */
+    private boolean namesWork(Matcher m, String text, String typed, Config.Works v, String[] where) {
+        List<int[]> unsure = new ArrayList<>();
+        for (int g : m.evaluate(typed, noneSeen(m), unsure)) if (!Config.notHere(m.groupWorks(g), v, where)) return true;
+        for (int g : sb.contextGroups(m, text, unsure, false)) if (!Config.notHere(m.groupWorks(g), v, where)) return true;
+        return false;
+    }
+
+    private boolean videosFresh; // videos holds this frame's surfaces (floatingVideo)
+
+    /**
+     * Rule 10: a video surface outside the item that lies (>= 90 %) over its visible part and is at least 40 % of its
+     * size: the app's shared player floating over the row (YouTube's inline preview), as shadeFloaters sees it.
+     */
+    private boolean floatingVideo(View it) {
+        Rect ri = new Rect(), rv = new Rect();
+        if (!visibleOnScreen(it, ri)) return false;
+        if (!videosFresh) { videos.clear(); surfaces(decor); videosFresh = true; }
+        long ia = (long) it.getWidth() * it.getHeight();
+        for (View v : videos) {
+            if (inside(v, it) || (long) v.getWidth() * v.getHeight() * 10 < ia * 4 || !visibleOnScreen(v, rv)) continue;
+            long va = (long) rv.width() * rv.height();
+            if (rv.intersect(ri) && (long) rv.width() * rv.height() * 10 >= va * 9) return true;
+        }
+        return false;
+    }
+
     private boolean[] noneSeen; // for rules 6 and 7's "names a work", seen or not
 
     private boolean[] noneSeen(Matcher m) {
@@ -471,14 +621,18 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
      * Rules 6 and 7 on the post's own text: whether it names any work, and whether it names a work the user has seen and
      * no covered one (the matcher drops seen groups, so it is asked without them).
      */
-    private void ownNames(Matcher m, String text, Config.Works v, Item st) {
+    private void ownNames(Matcher m, String text, String typed, Config.Works v, Item st, String[] where) {
         boolean seen = false, covered = false;
-        int[] gs = m.evaluate(text, noneSeen(m));
+        List<int[]> unsure = new ArrayList<>();
+        List<Integer> gs = new ArrayList<>();
+        for (int g : m.evaluate(typed, noneSeen(m), unsure)) gs.add(g);
+        gs.addAll(sb.contextGroups(m, text, unsure, false)); // a model's yes names a work too (asked by judge, never for a seen group)
+        gs.removeIf(g -> Config.notHere(m.groupWorks(g), v, where)); // rule 11
         for (int g : gs) {
             if (m.groupSeen(g, v.seen)) seen = true;
             else if (Config.group(m.groupWorks(g), v, sb.blockUnlisted) != Config.NOT_COVERED) covered = true;
         }
-        st.ownNames = gs.length > 0;
+        st.ownNames = !gs.isEmpty();
         st.ownSeenOnly = seen && !covered;
     }
 
@@ -549,6 +703,7 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
     }
 
     private final boolean youtube; // row descriptions carry a metadata tail (YouTubeText)
+    private String channel; // the uploader of the item being collected (a YouTube video row's channel), or null
     private final int iconMax;
 
     /**
@@ -567,7 +722,13 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
             return;
         }
         CharSequence cd = v.getContentDescription();
-        if (cd != null && !iconButton(v)) out.add(youtube ? YouTubeText.strip(cd.toString()) : cd);
+        if (cd != null && !iconButton(v)) {
+            if (!youtube) out.add(cd);
+            else { // a video row: "title - channel", and its channel is the uploader (the first one found)
+                out.add(YouTubeText.strip(cd.toString()));
+                if (channel == null) channel = YouTubeText.channel(cd.toString());
+            }
+        }
         if (v instanceof TextView && !(v instanceof EditText)) { // the user's own typing is not a spoiler
             CharSequence t = ((TextView) v).getText();
             out.add(t);
@@ -650,12 +811,49 @@ final class Scanner implements ViewTreeObserver.OnPreDrawListener, ViewTreeObser
         Rect vis = new Rect();
         for (int i = covers.size() - 1; i >= 0; i--) {
             Cover c = covers.get(i);
-            if (visibleOnScreen(c.item, vis) && vis.contains((int) x, (int) y)) return c;
+            if (visibleOnScreen(c.item, vis) && vis.contains((int) x, (int) y)) return appOnTop(c.item, (int) x, (int) y) ? null : c;
         }
         return null;
     }
 
-    void revealOnce(Cover c) {
+    /**
+     * Something clickable the app draws over the item at this point (X's bottom bar and compose button float over the
+     * list): the touch is the app's. Our own shaded floaters carry the cover's buttons and do not count.
+     */
+    private boolean appOnTop(View item, int x, int y) {
+        for (View child = item; child.getParent() instanceof ViewGroup; child = (View) child.getParent()) {
+            ViewGroup p = (ViewGroup) child.getParent();
+            int at = p.indexOfChild(child);
+            for (int i = 0; i < p.getChildCount(); i++) {
+                View s = p.getChildAt(i);
+                // drawn (and touched) above: raised, or at the same Z and added later; a later sibling with a lower Z is under it
+                // shortcut: ignores a custom drawing order (getChildDrawingOrder is not public), upgrade if a host uses one over a list
+                float sz = s.getZ(), cz = child.getZ();
+                if (s != child && (sz > cz || sz == cz && i > at) && clickableAt(s, x, y)) return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean clickableAt(View v, int x, int y) {
+        Rect r = new Rect();
+        if (shades.containsKey(v) || !visibleOnScreen(v, r) || !r.contains(x, y)) return false;
+        if (v.isClickable()) return true;
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) if (clickableAt(g.getChildAt(i), x, y)) return true;
+        }
+        return false;
+    }
+
+    /** Rule 11, "Not this": recorded for the cover's works on this item's key; the cover goes at once. */
+    void notThis(Cover c, int[] marks) {
+        sb.notThis(marks, c.notKey);
+        c.remove();
+        covers.remove(c);
+    }
+
+        void revealOnce(Cover c) {
         sb.revealed.add(c.text);
         c.remove();
         covers.remove(c);

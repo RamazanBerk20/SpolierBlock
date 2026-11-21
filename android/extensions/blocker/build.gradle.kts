@@ -26,6 +26,7 @@ tasks.withType<Test>().configureEach {
     systemProperty("sb.vectors", rootDir.resolve("build/vectors").absolutePath)
     systemProperty("sb.dist", rootDir.resolve("../dist/firefox/data").absolutePath)
     systemProperty("sb.model", rootDir.resolve("../models/spoiler").absolutePath)
+    systemProperty("sb.context", rootDir.resolve("../models/context").absolutePath)
     // the vectors are inputs: regenerated vectors must re-run the tests (and never hit the build cache)
     inputs.dir(rootDir.resolve("build/vectors"))
     inputs.dir(rootDir.resolve("../dist/firefox/data"))

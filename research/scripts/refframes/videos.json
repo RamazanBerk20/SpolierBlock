@@ -1,0 +1,76 @@
+[
+  ["QdBZY2fkU-0", "gta6", "ref", "", "Rockstar: Trailer 1"],
+  ["VQRLujxTm3c", "gta6", "ref", "", "Rockstar: Trailer 2"],
+  ["rz1B4B2yBZY", "gta6", "ref", "", "Rockstar: Launch Trailer"],
+  ["8L0CzL2V72c", "gta6", "ref", "", "PlayStation: Features Trailer"],
+  ["YDNs_sPEcJc", "gta6", "refgp", "1800-2400", "MKIceAndFire: walkthrough part 1"],
+
+  ["XAgXfddQSwY", "gta6", "cal", "300-900", "GameCheck: re-upload of An Extended Look (Rockstar original is age-gated)"],
+  ["ys_3h2nuNCY", "gta6", "cal", "600-1200", "GameRiot: walkthrough intro"],
+  ["SzqxC2w8ock", "gta6", "cal", "600-1200", "Isaac4K: free roam, no HUD"],
+
+  ["vgxJGOfMnqY", "gta6", "test", "300-900", "GameSpot: first 30 minutes (Fall Damage upload is age-gated)"],
+  ["WgsrRHyp8iE", "gta6", "test", "200-800", "BO4KOGaming: night driving"],
+  ["ekMSlCuS-sY", "gta6", "test", "300-900", "shopping mall exploration (interiors)"],
+  ["rQLEb0W7REo", "gta6", "test", "900-1500", "theRadBrad: walkthrough part 1"],
+  ["LYRzhrExjhA", "gta6", "test", "", "exploring the airport"],
+  ["fUgepjpxC5s", "gta6", "test", "", "the entire map explained (map screens)"],
+  ["CUamH_acGmQ", "gta6", "test", "1000-1600", "Dreamscape: night walk"],
+  ["LJCfnAEPcvw", "gta6", "test", "300-900", "CHALLS: driving around Vice City (DubStepZz first-person video is age-gated)"],
+  ["_AY5krZErfg", "gta6", "test", "", "Kai Cenat Live: trailer reaction (facecam)"],
+
+  ["N-xHcvug3WI", "gta5", "neg", "", "Rockstar: GTA V official gameplay video"],
+  ["T1bHfSSVIQ4", "gta5", "cal", "300-900", "GTA V free roam"],
+  ["QkkoHAzjnUs", "gta5", "cal", "", "Rockstar: GTA V trailer"],
+  ["zZqufo4eMdE", "gta5", "test", "600-1200", "LordGedi: GTA V free roam"],
+  ["hvoD7ehZPcM", "gta5", "test", "", "Rockstar: GTA V official trailer"],
+  ["JNQ2chE_JJ0", "gta5", "test", "20000-20600", "MKIceAndFire: GTA V PS5 walkthrough"],
+
+  ["Dw_oH5oiUSE", "rdr2", "neg", "", "Rockstar: RDR2 gameplay video"],
+  ["PyS4TVi1J-A", "rdr2", "cal", "1000-1600", "RDR2 free roam"],
+  ["AcOpiWppO3k", "rdr2", "test", "5000-5600", "RDR2 walkthrough"],
+  ["eaW0tYpxyp0", "rdr2", "test", "", "Rockstar: RDR2 trailer 3"],
+
+  ["-dCEr1a3qz4", "cyberpunk", "neg", "3000-3600", "Cyberpunk walkthrough"],
+  ["RppDnxJacCc", "cyberpunk", "cal", "5000-5600", "Cyberpunk walkthrough"],
+  ["w7fhI-TbtcE", "cyberpunk", "test", "10000-10600", "Cyberpunk no HUD"],
+
+  ["HJOfm0qTX2Q", "watchdogs", "neg", "2000-2600", "Watch Dogs 2 walkthrough"],
+  ["VdtjMMA0AaI", "watchdogs", "cal", "100-700", "Watch Dogs Legion free roam"],
+  ["Guyo6U9aTmk", "watchdogs", "test", "5000-5600", "Watch Dogs 2 walkthrough"],
+  ["EL7caIc9jGQ", "watchdogs", "test", "3000-3600", "Watch Dogs Legion walkthrough"],
+
+  ["a71DGTX6vTI", "saintsrow", "neg", "3000-3600", "Saints Row 2022 walkthrough"],
+  ["Ffn-rhgkVcA", "saintsrow", "cal", "0-600", "Saints Row open world"],
+  ["hf6tZ9OUswo", "saintsrow", "test", "5000-5600", "Saints Row walkthrough"],
+
+  ["kinmfM69Noo", "mafia", "neg", "3000-3600", "Mafia DE walkthrough"],
+  ["tbUqjb7mJ2E", "mafia", "cal", "3000-3600", "Mafia DE walkthrough"],
+  ["fMjY06X-wgc", "mafia", "test", "5000-5600", "Mafia The Old Country walkthrough"],
+
+  ["xVkrQdv_248", "farcry6", "neg", "3000-3600", "Far Cry 6 walkthrough"],
+  ["YsZAIWcD3HE", "farcry6", "cal", "", "Far Cry 6, 10 minutes"],
+  ["kBfn7DNUPLY", "farcry6", "test", "5000-5600", "Far Cry 6 walkthrough"],
+
+  ["Tfr5y71tVf0", "forza5", "neg", "3000-3600", "Forza Horizon 5 walkthrough"],
+  ["odgC9V2ehYc", "forza5", "cal", "600-1200", "Forza Horizon 5 first 45 min"],
+  ["1bNlz9PBlDk", "forza5", "test", "600-1200", "Forza Horizon 5 ultra"],
+
+  ["CQ4KMc17yLU", "crew", "neg", "3000-3600", "The Crew Motorfest walkthrough"],
+  ["QE0sNnBngKQ", "crew", "cal", "600-1200", "The Crew Motorfest part 1"],
+  ["xmCU7aA8J6E", "crew", "test", "300-900", "The Crew Motorfest first play"],
+
+  ["Y2Hg35AIPPg", "sleepingdogs", "test", "3000-3600", "Sleeping Dogs walkthrough (unseen game)"],
+
+  ["7qz13Chz_84", "miami", "neg", "2000-2600", "Miami walking tour"],
+  ["Dmhws_sBEic", "miami", "cal", "0-600", "Miami drone"],
+  ["m7WcUw9hqs4", "miami", "test", "1000-1600", "Miami night walk"],
+  ["VVY7a8KACN4", "miami", "test", "0-600", "Miami aerial drone"],
+  ["O9X3btR65Rc", "miami", "test", "2000-2600", "Miami Beach walk"],
+
+  ["hRFY_Fesa9Q", "miamifilm", "neg", "", "Bad Boys: Ride or Die trailer"],
+  ["jKCj3XuPG8M", "miamifilm", "cal", "", "Bad Boys for Life trailer"],
+  ["Qg-_CoQdhow", "miamifilm", "cal", "", "Miami Vice (2006) trailer"],
+  ["R228yPrwqTo", "miamifilm", "test", "", "Bad Boys for Life trailer 2"],
+  ["6WCKJ7KaIZY", "miamifilm", "test", "", "Miami Vice (2006) trailer 1"]
+]

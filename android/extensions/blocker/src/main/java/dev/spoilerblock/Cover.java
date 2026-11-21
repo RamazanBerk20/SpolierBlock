@@ -24,7 +24,8 @@ final class Cover {
     final View item;
     private final ViewGroup host; // item itself, or its list when the item is a plain View (no ViewGroupOverlay)
     private final LinearLayout root, row;
-    private final TextView msg, once, seen, manage;
+    private final TextView msg, once, seen, not, manage;
+    String notKey; // rule 11: the item's most specific "Not this" key ("{site}/{source}" or "{site}"), or null
     private String message;
     private int[] marks = new int[0]; // the name groups "I've seen it" marks; none for an unidentified image
     final Ui.Palette palette;
@@ -55,11 +56,13 @@ final class Cover {
         row.setPadding(0, dp(8), 0, 0);
         once = button(ctx, p, "Show once");
         seen = button(ctx, p, "I've seen it");
+        not = button(ctx, p, "Not this");
         manage = button(ctx, p, "⋮"); // vertical ellipsis
         manage.setContentDescription("SpolierBlock settings");
         manage.setPadding(dp(12), 0, dp(12), 0);
         row.addView(once);
         row.addView(seen);
+        row.addView(not);
         row.addView(manage);
         root.addView(row, Ui.wrap());
         host.getOverlay().add(root);
@@ -83,7 +86,7 @@ final class Cover {
     java.util.List<View> a11yParts() {
         java.util.List<View> l = new java.util.ArrayList<>();
         l.add(msg);
-        for (View b : new View[]{once, seen, manage}) if (b.getVisibility() == View.VISIBLE && b.getWidth() > 0) l.add(b);
+        for (View b : new View[]{once, seen, not, manage}) if (b.getVisibility() == View.VISIBLE && b.getWidth() > 0) l.add(b);
         return l;
     }
 
@@ -98,6 +101,7 @@ final class Cover {
     void press(View b) {
         if (b == once) scanner.revealOnce(this);
         else if (b == seen && marks.length > 0) seen();
+        else if (b == not && marks.length > 0 && notKey != null) scanner.notThis(this, marks);
         else if (b == manage) {
             Activity a = activity(item.getContext());
             if (a == null) a = scanner.sb.resumedActivity(); // a dialog's or popup's context may not be the activity
@@ -106,7 +110,7 @@ final class Cover {
     }
 
     /**
-     * "I've seen it": the works of the cover's names, marked at once when there is one, else picked in a dialog
+     * "I've seen it": the works of the cover's names, marked at once when there is one and no more of its series, else picked in a dialog
      * (contract: a franchise name or a remake must not mark works the user has not seen).
      */
     private void seen() {
@@ -114,14 +118,16 @@ final class Cover {
         if (m == null) return;
         java.util.LinkedHashSet<Integer> all = new java.util.LinkedHashSet<>();
         for (int g : marks) for (int w : m.groupWorks(g)) all.add(w);
-        if (all.size() <= 1) { SpoilerBlock.I.markWorks(all); return; }
         Config.Works v = scanner.sb.worksFor(m);
+        java.util.List<Integer> more = SeenPicker.moreFromSeries(m, marks, all, v.seen);
+        // one work: marked at once, unless its series has more unseen works to offer (contract, cover wording)
+        if (all.size() <= 1 && more.isEmpty()) { SpoilerBlock.I.markWorks(all); return; }
         java.util.List<Integer> open = new java.util.ArrayList<>();
         for (int w : all) if (!v.seen[w]) open.add(w);
         Activity a = activity(item.getContext());
         if (a == null) a = scanner.sb.resumedActivity();
         if (a == null || a.isFinishing()) return;
-        SeenPicker.show(a, palette.dark, m, open, SeenPicker.moreFromSeries(m, marks, all, v.seen), marks.length, m.labels[marks[0]]); // one unseen row still opens it: the user sees what is marked
+        SeenPicker.show(a, palette.dark, m, open, more, marks.length, m.labels[marks[0]], all.size() == 1 ? m.titles[all.iterator().next()] : null); // one unseen row still opens it: the user sees what is marked
     }
 
     private int dp(int v) { return Ui.dp(item.getContext(), v); }
@@ -155,6 +161,7 @@ final class Cover {
         this.marks = marks;
         msg.setText(message);
         seen.setVisibility(marks.length > 0 ? View.VISIBLE : View.GONE);
+        not.setVisibility(marks.length > 0 && notKey != null ? View.VISIBLE : View.GONE);
         layout(true);
         return true;
     }
@@ -167,7 +174,7 @@ final class Cover {
      */
     private void compact(boolean on) {
         int h = item.getHeight();
-        for (TextView b : new TextView[]{once, seen, manage}) b.setMinHeight(on ? Math.max(dp(24), Math.min(dp(44), h - dp(4))) : dp(44));
+        for (TextView b : new TextView[]{once, seen, not, manage}) b.setMinHeight(on ? Math.max(dp(24), Math.min(dp(44), h - dp(4))) : dp(44));
         if (compact != null && compact == on) return;
         compact = on;
         root.setOrientation(on ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
@@ -193,9 +200,38 @@ final class Cover {
             return;
         }
         compact(h < dp(120));
+        fit(w);
         root.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY));
         root.layout(x, y, x + w, y + h);
         if (host != item) { root.setTranslationX(item.getTranslationX()); root.setTranslationY(item.getTranslationY()); }
+    }
+
+    /**
+     * Four buttons can be wider than a narrow item: their side padding shrinks first, then the text buttons share
+     * what is left after the settings button (ellipsized), so the settings button is never pushed out.
+     */
+    private void fit(int w) {
+        int avail = Math.max(0, w - root.getPaddingLeft() - root.getPaddingRight() - (compact ? dp(96) : 0)); // compact: room for the message
+        boolean squeeze = false;
+        for (int pad : new int[]{16, 8, 4}) {
+            for (TextView b : new TextView[]{once, seen, not}) b.setPadding(dp(pad), 0, dp(pad), 0);
+            manage.setPadding(dp(Math.min(pad, 12)), 0, dp(Math.min(pad, 12)), 0);
+            int need = 0;
+            for (TextView b : new TextView[]{once, seen, not, manage}) {
+                if (b.getVisibility() != View.VISIBLE) continue;
+                b.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+                need += b.getMeasuredWidth() + dp(8);
+            }
+            if (need <= avail) break;
+            squeeze = pad == 4;
+        }
+        for (TextView b : new TextView[]{once, seen, not}) {
+            LinearLayout.LayoutParams lp = squeeze ? new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1)
+                : new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(dp(4), 0, dp(4), 0);
+            b.setLayoutParams(lp);
+        }
+        row.setLayoutParams(squeeze ? new LinearLayout.LayoutParams(avail, ViewGroup.LayoutParams.WRAP_CONTENT) : Ui.wrap());
     }
 
     void drawInto(android.graphics.Canvas c) { root.draw(c); }
@@ -208,7 +244,7 @@ final class Cover {
 
     /** x, y in screen coordinates; the gesture was already taken away from the app. */
     void tap(float x, float y) {
-        for (View b : new View[]{once, seen, manage}) if (hit(b, x, y)) { press(b); return; }
+        for (View b : new View[]{once, seen, not, manage}) if (hit(b, x, y)) { press(b); return; }
     }
 
     private boolean hit(View b, float x, float y) {

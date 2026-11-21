@@ -931,3 +931,33 @@
 {"text":"Palestine will be free","media":false,"topic":"politics","lang":"en"}
 {"text":"Reading Proverbs this morning","media":false,"topic":"religion","lang":"en"}
 {"text":"It was a great movie night with the kids, then we finished Monopoly","media":false,"topic":"family","lang":"en"}
+{"text":"I used to stab people on Assassin's Creed Brotherhood","media":true,"topic":"game","expect":"Assassin's Creed: Brotherhood"}
+{"text":"co działo się po premierze Assassin’s Creed Unity.","media":true,"topic":"game","expect":"Assassin's Creed Unity","lang":"pl"}
+{"text":"¡Assassin's Creed: Odyssey está disponible","media":true,"topic":"game","expect":"Assassin's Creed Odyssey","lang":"es"}
+{"text":"time to enter feudal Japan with Assassin’s Creed Shadows! Join me","media":true,"topic":"game","expect":"Assassin's Creed Shadows"}
+{"text":"day 3 of playing resident evil 4","media":true,"topic":"game","expect":"Resident Evil 4"}
+{"text":"Replaying all the resident evil games","media":true,"topic":"game","expect":"Resident Evil"}
+{"text":"i finally finished breaking bad and the ending destroyed me","media":true,"topic":"tv","expect":"Breaking Bad"}
+{"text":"just finished the last of us part 2","media":true,"topic":"game","expect":"The Last of Us Part II"}
+{"text":"elden ring is the best game ever","media":true,"topic":"game","expect":"Elden Ring"}
+{"text":"arcane season 2 was great","media":true,"topic":"tv","expect":"Arcane"}
+{"text":"playing minecraft","media":true,"topic":"game","expect":"Minecraft"}
+{"text":"the boys were watching tv all night","media":false,"topic":"family","lang":"en"}
+{"text":"stranger things have happened in this game","media":false,"topic":"sport","lang":"en"}
+{"text":"Is this a resident evil oc","media":false,"topic":"personal","lang":"en"}
+{"text":"u/Altruistic_Mud_8425","media":false,"topic":"platform","lang":"en"}
+{"text":"Posted by @Mud_Lover99 about movies","media":false,"topic":"platform","lang":"en"}
+{"text":"u/Wonder-Lad-2Mad movie review","media":false,"topic":"platform","lang":"en"}
+{"text":"No spoilers please!","media":false,"topic":"platform","lang":"en"}
+{"text":"8 No Spoilers","media":false,"topic":"platform","lang":"en"}
+{"text":"No spoilers, but the ending was great.","media":false,"topic":"platform","lang":"en"}
+{"text":"u/Comic_Book_Reader r/movies Veteran • 20 hr. ago","media":false,"topic":"platform","lang":"en"}
+{"text":"GTA is the best game series","media":true,"topic":"game","expect":"Grand Theft Auto"}
+{"text":"Playing GTA all night","media":true,"topic":"game","expect":"Grand Theft Auto"}
+{"text":"Ee oynayanlar nasıl buldunuz GTA’yı","media":true,"topic":"game","lang":"tr","expect":"Grand Theft Auto"}
+{"text":"dune part two was a great movie","media":true,"topic":"movie","expect":"Dune: Part Two"}
+{"text":"I GOT THE GAME YESTERDAY","media":false,"topic":"personal","lang":"en"}
+{"text":"got the game yesterday","media":false,"topic":"personal","lang":"en"}
+{"text":"I got it","media":false,"topic":"personal","lang":"en"}
+{"text":"smiley face","media":false,"topic":"personal","lang":"en"}
+{"text":"Want to promote your film via community AMA/Q&A? Message the mods to set one up!","media":false,"topic":"platform","lang":"en"}

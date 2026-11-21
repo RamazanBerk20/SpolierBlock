@@ -2,6 +2,7 @@ package dev.spoilerblock;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -116,6 +117,26 @@ public class CatalogTest {
         Catalog.writeWorks(a2, st.added);
         assertEquals(a1.toString(), a2.toString());
         f.delete();
+    }
+
+    /** Rule 11: learned.names for a catalog and a custom work give the index catalog-vectors.mjs built with them. */
+    @Test public void learnedNamesBuildTheJsIndex() throws Exception {
+        CatalogUpdate.Bundle b = bundle();
+        Config c = Config.parse(read(new File(V, "names-config.json")));
+        assertEquals(2, c.learned.getJSONObject("names").length());
+        Catalog.Built built = Catalog.buildIndex(SpoilerBlock.indexWorks(b.catalog, new ArrayList<>(), c, b.words), new Catalog.Words(b.words));
+        assertArrayEquals(Files.readAllBytes(new File(V, "names-index.bin").toPath()), built.bin);
+        assertEquals(read(new File(V, "names-index.json")), built.json);
+        Matcher m = new Matcher(built.bin, built.json);
+        boolean[] none = new boolean[m.ids.length];
+        int[] g = m.evaluate("Finally finished Albuquerque Chemistry Tales, what an ending", none);
+        assertEquals(1, g.length);
+        assertEquals("Breaking Bad", m.titles[m.groupWorks(g[0])[0]]);
+        g = m.evaluate("The Rainfall Saga ending made me cry", none);
+        assertEquals("custom:2", m.ids[m.groupWorks(g[0])[0]]);
+        for (Catalog.Work w : b.catalog) if (w.title.equals("Breaking Bad")) assertFalse("the bundled list is not changed", java.util.Arrays.asList(w.aliases).contains("BBX"));
+        assertTrue("no names, no custom works: the bundled index is used", SpoilerBlock.customSig(Config.parse("{}")).isEmpty());
+        assertFalse(SpoilerBlock.customSig(Config.parse("{\"learned\":{\"names\":{\"Q1\":[\"BrBa\"]}}}")).isEmpty());
     }
 
     @Test public void busyAndBrokenAnswersFailCleanly() throws Exception {

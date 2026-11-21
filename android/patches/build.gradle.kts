@@ -13,12 +13,13 @@ patches {
     }
 }
 
-// The spoiler classifier and "Scan images": ONNX Runtime's native libs (the extension carries only its Java classes) and the models.
+// The spoiler classifier, the title-in-context model and "Scan images": ONNX Runtime's native libs (the extension carries only its Java classes) and the models.
 val ortNative: Configuration by configurations.creating { isTransitive = false }
 dependencies {
     ortNative("com.microsoft.onnxruntime:onnxruntime-android:1.22.0@aar")
 }
 val modelDir = rootDir.resolve("../models/spoiler")
+val contextDir = rootDir.resolve("../models/context") // the title-in-context model, for the names the matcher is unsure about
 
 // The matcher index is the browser extension's build output (tools/build.mjs -> dist/firefox/data), shipped as-is.
 val indexDir = rootDir.resolve("../dist/firefox/data")
@@ -36,6 +37,10 @@ tasks.processResources {
     from(modelDir) {
         include("model_int8.onnx", "tokenizer.json", "meta.json")
         into("spoilerblock/spoiler")
+    }
+    from(contextDir) {
+        include("model_int8.onnx", "tokenizer.json", "meta.json")
+        into("spoilerblock/context")
     }
     // "Scan images": the extension's SigLIP 2 vision tower, title rows and cut-offs, and its PP-OCR models (npm run build)
     val dist = rootDir.resolve("../dist/firefox")

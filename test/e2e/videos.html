@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clips</title>
+<!-- Rule 10, videos with no caption (docs/agents/contract.md). Served at /videos (a generic site) and /x (the test build
+     reads /x as x.com). test/e2e/run.mjs checks each id. -->
+<style>
+  body { font: 15px/1.4 system-ui, sans-serif; margin: 0; background: #fff; color: #111; }
+  main { max-width: 640px; margin: 0 auto; padding: 12px; }
+  article { margin: 12px 0; border: 1px solid #ddd; padding: 8px; }
+  video { display: block; width: 320px; height: 180px; background: #000; }
+</style>
+</head>
+<body>
+<main>
+  <article id="v-bare"><div class="who">Ann Lee</div><div>@annlee · <time>2h</time></div><button>Follow</button>
+    <video id="v-bare-v" src="{{SELF}}/video_lake.webm" loop playsinline></video></article>
+  <article id="v-cap"><div class="who">Ann Lee</div><p>Look at this lovely sunset today</p>
+    <video src="{{SELF}}/video_lake.webm" loop playsinline></video></article>
+  <article id="v-seen"><div class="who">Ann Lee</div><p>Breaking Bad rewatch</p>
+    <video src="{{SELF}}/video_lake.webm" loop playsinline></video></article>
+  <article id="v-late"><div class="who">Bo Park</div></article>
+  <article id="v-shadow"><div class="who">Cy Moe</div><x-player id="v-shadow-p"></x-player></article>
+  <article id="v-novideo"><div class="who">Di Ray</div><img alt="" width="40" height="40"></article>
+  <!-- x.com shape: a 5-word display name line, no tweet text; and the same with 2 words of tweet text -->
+  <article id="x-bare"><div>Daily Clips From The Valley</div><div>@clips</div>
+    <video src="{{SELF}}/video_lake.webm" loop playsinline></video></article>
+  <article id="x-cap"><div>Daily Clips From The Valley</div><div>@clips</div><div data-testid="tweetText"><span>so good</span></div>
+    <video src="{{SELF}}/video_lake.webm" loop playsinline></video></article>
+</main>
+<script>
+  document.getElementById('v-shadow-p').attachShadow({ mode: 'open' }).innerHTML = '<video src="{{SELF}}/video_lake.webm" loop playsinline></video>';
+  const bv = document.getElementById('v-bare-v');
+  bv.muted = false; bv.play().catch(() => {});
+  // a lazy player: the video arrives after the post
+  setTimeout(() => { const v = document.createElement('video'); v.src = '{{SELF}}/video_lake.webm'; document.getElementById('v-late').append(v); }, 500);
+</script>
+</body>
+</html>

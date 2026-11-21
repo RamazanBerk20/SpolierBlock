@@ -57,7 +57,8 @@ fs.copyFileSync('tools/catalog/common-words.txt', `${data}/common-words.txt`);
 fs.writeFileSync(`${data}/catalog-classes.json`, JSON.stringify(await catalogClasses()));
 fs.writeFileSync(`${data}/catalog-info.json`, JSON.stringify({ builtAt: fs.statSync(catalogPath).mtime.toISOString(), works: catalog.works.length }));
 
-// runtime model files, pinned (the spoiler classifier ships from models/spoiler, see tools/train-spoiler.mjs)
+// runtime model files, pinned (the spoiler classifier and the title-in-context model ship from models/spoiler and
+// models/context, see tools/train-spoiler.mjs and tools/train-context.mjs)
 const visionFile = await visionModel();
 for (const [name, [src, sha]] of Object.entries(OCR_MODELS)) await pinned(src, `build/.cache/ocr/${sha.slice(0, 16)}-${name}`, sha);
 
@@ -80,6 +81,7 @@ for (const target of ['firefox', 'chrome']) {
   for (const [name, [, sha]] of Object.entries(OCR_MODELS)) cp(`build/.cache/ocr/${sha.slice(0, 16)}-${name}`, `${out}/models/ocr/${name}`);
   cp('models/ocr/dict.txt', `${out}/models/ocr/dict.txt`);
   cp('models/spoiler', `${out}/models/spoiler`);
+  cp('models/context', `${out}/models/context`);
 
   const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
   if (target === 'chrome') {
