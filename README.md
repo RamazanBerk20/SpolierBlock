@@ -1,6 +1,6 @@
 # SpolierBlock
 
-Version 0.2.4.
+Version 0.2.5.
 
 SpolierBlock hides spoilers about films, shows, games, books, manga, anime and comics. It runs entirely on the device.
 
@@ -141,10 +141,10 @@ A release has these files:
 
 | File | What it is |
 |---|---|
-| `spolierblock-0.2.4-firefox.zip` | The Firefox build. Unpack it and load it as in the [load steps](#quick-start-browser-extension) below, choosing the unpacked `manifest.json`. |
-| `spolierblock-0.2.4-chrome.zip` | The Chrome build. Unpack it and use "Load unpacked" on the folder. |
-| `patches-0.2.4.mpp` | The Morphe patch bundle. Use it with `android/apply.sh` (see [docs/android.md](docs/android.md)), or add it as a local patch source in Morphe Manager (not verified). |
-| `spolierblock-companion-0.2.4.apk` | Optional companion app. It keeps one list shared by all patched apps. |
+| `spolierblock-0.2.5-firefox.zip` | The Firefox build. Unpack it and load it as in the [load steps](#quick-start-browser-extension) below, choosing the unpacked `manifest.json`. |
+| `spolierblock-0.2.5-chrome.zip` | The Chrome build. Unpack it and use "Load unpacked" on the folder. |
+| `patches-0.2.5.mpp` | The Morphe patch bundle. Use it with `android/apply.sh` (see [docs/android.md](docs/android.md)), or add it as a local patch source in Morphe Manager (not verified). |
+| `spolierblock-companion-0.2.5.apk` | Optional companion app. It keeps one list shared by all patched apps. |
 | `SHA256SUMS.txt` | Checksums of the files above. |
 
 No YouTube, X or Instagram APK is ever distributed. You supply your own.

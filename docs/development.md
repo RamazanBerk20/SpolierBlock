@@ -1,6 +1,6 @@
 # Development
 
-Version 0.2.4. Run every command from the repository root unless stated.
+Version 0.2.5. Run every command from the repository root unless stated.
 
 ## Prerequisites
 

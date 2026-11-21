@@ -1,6 +1,6 @@
 # Android
 
-The Android part is a [Morphe](https://github.com/MorpheApp) patch bundle (version 0.2.4) and a companion app. The bundle adds one app-agnostic Java extension to a host app. Thin per-app patches inject it. The companion app, `dev.spoilerblock`, owns the settings that every patched app shares.
+The Android part is a [Morphe](https://github.com/MorpheApp) patch bundle (version 0.2.5) and a companion app. The bundle adds one app-agnostic Java extension to a host app. Thin per-app patches inject it. The companion app, `dev.spoilerblock`, owns the settings that every patched app shares.
 
 Read the [limits in the README](../README.md#status-and-known-limits) first. In short: the owner ran the 0.2.0 and 0.2.2 bundles on one real phone (a Galaxy S25+) in patched YouTube, X and Instagram and reported that covers and buttons work in the YouTube and X feeds, that a covered reel is muted, and (0.2.2) that the picker, the covers and the colours work; the 0.2.3 changes have run only in an x86_64 emulator and the demo app, nothing was measured on a phone, and patching these apps is against the services' terms. The config, the decision rule and the cover wording are in [agents/contract.md](agents/contract.md). The Java code follows them, and `ConfigTest` and `CustomWorkTest` check it.
 
@@ -94,7 +94,7 @@ Run these from the repository root unless stated.
    ./gradlew :patches:buildAndroid
    ```
 
-   The bundle is written to `android/patches/build/libs/patches-0.2.4.mpp`. The version comes from `version` in `android/gradle.properties`. The 0.2.0 bundle is 138 MB (the 0.1 bundle was about 112 MB); the 0.2.2 and 0.2.3 bundles were not built for this page, so their sizes are not measured. If `dist/firefox/data` lacks one of the six catalog files, the build stops and tells you to run `npm run build`.
+   The bundle is written to `android/patches/build/libs/patches-0.2.5.mpp`. The version comes from `version` in `android/gradle.properties`. The 0.2.0 bundle is 138 MB (the 0.1 bundle was about 112 MB); the 0.2.2 and 0.2.3 bundles were not built for this page, so their sizes are not measured. If `dist/firefox/data` lacks one of the six catalog files, the build stops and tells you to run `npm run build`.
 
 `apply.sh` uses the newest `patches-*.mpp` it finds in that folder.
 
@@ -173,7 +173,7 @@ The patch only adds its libraries to ABIs the app already ships. So a patched ap
 
 ## Using the bundle in Morphe Manager
 
-Not verified on a real device. The bundle is an ordinary `.mpp` file, so the intent is to add `patches-0.2.4.mpp` as a local patch source in Morphe Manager and enable `SpoilerBlock` together with the other patches you want. The menu steps are not described here because they could not be checked in this repository. If you do this, also read the signing notes above.
+Not verified on a real device. The bundle is an ordinary `.mpp` file, so the intent is to add `patches-0.2.5.mpp` as a local patch source in Morphe Manager and enable `SpoilerBlock` together with the other patches you want. The menu steps are not described here because they could not be checked in this repository. If you do this, also read the signing notes above.
 
 ## How text and pixels are captured
 
@@ -295,7 +295,7 @@ The Blocking part then has "Corrections" (rule 11): "Not this", one row per `lea
 
 The Library can select several works at once, as the extension's does: long-press a work, or press "Select". Each row then has a checkbox, the header reads "Select all N shown" (N is the number of works the filter and search show) or "N selected", and the actions are Seen, Blocked, Style (Default, Everything, Spoilers only) and Remove, each one write for all selected works. "Done" and the back button leave selection first.
 
-The About part shows the version from `SettingsActivity.VERSION` (0.2.4, matching `android/gradle.properties`).
+The About part shows the version from `SettingsActivity.VERSION` (0.2.5, matching `android/gradle.properties`).
 
 The Data part exports and imports `spolierblock-config.json` (the contract's export file) through the system document picker, so neither the companion app nor the patch needs a storage permission. It also holds the catalog update setting and a reset.
 
